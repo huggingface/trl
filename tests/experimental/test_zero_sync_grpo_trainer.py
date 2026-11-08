@@ -130,7 +130,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_concurrent_rollouts=3,  # keep few rollouts generating, the test model is tiny
             max_steps=2,
             report_to="none",
         )
@@ -160,7 +160,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_concurrent_rollouts=3,  # keep few rollouts generating, the test model is tiny
             max_steps=2,
             model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
@@ -192,7 +192,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             gradient_accumulation_steps=2,  # the replicas wait for every micro-batch of the step before pausing
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_concurrent_rollouts=3,  # keep few rollouts generating, the test model is tiny
             max_steps=2,
             report_to="none",
         )
@@ -232,7 +232,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             gradient_accumulation_steps=2,  # the batch the first rank sends holds every micro-batch of the step
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_concurrent_rollouts=3,  # keep few rollouts generating, the test model is tiny
             max_steps=2,
             model_init_kwargs={"dtype": "bfloat16"},
             tp_size=int(os.environ["WORLD_SIZE"]),

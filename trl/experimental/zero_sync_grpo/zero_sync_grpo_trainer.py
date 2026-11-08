@@ -12,17 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import functools
+import inspect
 import math
 import os
-import sys
 import time
 import uuid
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from itertools import chain, repeat
+from typing import Any, Protocol, TypeAlias
 
+import numpy as np
 import torch
 from accelerate.logging import get_logger
 from accelerate.parallelism_config import ParallelismConfig
@@ -41,13 +46,15 @@ from transformers import (
 )
 from transformers.distributed.configuration_utils import DistributedConfig
 from transformers.generation import ContinuousBatchingConfig
+from transformers.generation.continuous_batching import ContinuousBatchingManager
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
 from ...chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    get_training_chat_template,
+    is_chat_template_prefix_preserving,
     parse_response,
-    supports_tool_calling,
 )
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -56,10 +63,11 @@ from ...trainer.utils import (
     get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     model_accepts_images,
     nanmax,
     nanmin,
-    nanstd,
+    print_prompt_completions_sample,
 )
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
@@ -67,8 +75,48 @@ from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 logger = get_logger(__name__)
 
 
-# Functions with this signature can be used as reward functions
-RewardFunc = Callable[[list, list], list[float]]
+# A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
+# completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
+# compatibility, it should accept **kwargs.
+RewardFunc = Callable[..., list[float]]
+
+# One logged value is either a float or a `(numerator, denominator)` pair; see `_reduce_metric`.
+MetricValue = float | tuple[float, float]
+
+
+def _reduce_metric(key: str, values: list[MetricValue]) -> float:
+    """Reduce one logging window into the number that gets logged.
+
+    The value's shape and the key's suffix declare the reduction, so nothing has to be registered or configured:
+
+    - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
+      what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
+    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
+      (`completions/max_length`, `clip_ratio/high_max`) working alongside this trainer's own (`row_tokens_max`).
+    - anything else is a gauge, and its window mean is meaningful.
+
+    A key must always be logged with the same shape, since the reduction is picked from the first value seen.
+    """
+    if isinstance(values[0], tuple):
+        numerator, denominator = (sum(v) for v in zip(*values, strict=True))
+        return numerator / denominator if denominator else float("nan")
+    words = key.split("/")[-1].split("_")
+    if "total" in words:
+        return sum(values)
+    if "max" in words:
+        return max(values)
+    if "min" in words:
+        return min(values)
+    return sum(values) / len(values)
+
+
+class _SupportsReset(Protocol):
+    def reset(self, **kwargs) -> str | None: ...
+
+
+EnvironmentFactory = Callable[[], _SupportsReset]
+
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
@@ -212,7 +260,7 @@ def _chain_to_sequences(rollout: "Rollout") -> tuple[list[TrainingSequence], lis
 @dataclass(frozen=True)
 class Rollout:
     """
-    One finished rollout, as returned by [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`].
+    One finished rollout, as returned by [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.generate_one`].
 
     Args:
         completion (`list[dict[str, Any]]`):
@@ -243,6 +291,960 @@ class Rollout:
     rollout_id: RolloutId = field(default_factory=lambda: uuid.uuid4().hex)
 
 
+@dataclass(slots=True)
+class RolloutGroup:
+    """
+    The `num_generations` rollouts of one prompt, scored together. Each list has one entry per rollout.
+
+    Args:
+        prompts (`list[list[dict[str, Any]]]`):
+            Prompt of each rollout.
+        reward_kwargs (`dict[str, list[Any]]`):
+            The other columns of the prompt's dataset row, passed to the reward functions as keyword arguments.
+        completions (`list[list[dict[str, Any]]]`):
+            Completion messages of each rollout.
+        completions_ids (`list[list[int]]`):
+            Completion token ids of each rollout.
+        completions_sequences (`list[list[TrainingSequence]]`):
+            Training sequences built from each rollout. A rollout whose re-tokenized history changed between turns
+            gives more than one.
+        tool_call_counts (`list[int]`):
+            Number of tool calls in each rollout.
+        tool_failure_counts (`list[int]`):
+            Number of failed tool calls in each rollout.
+        model_version (`int`):
+            Policy version when the group's first rollout started.
+        group_id (`int`):
+            Identifier of the group, counted from `0` by the rollout loop.
+        row_index (`int`):
+            Position of the prompt in the epoch, in the order this process draws them.
+        env_rewards (`list[tuple[type, float] or None]`):
+            For a rollout whose environment defines `get_reward`, the environment class and its reward; else `None`.
+        rollout_rewards (`list[float or None]`):
+            [`~experimental.zero_sync_grpo.Rollout`]`.reward` of each rollout.
+        queued_at (`float`, *optional*, defaults to `0.0`):
+            `time.monotonic()` when the group was queued for scoring.
+        rewards (`np.ndarray`, *optional*):
+            Total reward of each rollout, summed over every reward source, NaN when no source scored it. Set before
+            [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.compute_advantages`] is called.
+    """
+
+    prompts: list[Messages]
+    reward_kwargs: dict[str, list[Any]]
+    completions: list[Messages]
+    completions_ids: list[list[int]]
+    completions_sequences: list[list[TrainingSequence]]
+    tool_call_counts: list[int]
+    tool_failure_counts: list[int]
+    model_version: int
+    group_id: int
+    row_index: int
+    env_rewards: list[tuple[type, float] | None]
+    rollout_rewards: list[float | None]
+    queued_at: float = 0.0
+    rewards: np.ndarray | None = None
+
+
+@dataclass(slots=True)
+class RolloutSample:
+    prompt: Messages
+    completion: Messages
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    old_log_probs: np.ndarray
+    sampling_mask: list[list[int]]
+    sampler_ids: np.ndarray  # (len(input_ids), K), the sampler's most likely next tokens by position, padded with -1
+    sampler_log_probs: np.ndarray  # (len(input_ids), K), their log-probs, padded with -inf
+    advantage: float
+    model_version: int
+    group_id: int
+    metrics: dict[str, float]
+    enqueued_at: float | None = None
+
+
+class ZeroSyncRolloutLoop:
+    """
+    Generates and scores rollouts for [`experimental.zero_sync_grpo.ZeroSyncGRPOTrainer`], on the trainer's continuous
+    batching engine, in the training process.
+
+    The default implements GRPO. To customize a run, subclass it, override only the methods that change, and set the
+    subclass as the trainer's `loop_cls`. Each prompt goes through, in order:
+
+    - [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.filter_prompt`]: whether to generate for the prompt at all.
+    - [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.generate_one`]: one full rollout, which calls
+      [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.generate_one_turn`] for each sampling request.
+    - The group of `num_generations` rollouts is scored: its rewards are the sum of the trainer's `reward_funcs`, of
+      environments that define `get_reward`, and of [`~experimental.zero_sync_grpo.Rollout`]`.reward`. Then
+      [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.compute_advantages`] runs once per group.
+
+    [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.setup`] and
+    [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.close`] create and release resources on the loop's event loop,
+    like an HTTP client. A hook can read `self.config` (a subclass of
+    [`experimental.zero_sync_grpo.ZeroSyncGRPOConfig`] can carry its own fields) and `self.tokenizer`.
+    """
+
+    def __init__(
+        self,
+        config: ZeroSyncGRPOConfig,
+        *,
+        manager: ContinuousBatchingManager,
+        reward_funcs: list[Callable[..., list[float]]],
+        processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
+        metrics: dict[str, list],
+        model_version_fn: Callable[[], int],
+        tools: list[Callable] | None = None,
+        environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
+        score_queue_maxsize: int = 16,
+    ):
+        self.config = config
+        self.prompts: Iterator[list[dict[str, Any]]] | None = None  # the epoch's prompt batches, set by the trainer
+        self._epoch, self._row_index = 0, 0
+        self.reward_funcs = reward_funcs
+        self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            processing_class = add_response_schema(processing_class)
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
+        self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
+        self.rollout_buffer: deque[RolloutSample] = deque()  # scored samples, taken by the trainer
+        self.manager = manager  # the trainer's continuous batching manager
+        self._model_version_fn = model_version_fn  # the trainer's optimizer step
+        self.metrics = metrics  # the trainer's metric sink, reduced in its `log()`
+        # Metric accumulators
+        self._counters: dict[str, float] = defaultdict(float)
+        self._rates: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        self._concurrency = 0  # set by the generate loop, reported by the score loop
+        self._pushed_completion_tokens = 0
+        self._pushed_at = time.monotonic()
+
+        self.chat_template_kwargs = config.chat_template_kwargs or {}
+
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to an environment
+        self._env_reward_types = []  # env classes that own their reward via `get_reward`; one reward column each
+
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
+
+        if self.environment_factories is not None:
+            # Probe one instance of each environment to validate its `reset` method and find its reward. Instances
+            # are pooled and reused (reset) across rollouts; the probe seeds the pool so it is not wasted. The pool
+            # grows only when more concurrent instances of an environment are needed than have been created so far,
+            # preserving the "construct once, reset often" contract even when rollouts mix environments.
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used only to decide whether a training chat template is needed.
+            self.tools = list(tools)
+            for name, factory in self.environment_factories.items():
+                instance = factory()
+                has_reset = False
+                methods = []
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
+                    if member_name == "reset":
+                        has_reset = True
+                    elif member_name == "get_reward":
+                        if type(instance) not in self._env_reward_types:
+                            self._env_reward_types.append(type(instance))
+                    elif not member_name.startswith("_"):
+                        methods.append(getattr(instance, member_name))
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                    )
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+            # Each environment that owns its reward via `get_reward` becomes an extra reward source, named after the env
+            # class (its per-rollout value is scored inline in `_generate_loop` and summed in `_score_group`). One
+            # column per such class: mixing an env that owns its reward with one that does not is safe.
+            for env_type in self._env_reward_types:
+                self.reward_func_names.append(env_type.__name__)
+        else:
+            self.tools = tools
+
+        # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
+        # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
+        self.reward_func_names.append("rollout")
+        if (
+            not self.reward_funcs
+            and not self._env_reward_types
+            and type(self).generate_one is ZeroSyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
+
+        # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
+        self._tool_pool = ThreadPoolExecutor(
+            max_workers=max(1, config.max_concurrent_rollouts), thread_name_prefix="grpo-tool"
+        )
+
+        self._concurrency_cap = config.max_concurrent_rollouts
+        self._total_rollouts = 0
+
+        # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
+        # template isn't, swap in a training-safe one.
+        if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
+            self.chat_template = get_training_chat_template(self.tokenizer)
+        else:
+            self.chat_template = None
+
+        self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=score_queue_maxsize)
+        self._total_completion_tokens = 0
+        self._total_groups_scored = 0
+        # Each engine request in flight, mapped to the result its `generate_one_turn` awaits
+        self._turn_results: dict[str, asyncio.Future] = {}
+        # What `drained` reads: the epoch's prompts once every one is started, and the groups queued but not scored
+        self._exhausted_prompts = None
+        self._groups_unscored = 0
+
+        self._loop = asyncio.new_event_loop()
+        self._stop_event = asyncio.Event()
+        self._run_task: asyncio.Task | None = None
+
+    @property
+    def model_version(self) -> int:
+        return self._model_version_fn()
+
+    def run_until(self, done: Callable[[], bool]) -> None:
+        """
+        Run the loops until `done()` holds. They are suspended when this returns, with every rollout in flight, and
+        carry on at the next call: the trainer pauses the engine and runs its step in between.
+        """
+        if self._run_task is None:
+            self._run_task = self._loop.create_task(self._run_loops(stop_event=self._stop_event))
+
+        async def wait() -> None:
+            while True:
+                await asyncio.sleep(0.001)  # at least one turn of the loops, whatever `done()` says
+                if self._run_task.done():
+                    self._run_task.result()  # a loop failed: raise its error here
+                if done():
+                    return
+
+        self._loop.run_until_complete(wait())
+
+    def drained(self) -> bool:
+        """Whether every prompt of the epoch has been generated and scored, and its samples put in the buffer."""
+        return self._exhausted_prompts is self.prompts and self._concurrency == 0 and self._groups_unscored == 0
+
+    def stop(self) -> None:
+        """Stop the loops, dropping the rollouts in flight, and release their resources."""
+        self._stop_event.set()
+        if self._run_task is not None:
+            self._run_task.cancel()
+            self._loop.run_until_complete(asyncio.gather(self._run_task, return_exceptions=True))
+        self._tool_pool.shutdown(wait=True, cancel_futures=True)
+        self._loop.close()
+
+    async def setup(self) -> None:
+        """
+        Create the resources the other hooks need, such as an HTTP client. Runs on the loop's event loop before the
+        first prompt. Does nothing by default.
+        """
+
+    async def close(self) -> None:
+        """
+        Release what [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.setup`] created. Runs when the loops stop,
+        including on failure. Does nothing by default.
+        """
+
+    async def _run_loops(self, stop_event: asyncio.Event) -> None:
+        logger.info(
+            f"rollout loop started: num_generations={self.config.num_generations}, "
+            f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
+            f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}"
+        )
+        await self.setup()
+        try:
+            await asyncio.gather(
+                asyncio.create_task(self._generate_loop(stop_event=stop_event)),
+                asyncio.create_task(self._score_loop(stop_event=stop_event)),
+                asyncio.create_task(self._result_loop(stop_event=stop_event)),
+            )
+        finally:
+            await self.close()
+
+    async def _result_loop(self, stop_event: asyncio.Event) -> None:
+        """Hand each finished engine request to the `generate_one_turn` awaiting it.
+
+        A dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so poll
+        `fatal_error` to fail fast instead of spinning.
+        """
+        while not stop_event.is_set():
+            output = self.manager.get_result(timeout=0)
+            if output is None:
+                fatal_error = self.manager.background_thread_status.fatal_error
+                if fatal_error is not None:
+                    raise RuntimeError("The continuous batching background thread died.") from fatal_error
+                await asyncio.sleep(0.001)
+                continue
+            self._turn_results.pop(output.request_id).set_result(output)
+
+    async def _generate_loop(self, stop_event: asyncio.Event) -> None:
+        pending_groups: dict[int, RolloutGroup] = {}
+        pending_completed: dict[int, int] = {}
+        rollout_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages, float]] = {}
+        work_iter = self._repeat_iterator()
+        loop = asyncio.get_running_loop()
+
+        try:
+            while True:
+                while len(rollout_tasks) < self._concurrency_cap and not stop_event.is_set():
+                    work = next(work_iter)
+                    if work is None:  # the epoch's prompts are all started
+                        break
+                    group_id, row_index, row = work
+                    if row is None:  # rejected by filter_prompt
+                        continue
+                    # The environment is selected per example via its `environment` field (multi-env); only its tools
+                    # are exposed in the example's prompt. When there are no environments, every example shares the
+                    # standalone tools.
+                    name = row.get("environment") if self._multi_environment else None
+                    if self._multi_environment and name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+                    # Draw a reusable environment instance for this rollout (creating one only if the pool is
+                    # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
+                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
+                    # previously discarded, so an environment_factory whose task lives in the observation (not the
+                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
+                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
+                    # field in multi-environment mode, so it is not forwarded to `reset`.
+                    environment = None
+                    observation = None
+                    if self.environment_factories is not None:
+                        pool = self._environment_pool[name]
+                        environment = pool.pop() if pool else self.environment_factories[name]()
+                        reset_kwargs = (
+                            {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
+                        )
+                        t0 = time.monotonic()
+                        observation = await loop.run_in_executor(
+                            self._tool_pool, functools.partial(environment.reset, **reset_kwargs)
+                        )
+                        self._rates["env/reset_s"][0] += time.monotonic() - t0
+                        self._rates["env/reset_s"][1] += 1
+                    # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
+                    # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
+                    if "prompt" not in row and self.environment_factories is not None:
+                        prompt = [{"role": "user", "content": ""}]
+                    else:
+                        prompt = row["prompt"]
+                    if observation is not None:
+                        # Rebuild the last message instead of mutating in place (as GRPOTrainer does): the
+                        # same row is reused across the group's generations and across epochs. Normalize str vs
+                        # list (multimodal) content the same way GRPOTrainer does before concatenating.
+                        last = prompt[-1]
+                        content = last["content"]
+                        if isinstance(observation, list) and isinstance(content, str):
+                            content = [{"type": "text", "text": content}]
+                        if isinstance(observation, str) and isinstance(content, list):
+                            observation = [{"type": "text", "text": observation}]
+                        prompt = prompt[:-1] + [{**last, "content": content + observation}]
+
+                    # This rollout's tools: the standalone tools plus the methods of its own environment instance.
+                    methods = []
+                    if environment is not None:
+                        methods = [
+                            getattr(environment, member_name)
+                            for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
+                            if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                        ]
+                    tools = self._standalone_tools + methods
+
+                    if group_id not in pending_groups:
+                        reward_kwargs = {
+                            key: [row[key]] * self.config.num_generations
+                            for key in row
+                            if key not in {"prompt", "completion", "completion_ids"}
+                        }
+                        pending_groups[group_id] = RolloutGroup(
+                            prompts=[],
+                            reward_kwargs=reward_kwargs,
+                            completions=[],
+                            completions_ids=[],
+                            completions_sequences=[],
+                            tool_call_counts=[],
+                            tool_failure_counts=[],
+                            model_version=self.model_version,
+                            group_id=group_id,
+                            row_index=row_index,
+                            env_rewards=[],
+                            rollout_rewards=[],
+                        )
+                        pending_completed[group_id] = 0
+
+                    task = asyncio.create_task(self.generate_one(prompt, tools, group_id=group_id))
+                    rollout_tasks[task] = (group_id, name, environment, prompt, time.monotonic())
+
+                self._concurrency = len(rollout_tasks)  # gauge, reported by the score loop's push
+                if not rollout_tasks:
+                    if stop_event.is_set():
+                        return
+                    await asyncio.sleep(0.01)
+                    continue
+
+                done, _ = await asyncio.wait(rollout_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
+                if not done:
+                    continue
+
+                for task in done:
+                    group_id, name, environment, prompt, t_dispatch = rollout_tasks.pop(task)
+                    if task.exception() is not None:
+                        raise task.exception()
+                    self._total_rollouts += 1
+
+                    rollout = task.result()
+                    sequences, drifts = _chain_to_sequences(rollout)
+                    if rollout.turns:
+                        self._push_rollout_metrics(
+                            turns=len(rollout.turns),
+                            sequences=len(sequences),
+                            completion_ids=rollout.completion_ids,
+                            drifts=drifts,
+                            duration_s=time.monotonic() - t_dispatch,
+                        )
+                    group = pending_groups[group_id]
+                    group.prompts.append(prompt)
+                    group.completions.append(rollout.completion)
+                    group.completions_ids.append(rollout.completion_ids)
+                    group.completions_sequences.append(sequences)
+                    group.tool_call_counts.append(rollout.tool_call_count)
+                    group.tool_failure_counts.append(rollout.tool_failure_count)
+                    group.rollout_rewards.append(rollout.reward)
+                    # The environment owns the reward: score it now, while this rollout's environment still holds its
+                    # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
+                    # in-flight requests instead of halting them. The env is returned to the pool only after scoring, so
+                    # a concurrent rollout can't draw and reset it during the await. Record `(env class, reward)` so
+                    # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
+                    # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
+                    if self._env_reward_types:
+                        env_type = type(environment)
+                        if env_type in self._env_reward_types:
+                            get_reward = environment.get_reward
+                            t0 = time.monotonic()
+                            if inspect.iscoroutinefunction(get_reward):
+                                reward = await get_reward()
+                            else:
+                                reward = await loop.run_in_executor(self._tool_pool, get_reward)
+                            self._rates["env/reward_s"][0] += time.monotonic() - t0
+                            self._rates["env/reward_s"][1] += 1
+                            group.env_rewards.append((env_type, reward))
+                        else:
+                            group.env_rewards.append(None)
+                    if environment is not None:
+                        self._environment_pool[name].append(environment)
+                    self._total_completion_tokens += len(rollout.completion_ids)
+                    pending_completed[group_id] += 1
+
+                    if pending_completed[group_id] == self.config.num_generations:
+                        self._groups_unscored += 1
+                        group.queued_at = time.monotonic()
+                        t_blocked = None
+                        while True:
+                            try:
+                                self._groups_to_score.put_nowait(group)
+                                break
+                            except asyncio.QueueFull:
+                                if stop_event.is_set():
+                                    return
+                                if t_blocked is None:
+                                    t_blocked = time.monotonic()
+                                await asyncio.sleep(0.1)
+                        if t_blocked is not None:
+                            # Generation held back by scoring
+                            self._push_metrics({"rollout/score_block_s": time.monotonic() - t_blocked})
+                        del pending_groups[group_id]
+                        del pending_completed[group_id]
+        finally:
+            for task in rollout_tasks:
+                task.cancel()
+            if rollout_tasks:
+                await asyncio.gather(*rollout_tasks, return_exceptions=True)
+            try:
+                self._groups_to_score.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+    async def _score_loop(self, stop_event: asyncio.Event) -> None:
+        t_idle_start = time.monotonic()
+        while not stop_event.is_set():
+            try:
+                group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
+            except TimeoutError:
+                continue
+            if group is None:
+                return
+            score_idle = time.monotonic() - t_idle_start
+            wait_scoring = time.monotonic() - group.queued_at
+
+            if score_idle > 0.5:
+                logger.info(f"[score] waited {score_idle:.1f}s for a group to score")
+
+            t0 = time.monotonic()
+            samples = await self._score_group(group)
+            scoring_time = time.monotonic() - t0
+            logger.info(
+                f"[score] scored {len(samples)} samples in {scoring_time:.2f}s, buffer_size={len(self.rollout_buffer)}"
+            )
+
+            now = time.monotonic()
+            self._push_metrics(
+                {
+                    "rollout/score_s": scoring_time,
+                    "rollout/score_wait_s": wait_scoring,
+                    "rollout/score_queue_size": float(self._groups_to_score.qsize()),
+                    "rollout/concurrency": float(self._concurrency),
+                    # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
+                    "rollout/generated_tok_s": (
+                        float(self._total_completion_tokens - self._pushed_completion_tokens),
+                        now - self._pushed_at,
+                    ),
+                }
+            )
+            self._pushed_completion_tokens = self._total_completion_tokens
+            self._pushed_at = now
+
+            if self.config.log_completions and samples:
+                print_prompt_completions_sample(
+                    prompts=[s.prompt for s in samples],
+                    completions=[s.completion for s in samples],
+                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
+                    advantages=[s.advantage for s in samples],
+                    step=self._total_groups_scored,
+                    num_samples=self.config.num_completions_to_print,
+                )
+            self._total_groups_scored += 1
+
+            for item in samples:
+                if not await self._put_in_buffer(item, stop_event):
+                    return
+            self._groups_unscored -= 1
+
+            t_idle_start = time.monotonic()
+
+    async def _put_in_buffer(self, item: RolloutSample, stop_event: asyncio.Event) -> bool:
+        """Put `item` in the rollout buffer. Returns `False` if `stop_event` is set first."""
+        if stop_event.is_set():
+            return False
+        item.enqueued_at = time.time()
+        self.rollout_buffer.append(item)
+        return True
+
+    def _push_metrics(self, values: dict[str, float | tuple[float, float]]) -> None:
+        """Send metrics to the trainer, along with the counters and rates accumulated since the last push."""
+        payload = dict(values)
+        payload.update(self._counters)
+        payload.update({key: (num, den) for key, (num, den) in self._rates.items()})
+        self._counters.clear()
+        self._rates.clear()
+        for key, value in payload.items():
+            self.metrics[key].append(value)
+
+    def _push_rollout_metrics(
+        self,
+        *,
+        turns: int,
+        sequences: int,
+        completion_ids: list[int],
+        drifts: list[int],
+        duration_s: float,
+    ) -> None:
+        """One conversation's structure and its completion, aggregated per rollout."""
+        completion_tokens = len(completion_ids)
+        self._rates["completions/mean_length"][0] += completion_tokens
+        self._rates["completions/mean_length"][1] += 1
+        self._rates["rollout/samples_per_rollout"][0] += sequences
+        self._rates["rollout/samples_per_rollout"][1] += 1
+        self._rates["rollout/turns_mean"][0] += turns
+        self._rates["rollout/turns_mean"][1] += 1
+        if completion_ids:
+            # NOTE(@aminediro):
+            # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
+            # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by
+            # `max_new_tokens` rather than finishing. Deliberately NOT the engine's own status, so the metric means the
+            # same thing here
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
+            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][1] += 1
+        if turns > 1:
+            self._rates["rollout/fork_frac"][0] += len(drifts)
+            self._rates["rollout/fork_frac"][1] += turns - 1
+            self._rates["rollout/drift_tokens_mean"][0] += sum(drifts)
+            self._rates["rollout/drift_tokens_mean"][1] += turns - 1
+        self._push_metrics(
+            {
+                "rollout/duration_s": duration_s,
+                "rollout/turns_max": float(turns),
+                "rollout/drift_tokens_max": float(max(drifts, default=0)),
+                "completions/max_length": float(completion_tokens),
+                "completions/min_length": float(completion_tokens),
+            }
+        )
+
+    def filter_prompt(self, row_index: int, row: dict[str, Any], epoch: int) -> bool:
+        """
+        Whether to generate for a prompt. A rejected prompt is skipped for this epoch. Admits every prompt by default.
+        Rejecting every prompt of a full epoch raises, since no batch can reach the trainer after that.
+
+        Args:
+            row_index (`int`):
+                Position of the prompt in the epoch, in the order this process draws them.
+            row (`dict[str, Any]`):
+                The dataset row.
+            epoch (`int`):
+                Number of full passes over the dataset before this one.
+
+        Returns:
+            `bool`: `True` to generate `num_generations` rollouts for the prompt, `False` to skip it.
+        """
+        return True
+
+    def _repeat_iterator(self) -> Iterator[tuple[int, int, dict[str, Any] | None] | None]:
+        """Yield `(group_id, row_index, row)` once per generation of each prompt, or `(group_id, row_index, None)` once
+        for a prompt that `filter_prompt` rejects. Yields `None` once the epoch's prompts are all started, until the
+        trainer sets the next epoch's."""
+        group_id = 0
+        prompts = rows = None
+        accepted_in_epoch = False
+        while True:
+            if self.prompts is not prompts:
+                if prompts is not None:
+                    self._row_index, self._epoch = 0, self._epoch + 1
+                prompts, rows, accepted_in_epoch = self.prompts, chain.from_iterable(self.prompts), False
+            row = next(rows, None)
+            if row is None:
+                self._exhausted_prompts = prompts
+                if not accepted_in_epoch:
+                    raise RuntimeError(
+                        f"`filter_prompt` rejected every prompt of epoch {self._epoch}, so no batch can reach the "
+                        "trainer."
+                    )
+                yield None
+                continue
+            if self.filter_prompt(self._row_index, row, self._epoch):
+                accepted_in_epoch = True
+                for _ in range(self.config.num_generations):
+                    yield group_id, self._row_index, row
+            else:
+                yield group_id, self._row_index, None
+            group_id += 1
+            self._row_index += 1
+
+    async def generate_one(self, prompt: Messages, tools: list[Callable], group_id: int = 0) -> Rollout:
+        """
+        Generate one rollout for a prompt.
+
+        By default, a multi-turn tool loop: each turn renders the whole conversation with the chat template, samples a
+        reply with [`~experimental.zero_sync_grpo.ZeroSyncRolloutLoop.generate_one_turn`] and runs the tool calls it
+        contains, until the model stops calling tools or `max_tool_calling_iterations` is reached. Override it to
+        generate differently, for example with an agent framework. Return every sampling request in `Rollout.turns`,
+        since the training sequences are built from them, and set `Rollout.reward` to score the rollout here.
+
+        Args:
+            prompt (`list[dict[str, Any]]`):
+                Prompt messages.
+            tools (`list[Callable]`):
+                Tools available to this rollout: the trainer's `tools`, plus the public methods of the environment when
+                using `environment_factory`.
+            group_id (`int`, *optional*, defaults to `0`):
+                Identifier of the group the rollout belongs to.
+
+        Returns:
+            [`~experimental.zero_sync_grpo.Rollout`]: The finished rollout.
+        """
+        messages = list(prompt)  # a MESSAGE list, not a token list
+        tool_dict = {tool.__name__: tool for tool in tools}
+        turns: list[TurnRecord] = []
+        completion, completion_ids = [], []
+        tool_call_count = 0
+        tool_failure_count = 0
+        iteration_num = 0
+        loop_exhausted = False
+        max_iterations = self.config.max_tool_calling_iterations
+        while True:
+            prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
+                messages,
+                return_dict=False,
+                add_generation_prompt=True,
+                tools=tools or None,
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
+            turn = await self.generate_one_turn(prompt_ids)
+            assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            completion.append(assistant_message)
+            completion_ids.extend(turn.output_ids)
+            messages.append(assistant_message)
+            turns.append(turn)
+            tool_calls = assistant_message.get("tool_calls")
+            if tool_calls is None:
+                break
+            if max_iterations is not None and iteration_num >= max_iterations:
+                # Cut off mid-loop: the model asked for another tool and we refused. The conversation is trained as if
+                # it had finished, so this is a silent truncation — hence the metric.
+                loop_exhausted = True
+                break
+            tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
+            tool_call_count += n_calls
+            tool_failure_count += n_failures
+            completion.extend(tool_messages)
+            messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
+            iteration_num += 1
+        if self.tools:
+            # Only meaningful when the model has tools to call: with none, the loop always ends on the first turn and
+            # the metric would be a constant 0 cluttering every run that does not use tools.
+            self._rates["tools/loop_exhausted_frac"][0] += loop_exhausted
+            self._rates["tools/loop_exhausted_frac"][1] += 1
+        return Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count)
+
+    async def _execute_tool_calls(
+        self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
+    ) -> tuple[list[dict[str, str]], int, int]:
+        loop = asyncio.get_running_loop()
+        tool_messages = []
+        n_calls = 0
+        n_failures = 0
+        for tool_call in tool_calls:
+            n_calls += 1
+            function = tool_call["function"]
+            name = function["name"]
+            self._counters[f"tools/{name}/call_total"] += 1
+            tool = tool_dict.get(name)
+            if tool is None:
+                # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
+                # and raised — which is an environment problem. Counted apart so the two are not one number.
+                n_failures += 1
+                self._counters["tools/unknown_name_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
+                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
+                continue
+            t0 = time.monotonic()
+            try:
+                arguments = function.get("arguments", {})
+                if inspect.iscoroutinefunction(tool):
+                    result = await tool(**arguments)
+                else:
+                    result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
+            except Exception as error:
+                n_failures += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
+                result = {"error": str(error)}
+            elapsed = time.monotonic() - t0
+            self._rates["tools/latency_s"][0] += elapsed
+            self._rates["tools/latency_s"][1] += 1
+            self._rates[f"tools/{name}/latency_s"][0] += elapsed
+            self._rates[f"tools/{name}/latency_s"][1] += 1
+            tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        self._rates["tools/parallel_calls_mean"][0] += len(tool_calls)
+        self._rates["tools/parallel_calls_mean"][1] += 1
+        return tool_messages, n_calls, n_failures
+
+    async def generate_one_turn(self, prompt_ids: list[int]) -> TurnRecord:
+        """
+        Sample one reply from the trainer's continuous batching engine, with the config's sampling settings
+        (`temperature`, `top_p`, `top_k` and `max_completion_length`).
+
+        Args:
+            prompt_ids (`list[int]`):
+                Token ids of the full prompt.
+
+        Returns:
+            [`TurnRecord`]: The prompt and the sampled tokens with their log-probabilities.
+        """
+        request_id = self.manager.add_request(prompt_ids, max_new_tokens=self.config.max_completion_length)
+        self._turn_results[request_id] = self._loop.create_future()
+        output = await self._turn_results[request_id]
+        output_ids = list(output.generated_tokens)
+        return TurnRecord(prompt_ids, output_ids, list(output.logprobs[: len(output_ids)]))
+
+    async def _calculate_rewards(self, group: RolloutGroup) -> np.ndarray:
+        """Score every rollout of `group` with each reward source.
+
+        Returns:
+            `np.ndarray` of shape `(len(reward_func_names), len(group.completions))`, NaN where a reward function
+            returned `None`.
+        """
+        kwargs = dict(
+            completions=group.completions,
+            prompts=group.prompts,
+            completion_ids=group.completions_ids,
+            **group.reward_kwargs,
+        )
+        all_rewards = await asyncio.gather(
+            *[
+                reward_func(**kwargs) if is_async_callable(reward_func) else asyncio.to_thread(reward_func, **kwargs)
+                for reward_func in self.reward_funcs
+            ]
+        )
+        # Each environment that owns its reward contributes one reward column (named after its env class, in
+        # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
+        # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
+        # placed in a column only when its env is that class, so mixing reward-owning and plain envs is safe.
+        for env_type in self._env_reward_types:
+            column = [r[1] if (r is not None and r[0] is env_type) else None for r in group.env_rewards]
+            all_rewards = [*all_rewards, column]
+
+        all_rewards = [*all_rewards, list(group.rollout_rewards)]
+
+        # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
+        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
+        return np.array(all_rewards, dtype=float)
+
+    def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
+        """
+        Compute one advantage per rollout of a group. By default, each reward standardized within the group; a rollout
+        with a NaN reward gets advantage `0` and is left out of the mean and std.
+
+        It runs for every group. A group whose scored rewards are all equal is then dropped, whatever advantages this
+        returns.
+
+        Args:
+            group ([`~experimental.zero_sync_grpo.zero_sync_grpo_trainer.RolloutGroup`]):
+                The `num_generations` rollouts of one prompt, with their total rewards in `group.rewards`.
+
+        Returns:
+            `np.ndarray`: One advantage per rollout, in the order of `group.rewards`.
+        """
+        rewards = group.rewards
+        scored_mask = ~np.isnan(rewards)
+        scored = rewards[scored_mask]
+        advantages = np.zeros_like(rewards)
+        if scored_mask.any():
+            advantages[scored_mask] = (scored - scored.mean()) / (scored.std() + 1e-8)
+        return advantages
+
+    async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
+        per_func_rewards = await self._calculate_rewards(group)
+        # A rollout for which every func returned None is unscorable: nansum would give 0 and the row would pull
+        # the policy away from actually-correct answers.
+        rewards = np.nansum(per_func_rewards, axis=0)
+        rewards[np.all(np.isnan(per_func_rewards), axis=0)] = np.nan
+        group.rewards = rewards
+        advantages = self.compute_advantages(group)
+
+        scored = rewards[~np.isnan(rewards)]
+        if len(scored):
+            reward_mean = float(scored.mean())
+            reward_std = float(scored.std())
+        else:
+            reward_mean = reward_std = float("nan")
+        logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
+
+        self._rates["reward"][0] += float(scored.sum())
+        self._rates["reward"][1] += len(scored)
+        zero_std = bool(np.all(scored == scored[:1]))
+        self._rates["frac_reward_zero_std"][0] += zero_std
+        self._rates["frac_reward_zero_std"][1] += 1
+        if zero_std:
+            return []
+
+        total_calls = sum(group.tool_call_counts)
+        tool_metrics = (
+            [
+                {
+                    "tools/call_frequency": float(n_calls),
+                    "tools/failure_frequency": (n_failures / n_calls) if n_calls > 0 else 0.0,
+                }
+                for n_calls, n_failures in zip(group.tool_call_counts, group.tool_failure_counts, strict=True)
+            ]
+            if total_calls > 0
+            else [{}] * len(group.completions)
+        )
+        # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
+        # reward) is not logged, rather than logged as NaN.
+        used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
+
+        per_func_std = [float(np.nanstd(r)) if not np.isnan(r).all() else float("nan") for r in per_func_rewards]
+        # Option 3 advantage: one advantage per conversation, stamped on every training row it produced.
+        # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
+        # so we do not split the reward or the advantage across a conversation's rows.
+        samples = []
+        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
+            zip(
+                group.prompts,
+                group.completions,
+                group.completions_sequences,
+                advantages,
+                rewards,
+                tool_metrics,
+                strict=True,
+            )
+        ):
+            metrics = {
+                "reward_kept": float(reward),
+                "reward_group_std": reward_std,
+                **{
+                    f"rewards/{name}/mean": float(func_reward)
+                    for name, func_reward, used in zip(
+                        self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
+                    )
+                    if used
+                },
+                **{
+                    f"rewards/{name}/group_std": std
+                    for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
+                    if used
+                },
+                **tm,
+            }
+            for seq in sequences:
+                width = max(map(len, seq.sampler_logprobs))
+                shape = (len(seq.input_ids), width)
+                tops = seq.sampler_logprobs
+                sampler_ids = np.fromiter(
+                    chain.from_iterable(chain(top, repeat(-1, width - len(top))) for top in tops),
+                    dtype=np.int64,
+                    count=shape[0] * width,
+                ).reshape(shape)
+                sampler_log_probs = np.fromiter(
+                    chain.from_iterable(chain(top.values(), repeat(-math.inf, width - len(top))) for top in tops),
+                    dtype=np.float32,
+                    count=shape[0] * width,
+                ).reshape(shape)
+                samples.append(
+                    RolloutSample(
+                        prompt=prompt,
+                        completion=completion,
+                        input_ids=np.asarray(seq.input_ids, dtype=np.int64),
+                        completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
+                        old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
+                        sampling_mask=seq.sampling_mask,
+                        sampler_ids=sampler_ids,
+                        sampler_log_probs=sampler_log_probs,
+                        advantage=float(advantage),
+                        model_version=group.model_version,
+                        group_id=group.group_id,
+                        metrics=dict(metrics),  # own copy per row
+                    )
+                )
+        return samples
+
+
 class _RolloutStream(torch.utils.data.IterableDataset):
     """Prompts in, finished rollouts out: what the training loop iterates.
 
@@ -258,7 +1260,7 @@ class _RolloutStream(torch.utils.data.IterableDataset):
         self._prompt_loader = prompt_loader
 
     def __len__(self):
-        return len(self._prompt_loader.dataset) * self._trainer.num_generations
+        return len(self._prompt_loader.dataset) * self._trainer.args.num_generations
 
     def __iter__(self):
         prompts = iter(self._prompt_loader)
@@ -346,20 +1348,23 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             None)`): A tuple containing the optimizer and the scheduler to use.
     """
 
+    loop_cls: type[ZeroSyncRolloutLoop] = ZeroSyncRolloutLoop
+    _rollout_loop_kwargs: dict[str, Any] = {}
+
     _tag_names = ["trl", "zero-sync-grpo"]
     _name = "Zero-Sync GRPO"
 
     def __init__(
         self,
         model: str | PreTrainedModel,
-        reward_funcs: RewardFunc | list[RewardFunc],
+        reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: ZeroSyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        tools: list[Callable] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        tools: list[Callable] | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
     ):
         # Args
         if args is None:
@@ -457,22 +1462,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             reward_funcs = []
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
-        self.reward_func_names = [get_callable_name(reward_func) for reward_func in reward_funcs]
+        # The rollout loop gets them, with the tools and the environments, when the engine starts
         self.reward_funcs = reward_funcs
+        self.tools = tools
+        self.environment_factory = environment_factory
 
         # Training arguments
-        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
-        self.num_generations = args.num_generations  # = G in the GRPO paper
-        self.max_tool_calling_iterations = (
-            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
-        )
-        self.temperature = args.temperature
-        self.top_p = args.top_p
-        self.top_k = args.top_k
-        self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
-        self.rollouts_in_flight = args.rollouts_in_flight
+        self.temperature = args.temperature
         self.tp_size = args.tp_size
 
         # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
@@ -521,30 +1519,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._loan = None  # (sublet loan of the KV cache, mode) during a step, when lending the KV cache
         self._step_generation_wait = 0.0
 
-        # Tools
-        self.tools = tools
-        self.tool_dict = {tool.__name__: tool for tool in tools} if tools else {}
-        if tools:
-            if not supports_tool_calling(processing_class):
-                raise ValueError(
-                    "The provided chat template does not support tool calling. The template must be able to render a "
-                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
-                )
-        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
-        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        if self.tools:
-            has_template = getattr(self._tokenizer, "response_template", None) is not None
-            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
-            if not has_template and not has_schema:
-                processing_class = add_response_schema(processing_class)
-            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
-                warnings.warn(
-                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
-                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
-                    "support will eventually be removed. See the Transformers response-parsing docs.",
-                    FutureWarning,
-                )
-
         # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
         # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
         # place where splitting buys least: it costs one copy of that matrix per process and removes a gather from
@@ -579,22 +1553,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             args=args,
             data_collator=identity,  # No data collation is needed in GRPO
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
         )
 
-        # Zero-sync generation state. The continuous batching manager is created lazily on the first generation (the
-        # model must be on its final device first). `_inflight` maps every pending request id to its group; a group's
-        # advantages are computed as soon as its last completion lands, and its samples join `_ready`, from which
-        # training batches are drawn.
+        # The continuous batching manager and the rollout loop that feeds it are created on the first generation (the
+        # model must be on its final device first), the loop on the ranks that run the rollouts
         self._manager = None
-        self._pending: deque[dict[str, Any]] = deque()
-        self._inflight = {}
-        self._ready = deque()
+        self.rollout_loop = None
 
-        # Metrics
+        # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
     def _set_signature_columns_if_needed(self):
@@ -614,7 +1583,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         prompt_loader = self._get_dataloader(
             dataset=self.train_dataset,
             description="Training",
-            batch_size=self._train_batch_size // self.num_generations,
+            batch_size=self._train_batch_size // self.args.num_generations,
             sampler_fn=self._get_train_sampler,
             is_training=True,
         )
@@ -636,11 +1605,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if self._manager is not None:
                 # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
                 # the process would never exit. A flush would wait for every rollout still in flight, and there are
-                # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
-                # trained on now. The engine cannot stop while it is paused, so generation resumes first.
+                # always some, since the trainer keeps `max_concurrent_rollouts` rollouts generating; none of them will
+                # be trained on now. The engine cannot stop while it is paused, so generation resumes first.
                 try:
                     self._resume_generation()
                 finally:
+                    if self.rollout_loop is not None:
+                        self.rollout_loop.stop()
+                        self.rollout_loop = None
                     self._manager.stop(block=True, timeout=30, hard_stop=True)
                     self._manager = None
 
@@ -649,14 +1621,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # optimizer updates in place.
         model = self.accelerator.unwrap_model(self.model)
         generation_kwargs = {
-            "max_new_tokens": self.max_completion_length,
+            "max_new_tokens": self.args.max_completion_length,
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
             "eos_token_id": self.eos_token_ids,
             "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
+            "top_p": self.args.top_p,
+            "top_k": self.args.top_k,
         }
         generation_config = GenerationConfig(**generation_kwargs)
         cb_kwargs = dict(self.args.continuous_batching_config or {})
@@ -705,56 +1677,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     cache.bytes_per_sector, non_trash_bytes, cache.cache_tensor, cache.pool
                 )
         self._manager.start()
-
-    def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
-        # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
-        # rewrites of earlier turns precisely because the prompt is rebuilt from the message list instead of glued
-        # onto held tokens.
-        return self.processing_class.apply_chat_template(
-            [messages],
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            tools=self.tools or None,
-            **self.chat_template_kwargs,
-        )["input_ids"][0]
-
-    def _enqueue_group(self, example: dict[str, Any]) -> None:
-        # Queue `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
-        # calls tools spawns the next turn's request, and the rollout is scored when its final turn lands. They are
-        # queued rather than started: `_fill_slots` starts them as the engine has room.
-        group = {"example": example, "scored": [], "size": self.num_generations}
-        for _ in range(self.num_generations):
-            self._pending.append(
-                {
-                    "id": uuid.uuid4().hex,
-                    "group": group,
-                    "messages": list(example["prompt"]),
-                    "completion": [],
-                    "turns": [],
-                    "prompt_ids": self._tokenize_conversation(example["prompt"]),
-                    "iterations": 0,
-                    "tool_calls": 0,
-                }
+        if self._is_tp_driver:
+            self.rollout_loop = self.loop_cls(
+                self.args,
+                manager=self._manager,
+                reward_funcs=self.reward_funcs,
+                processing_class=self._tokenizer,
+                eos_token_ids=self.eos_token_ids,
+                metrics=self._metrics["train"],
+                model_version_fn=lambda: self.state.global_step,
+                tools=self.tools,
+                environment_factory=self.environment_factory,
+                **self._rollout_loop_kwargs,
             )
-
-    def _enqueue_group_batch(self, batch) -> None:
-        for example in batch:
-            self._enqueue_group(example)
-
-    def _fill_slots(self) -> None:
-        """Keep `rollouts_in_flight` rollouts generating, starting the next one the moment one finishes.
-
-        A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
-        the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
-        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free rather
-        than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so the
-        members of a group already see more than one version of the policy.
-        """
-        while len(self._inflight) < self.rollouts_in_flight and self._pending:
-            rollout = self._pending.popleft()
-            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
-            self._inflight[request_id] = rollout
 
     def _pause_generation(self, mode: str) -> None:
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
@@ -812,151 +1747,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._pause.__exit__(None, None, None)
                 self._pause = None
 
-    def _receive(self, timeout: float) -> None:
-        # Read one finished completion, if one lands within `timeout`, and score it; a group's advantages are computed
-        # once its last completion lands. One at a time, so the caller sees the ready count after every completion. A
-        # dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so
-        # poll `fatal_error` to fail fast instead of spinning.
-        result = self._manager.get_result(timeout=timeout)
-        if result is None:
-            fatal_error = self._manager.background_thread_status.fatal_error
-            if fatal_error is not None:
-                raise RuntimeError("The continuous batching background thread died.") from fatal_error
-            return
-        self._advance_rollout(self._inflight.pop(result.request_id), result)
-        # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
-        self._fill_slots()
-
-    def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
-        # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
-        # rollout (it produced a final answer). Scoring happens the moment the rollout finishes, so reward
-        # computation overlaps generation.
-        turn_ids = list(result.generated_tokens)
-        rollout["turns"].append(TurnRecord(rollout["prompt_ids"], turn_ids, list(result.logprobs[: len(turn_ids)])))
-        if self.tools:
-            assistant_message = parse_response(self._tokenizer, turn_ids, prefix=rollout["prompt_ids"])
-        else:
-            assistant_message = {
-                "role": "assistant",
-                "content": self._tokenizer.decode(turn_ids, skip_special_tokens=True),
-            }
-        rollout["messages"].append(assistant_message)
-        rollout["completion"].append(assistant_message)
-
-        tool_calls = assistant_message.get("tool_calls")
-        if tool_calls and rollout["iterations"] < self.max_tool_calling_iterations:
-            tool_messages = self._execute_tool_calls(tool_calls)
-            rollout["tool_calls"] += len(tool_calls)
-            rollout["messages"].extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
-            rollout["completion"].extend(tool_messages)
-            rollout["iterations"] += 1
-            rollout["prompt_ids"] = self._tokenize_conversation(rollout["messages"])
-            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
-            self._inflight[request_id] = rollout
-            return
-
-        group = rollout["group"]
-        group["scored"].append(self._score_rollout(group["example"], rollout))
-        if len(group["scored"]) == group["size"]:
-            self._finalize_group(group)
-
-    def _execute_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, str]]:
-        tool_messages = []
-        for tool_call in tool_calls:
-            function = tool_call["function"]
-            name = function["name"]
-            tool = self.tool_dict.get(name)
-            if tool is None:
-                # A hallucinated tool name is a policy error that should decay with training
-                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
-                continue
-            try:
-                arguments = function.get("arguments", {})
-                result = tool(**arguments)
-            except Exception as error:
-                result = {"error": str(error)}
-            tool_messages.append({"role": "tool", "name": name, "content": str(result)})
-        return tool_messages
-
-    def _score_rollout(self, example: dict[str, Any], rollout: dict[str, Any]) -> dict[str, Any]:
-        # The reward functions receive the whole conversation's completion (assistant and tool messages) as
-        # one-element lists, with the same signature as everywhere else in TRL.
-        completion_ids = [token for turn in rollout["turns"] for token in turn.output_ids]
-        reward_kwargs = {key: [example[key]] for key in example if key not in ["prompt"]}
-
-        rewards_per_func = torch.zeros(len(self.reward_funcs))
-        for i, reward_func in enumerate(self.reward_funcs):
-            output_reward_func = reward_func(
-                prompts=[example["prompt"]],
-                completions=[rollout["completion"]],
-                completion_ids=[completion_ids],
-                **reward_kwargs,
-            )
-            # Convert None values to NaN
-            rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
-
-        sequences, drifts = _chain_to_sequences(
-            Rollout(
-                rollout["completion"],
-                completion_ids,
-                rollout["turns"],
-                rollout["tool_calls"],
-                rollout_id=rollout["id"],
-            )
-        )
-        return {
-            "sequences": sequences,
-            "num_completion_tokens": len(completion_ids),
-            "tool_calls": rollout["tool_calls"],
-            "forks": len(drifts),
-            "rewards_per_func": rewards_per_func,
-        }
-
-    def _finalize_group(self, group: dict[str, Any]) -> None:
-        rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
-
-        # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
-        # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows NaN
-        # so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
-        unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
-        rewards = rewards_per_func.nansum(dim=1)
-        rewards[unscorable_mask] = torch.nan
-        advantages = (rewards - torch.nanmean(rewards)) / (nanstd(rewards) + 1e-4)
-
-        # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
-        # so zero their advantage to keep them from moving the policy.
-        advantages = torch.nan_to_num(advantages, nan=0.0)
-
-        # A rollout produces one row, or several when the chat template rewrote history. They all carry the rollout's
-        # advantage, and its metrics ride along on the first one so a fork isn't counted twice.
-        for scored, reward, reward_per_func, advantage in zip(
-            group["scored"], rewards, rewards_per_func, advantages, strict=True
-        ):
-            metrics = {
-                "reward": reward,
-                "rewards_per_func": reward_per_func,
-                "completion_length": scored["num_completion_tokens"],
-                "tool_calls": scored["tool_calls"],
-                "forks": scored["forks"],
-            }
-            for sequence in scored["sequences"]:
-                row = {
-                    "input_ids": sequence.input_ids,
-                    "completion_mask": sequence.completion_mask,
-                    "old_log_probs": sequence.old_log_probs,
-                }
-                self._ready.append({**row, "advantage": advantage, "metrics": metrics})
-                metrics = None  # only the rollout's first row carries them
-
-    def _take_from_pool(self, num_samples: int) -> list[dict[str, Any]]:
+    def _take_from_pool(self, num_samples: int) -> list[RolloutSample]:
         """Hand this replica its share of the samples every replica has ready.
 
         A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built for
         balance instead of for locality, so the replicas reach their forward together and carry the same load. Every
         replica's first rank runs the same assignment over the same pool, so no one has to be told the result.
         """
+        buffer = self.rollout_loop.rollout_buffer
         pool: list[Any] = [None] * self.dp_size
-        torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
+        torch.distributed.all_gather_object(pool, list(buffer), group=self._replica_group)
         replica = self.accelerator.process_index // self.tp_size
 
         # Which samples to train on is decided by age, not by length. Preferring the long ones leaves the short
@@ -975,13 +1775,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # is what predicts both the step time and the activation peak, and it is the quantity worth equalizing.
         loads = [0] * self.dp_size
         assigned: list[list[Any]] = [[] for _ in range(self.dp_size)]
-        for owner, index, sample in sorted(chosen, key=lambda item: -len(item[2]["input_ids"])):
+        for owner, index, sample in sorted(chosen, key=lambda item: -len(item[2].input_ids)):
             open_replicas = [r for r in range(self.dp_size) if len(assigned[r]) < num_samples]
             target = min(open_replicas, key=lambda r: loads[r])
             assigned[target].append((owner, index, sample))
-            loads[target] += len(sample["input_ids"]) ** 2
+            loads[target] += len(sample.input_ids) ** 2
         taken = {index for group in assigned for owner, index, _ in group if owner == replica}
-        self._ready = deque(sample for index, sample in enumerate(self._ready) if index not in taken)
+        kept = [sample for index, sample in enumerate(buffer) if index not in taken]
+        buffer.clear()
+        buffer.extend(kept)
         self._metrics["train"]["batch/row_imbalance"].append(max(loads) / (sum(loads) / len(loads)))
         self._metrics["train"]["batch/from_other_replicas"].append(
             sum(1 for owner, _, _ in assigned[replica] if owner != replica) / max(len(assigned[replica]), 1)
@@ -990,7 +1792,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # order used above would put all the longest samples into the first one.
         return [sample for _, _, sample in sorted(assigned[replica], key=lambda item: (item[0], item[1]))]
 
-    def _next_rollout_batch(self, prompts) -> list[dict[str, Any]]:
+    def _next_rollout_batch(self, prompts) -> list[RolloutSample]:
         """Keep the engine fed and return one optimizer step's worth of finished rollouts, or nothing once the prompts
         run out.
 
@@ -1019,46 +1821,38 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     pass
             return samples
 
-        # Prompts arrive a batch at a time while rollouts finish one at a time, so the queue is kept a batch deeper
-        # than the slots: without that spare a burst of completions would leave slots idle until the next batch.
-        exhausted = False
-        while len(self._pending) < self.rollouts_in_flight + num_samples:
-            try:
-                self._enqueue_group_batch(next(prompts))
-            except StopIteration:
-                exhausted = True
-                break
-        self._fill_slots()
-        if exhausted and not self._pending and not self._inflight and len(self._ready) < num_samples:
-            if self._tp_cpu_group is not None:
-                torch.distributed.broadcast_object_list([[]], src=self._tp_driver, group=self._tp_cpu_group)
-            return []
+        # The loop draws the epoch's prompts as its slots free up
+        self.rollout_loop.prompts = prompts
+        buffer = self.rollout_loop.rollout_buffer
 
         # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
-        # value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at once)
-        # or give it a bigger KV pool.
+        # value means the engine is the bottleneck, so raise `max_concurrent_rollouts` (more requests generating at
+        # once) or give it a bigger KV pool.
         wait_start = time.perf_counter()
         if self._replica_group is None:
-            while len(self._ready) < num_samples:
-                self._receive(timeout=1.0)
+            self.rollout_loop.run_until(lambda: len(buffer) >= num_samples or self.rollout_loop.drained())
+            enough = len(buffer) >= num_samples
         else:
             # The replicas draw one pool between them. A replica whose completions come back short would otherwise
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
             # count to cover every replica, then handing the samples out, is what keeps the steps aligned. The sum of
-            # the ready counts travels while each replica keeps scoring, so one busy with a slow reward never holds up
-            # the other, and both see the same sums in the same order, so they stop on the same one.
-            total = 0
-            while total < num_samples * self.dp_size:
-                counts = torch.tensor([len(self._ready)])
+            # the ready counts travels while each replica keeps generating and scoring, so one busy with a slow reward
+            # never holds up the other, and both see the same sums in the same order, so they stop on the same one.
+            while True:
+                counts = torch.tensor([len(buffer), int(self.rollout_loop.drained())])
                 summed = torch.distributed.all_reduce(counts, group=self._replica_cpu_group, async_op=True)
-                self._receive(timeout=0.01)
-                while not summed.is_completed():
-                    self._receive(timeout=0.01)
+                self.rollout_loop.run_until(summed.is_completed)
                 summed.wait()
-                total = int(counts.item())
+                enough = int(counts[0]) >= num_samples * self.dp_size
+                if enough or int(counts[1]) == self.dp_size:
+                    break
         # Logged once per optimizer step, in `training_step`
         self._step_generation_wait += time.perf_counter() - wait_start
+        if not enough:  # every prompt of the epoch is generated and scored, short of a step's samples
+            if self._tp_cpu_group is not None:
+                torch.distributed.broadcast_object_list([[]], src=self._tp_driver, group=self._tp_cpu_group)
+            return []
         # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
         # and the training step are fighting over memory, which slows both.
         self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
@@ -1071,38 +1865,37 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Packing already removes the padding, and picking like-length samples would concentrate the long
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
             # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
-            samples = [self._ready.popleft() for _ in range(num_samples)]
+            samples = [buffer.popleft() for _ in range(num_samples)]
         if self._tp_cpu_group is not None:
             torch.distributed.broadcast_object_list([samples], src=self._tp_driver, group=self._tp_cpu_group)
         return samples
 
-    def _prepare_inputs(self, samples: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
+    def _prepare_inputs(self, samples: list[RolloutSample]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # Metrics of the rollouts this step trains on. They are per replica: the replica's first rank forms and scores
-        # the groups and sends the metrics along with the samples, and `Trainer.log` reports process zero.
-        rollout_metrics = [sample["metrics"] for sample in samples if sample["metrics"] is not None]
-        rewards = torch.stack([metrics["reward"] for metrics in rollout_metrics])
-        rewards_per_func = torch.stack([metrics["rewards_per_func"] for metrics in rollout_metrics])
-        # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
-        for i, reward_func_name in enumerate(self.reward_func_names):
-            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
-            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
-        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
-        self._metrics[mode]["completions/mean_length"].append(
-            sum(metrics["completion_length"] for metrics in rollout_metrics) / len(rollout_metrics)
-        )
-        if self.tools:
-            self._metrics[mode]["tools/call_frequency"].append(
-                sum(metrics["tool_calls"] for metrics in rollout_metrics) / len(rollout_metrics)
-            )
-            self._metrics[mode]["completions/forks"].append(
-                sum(metrics["forks"] for metrics in rollout_metrics) / len(rollout_metrics)
-            )
+        # Metrics of the samples this micro-batch trains on. They are per replica: the replica's first rank forms and
+        # scores the groups and sends the samples, and `Trainer.log` reports process zero.
+        # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
+        # forwarded — the prompt, tool results, masked tokens, and the earlier turns a fork re-sends as context. FLOPs
+        # are spent on both, so both are worth a number, and their ratio is what says how much of the forward earns no
+        # gradient.
+        forwarded = [len(sample.input_ids) for sample in samples]
+        trained = [int(sample.completion_mask.sum()) for sample in samples]
+        self._metrics[mode]["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
+        self._metrics[mode]["sample/forwarded_tokens_max"].append(float(max(forwarded)))
+        self._metrics[mode]["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
+        self._metrics[mode]["batch/masked_token_frac"].append((sum(forwarded) - sum(trained), sum(forwarded)))
+
+        # Per-sample rewards, nan-aware: a reward func may return None for an unscorable sample, and a sample for which
+        # every func returned None carries NaN rather than a misleading 0.
+        # Union of keys, not the first sample's: `tools/*` is stamped per group, so a micro-batch mixes samples that
+        # have those keys with samples that do not. Each key averages over the samples that carry it.
+        keys = dict.fromkeys(key for sample in samples for key in sample.metrics)
+        for key in keys:
+            values = [sample.metrics[key] for sample in samples if key in sample.metrics]
+            valid = [v for v in values if not math.isnan(v)]
+            self._metrics[mode][key].append(sum(valid) / len(valid) if valid else float("nan"))
 
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
@@ -1114,20 +1907,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # shift in the loss stays sound at the seams: the first token of a sample is always context (mask 0), so no
         # term ever crosses two samples. Advantages and behavior logprobs are per token, since the row holds several
         # samples.
-        lengths = torch.tensor([len(s["input_ids"]) for s in samples])
+        lengths = torch.tensor([len(s.input_ids) for s in samples])
         cu_seq_lens = torch.cat([torch.zeros(1, dtype=torch.int32), lengths.cumsum(0).to(torch.int32)])
         return {
-            "input_ids": torch.tensor([t for s in samples for t in s["input_ids"]]).unsqueeze(0).to(device),
-            "position_ids": torch.cat([torch.arange(len(s["input_ids"])) for s in samples]).unsqueeze(0).to(device),
-            "completion_mask": torch.tensor([m for s in samples for m in s["completion_mask"]], dtype=torch.long)
+            "input_ids": torch.from_numpy(np.concatenate([s.input_ids for s in samples])).unsqueeze(0).to(device),
+            "position_ids": torch.cat([torch.arange(len(s.input_ids)) for s in samples]).unsqueeze(0).to(device),
+            "completion_mask": torch.from_numpy(np.concatenate([s.completion_mask for s in samples]))
             .unsqueeze(0)
             .to(device),
-            "old_per_token_logps": torch.tensor(
-                [lp for s in samples for lp in s["old_log_probs"]], dtype=torch.float32
-            )
+            "old_per_token_logps": torch.from_numpy(np.concatenate([s.old_log_probs for s in samples]))
             .unsqueeze(0)
             .to(device),
-            "advantages": torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in samples])
+            "advantages": torch.cat([torch.full((len(s.input_ids),), s.advantage) for s in samples])
             .to(torch.float32)
             .unsqueeze(0)
             .to(device),
@@ -1344,15 +2135,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        # Average the metrics
         metrics = {}
         for key, val in self._metrics[mode].items():
-            # Filter out NaN values before averaging. A reward function that returns None for all samples
-            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
-            # would let a single NaN contaminate valid data from other batches. Only return None when no
-            # valid values remain (e.g. JSON loggers crash on float NaN).
-            valid = [v for v in val if not math.isnan(v)]
-            metrics[key] = sum(valid) / len(valid) if valid else None
+            valid = [v for v in val if isinstance(v, tuple) or not math.isnan(v)]
+            metrics[key] = _reduce_metric(key, valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

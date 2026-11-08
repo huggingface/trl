@@ -25,18 +25,18 @@ Zero-sync GRPO on GSM8K with long thinking completions, tuned for throughput.
 Training and generation share one weight copy: the continuous batching engine decodes from the
 tensors the optimizer updates, so there is no inference server and no weight sync. The engine
 generates between optimizer steps, and every completion is produced by the current policy (at
-most `rollouts_in_flight` rollouts behind the policy).
+most `max_concurrent_rollouts` rollouts behind the policy).
 
 This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, thinking
 completions of 1-4k tokens, 4x B200). Each knob below is what moved the needle:
 
 - a micro-batch is packed in one row with explicit sample boundaries, so no pad-token compute and
   flash attention's varlen kernels attend within each sample.
-- `rollouts_in_flight=512`: a decode step is latency-bound, so its cost barely depends on how many
+- `max_concurrent_rollouts=512`: a decode step is latency-bound, so its cost barely depends on how many
   sequences it carries (on this model at tp=4, 34 ms with 128 in flight, 44 ms with 512). A finished
   rollout is replaced immediately by the next one, and the engine wants as many as the KV cache
   holds: raise `max_memory_percent` together with this. Completions then lag the policy by
-  `rollouts_in_flight / samples per step` optimizer steps (16 here), which the 14B tolerates; a 0.6B
+  `max_concurrent_rollouts / samples per step` optimizer steps (16 here), which the 14B tolerates; a 0.6B
   at the same lag learned visibly slower, so keep the lag small on small models.
 - `per_device_train_batch_size=16` with `gradient_accumulation_steps=2`: fewer, larger forwards
   per step; advantages are computed at scoring time, so accumulation does not change the loss. A
@@ -103,7 +103,7 @@ def main():
         max_completion_length=4096,
         chat_template_kwargs={"enable_thinking": True},
         learning_rate=3e-6,
-        rollouts_in_flight=512,
+        max_concurrent_rollouts=512,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
         continuous_batching_config={"max_memory_percent": 0.3},
         # The smallest split that fits a 14B

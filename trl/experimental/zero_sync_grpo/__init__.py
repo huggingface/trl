@@ -13,4 +13,4 @@
 # limitations under the License.
 
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
-from .zero_sync_grpo_trainer import ZeroSyncGRPOTrainer
+from .zero_sync_grpo_trainer import Rollout, ZeroSyncGRPOTrainer, ZeroSyncRolloutLoop

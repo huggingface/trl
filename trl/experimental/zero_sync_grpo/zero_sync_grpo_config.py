@@ -60,13 +60,13 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
             `max_completion_length`.
-        rollouts_in_flight (`int`, *optional*, defaults to `32`):
-            Number of rollouts the engine keeps generating at any moment. A rollout that finishes is replaced
-            immediately by the next one, so the decode batch stays full instead of emptying and refilling once per
-            optimizer step. The cost of a decode step is mostly reading the weights and the per-layer all-reduces,
-            which do not depend on how many sequences are decoded, so a fuller batch is close to free throughput. Set
-            it as high as the KV cache holds: past that, rollouts crowd the cache and decode slows. Completions lag the
-            policy by roughly this many rollouts divided by the batch trained on per step.
+        max_concurrent_rollouts (`int`, *optional*, defaults to `32`):
+            Maximum number of rollouts in flight at once. A rollout that finishes is replaced immediately by the next
+            one, so the decode batch stays full instead of emptying and refilling once per optimizer step. The cost of
+            a decode step is mostly reading the weights and the per-layer all-reduces, which do not depend on how many
+            sequences are decoded, so a fuller batch is close to free throughput. Set it as high as the KV cache holds:
+            past that, rollouts crowd the cache and decode slows. Completions lag the policy by roughly this many
+            rollouts divided by the batch trained on per step.
         continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
             forced to `True`: the engine's logprobs are the behavior-policy logprobs of the completions.
@@ -89,6 +89,13 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+
+        > Parameters that control the logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -170,12 +177,11 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "length reaches `max_completion_length`."
         },
     )
-    rollouts_in_flight: int = field(
+    max_concurrent_rollouts: int = field(
         default=32,
         metadata={
-            "help": "Number of rollouts the engine keeps generating at any moment. A rollout that finishes is "
-            "replaced immediately by the next one, so the decode batch stays full instead of emptying and refilling "
-            "once per optimizer step. Set it as high as the KV cache holds: past that, rollouts crowd the cache and "
+            "help": "Maximum number of rollouts in flight at once. A rollout that finishes is replaced immediately by "
+            "the next one, so the decode batch stays full instead of emptying and refilling once per optimizer step. Set it as high as the KV cache holds: past that, rollouts crowd the cache and "
             "decode slows."
         },
     )
@@ -222,4 +228,17 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
+    )
+
+    # Parameters that control the logging
+    log_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+    num_completions_to_print: int | None = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )

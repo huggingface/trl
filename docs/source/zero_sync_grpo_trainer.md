@@ -35,7 +35,7 @@ The generation engine reserves its KV cache when the trainer starts, and frees i
 ```python
 ZeroSyncGRPOConfig(
     continuous_batching_config={"max_memory_percent": 0.25},
-    rollouts_in_flight=32,
+    max_concurrent_rollouts=32,
 )
 ```
 
@@ -71,13 +71,13 @@ trainer = ZeroSyncGRPOTrainer(
 )
 ```
 
-`completions/forks` logs how often this happens, and `tools/call_frequency` how many tool calls a rollout makes.
+`rollout/fork_frac` logs how often this happens, and `tools/call_frequency` how many tool calls a rollout makes.
 
 ## Staleness
 
 Because the weights change while a rollout is being generated, a long completion can span several optimizer steps: its tokens are sampled by different versions of the policy. The engine returns, for each token, the logprob computed by the weights that actually sampled it, so the importance ratio in the clipped loss is exact per token even though no single old policy exists.
 
-What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `rollouts_in_flight`.
+What remains is that the KV cache of a rollout's prefix was computed with older weights, while the training forward recomputes it with current ones. Measured on Qwen3-0.6B at `learning_rate=1e-5`, the resulting logprob gap peaks at about 0.16 nats on a rollout's first tokens (an importance ratio of 1.17, inside the default clip range) and falls to the kernel-numerics floor by token 50. It grows with the learning rate, the completion length, and `max_concurrent_rollouts`.
 
 ## Scaling
 
@@ -159,7 +159,7 @@ samples between replicas, which grows when replicas reach the exchange at differ
 training step too little room (then lower `max_memory_percent` in `continuous_batching_config`).
 
 On one GPU the wait is where most of the step goes, and the generation-side lever is
-`rollouts_in_flight`: a decode step costs about the same whatever number of sequences it carries, so
+`max_concurrent_rollouts`: a decode step costs about the same whatever number of sequences it carries, so
 more rollouts in flight means more tokens per second while the engine runs. Measured on one H100 with
 Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, 64 samples per step:
 
@@ -169,7 +169,7 @@ Qwen3-0.6B, GSM8K, 512-token completions, 8 generations per prompt, 64 samples p
 | 512 | 57% | 0.57 | 7,100 |
 
 What it costs is staleness rather than time: a rollout spans every optimizer step that happens before
-it finishes, about `rollouts_in_flight / samples per step` of them (1 and 8 in the rows above), and
+it finishes, about `max_concurrent_rollouts / samples per step` of them (1 and 8 in the rows above), and
 the KV pool has to hold them all, or decode slows instead of the batch filling. A bigger model or
 longer completions move the balance further towards generation; more processes at `tp_size=1` do not
 change it, since every replica generates for itself. Read the metric for your own setup rather than
