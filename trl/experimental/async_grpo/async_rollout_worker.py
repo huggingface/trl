@@ -788,6 +788,7 @@ class AsyncRolloutLoop:
                     group_id, row_index, row = next(work_iter)
                     if row is None:  # rejected by filter_prompt: the trainer counts it as consumed
                         self._put_in_buffer(group_id)
+                        await asyncio.sleep(0)
                         continue
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
