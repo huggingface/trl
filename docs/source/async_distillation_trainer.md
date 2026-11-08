@@ -21,7 +21,7 @@
 
 MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training]( https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's default `beta=0.0` (forward KL).
 
-`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_math/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
+`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_mopd/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_mopd/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
 
 > [!WARNING]
 > Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from the same model family as the student (as in the MOPD example, where a SmolLM3 student is fused from SmolLM3 experts trained from the same checkpoint) satisfy this; a teacher with a different vocabulary trains the student against the wrong tokens, silently unless its vocabulary is larger than the student's.
@@ -37,7 +37,7 @@ In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a loca
 
 Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`experimental.async_distillation.AsyncDistillationConfig`]'s `beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher logprob for at each `beta` regime.
 
-After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via NCCL. As with [`experimental.async_grpo.AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale policy; `max_staleness` controls how many weight updates a sample can lag behind before being discarded.
+After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via NCCL. As with [`experimental.async_grpo.AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale policy; `max_staleness` controls how many weight updates a sample can lag behind before being dropped.
 
 ## Quick start
 
@@ -198,7 +198,7 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/inflight` and `rollout/score_s`.
+- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/concurrency` and `rollout/score_s`.
 - queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
 - both near zero → balanced !
 
@@ -222,7 +222,7 @@ A **rollout** is one prompt taken all the way through: generated by the student,
 | `rollout/score_s`          | of that, the time the teacher's `/v1/completions` call took                                                                                                                                                                                  |
 | `teacher_score_s/<id>`     | MOPD only: the same, per teacher. One slow expert throttles only the rollouts routed to it, which the blended mean hides                                                                                                                     |
 | `rollout/generated_tok_s`  | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
-| `rollout/inflight`         | rollouts in flight, i.e. generating or being scored                                                                                                                                                                                          |
+| `rollout/concurrency`      | rollouts in flight, i.e. generating or being scored                                                                                                                                                                                          |
 | `rollout/vllm_retry_total` | retried vLLM requests, to either the student's server or a teacher's. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to a server, not generated text     |
 | `rollout/backpressure_s`   | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
 
@@ -237,7 +237,7 @@ Each sample is one `RolloutSample`: a prompt, the student's completion, and the 
 | `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `jsd` shows the _effect_ of off-policyness on the loss; this shows the cause                            |
-| `sample/dropped_stale_total`                                  | samples discarded for exceeding `max_staleness`                                                                                                     |
+| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
 
 ### Batches
 

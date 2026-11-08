@@ -21,7 +21,9 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import torch
+import transformers
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
@@ -286,6 +288,17 @@ class VLLMGeneration:
         if isinstance(processing_class, ProcessorMixin):
             # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
             self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                self.generation_kwargs["logit_bias"][model.config.vision_start_token_id] = -100
         self.generation_kwargs.update(generation_kwargs or {})
         self.return_sampling_mask = return_sampling_mask
 
@@ -426,7 +439,8 @@ class VLLMGeneration:
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
-            if "original_module" in name:
+            # and the other adapters' copies (e.g. a "ref" adapter)
+            if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -471,7 +485,10 @@ class VLLMGeneration:
                         if model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        # and the other adapters' copies (e.g. a "ref" adapter)
+                        if "original_module" in name or (
+                            "modules_to_save." in name and "modules_to_save.default." not in name
+                        ):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 

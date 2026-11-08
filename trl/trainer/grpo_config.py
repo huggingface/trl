@@ -185,7 +185,7 @@ class GRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
-            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+            paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`.
         sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
             Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
             is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
@@ -326,7 +326,8 @@ class GRPOConfig(_BaseConfig):
             and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
             the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
             later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
-            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`).
+            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM also applies `repetition_penalty` to the logprobs
+            it returns, so `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -710,7 +711,7 @@ class GRPOConfig(_BaseConfig):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
             "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the "
-            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`."
         },
     )
     sapo_temperature_neg: float = field(
@@ -933,7 +934,9 @@ class GRPOConfig(_BaseConfig):
             "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
             '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
-            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`)."
+            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM "
+            "also applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
+            "`vllm_importance_sampling_correction=False`."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1092,6 +1095,13 @@ class GRPOConfig(_BaseConfig):
                 "`vllm_importance_sampling_correction=False`."
             )
 
+        if self.use_vllm and self.vllm_importance_sampling_correction and self.repetition_penalty != 1.0:
+            raise ValueError(
+                "`repetition_penalty != 1.0` needs `vllm_importance_sampling_correction=False`: vLLM applies the "
+                "penalty to the log-probs it returns and the trainer does not, so the importance sampling ratios are "
+                "biased."
+            )
+
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
         if self.log_completions_hub_repo is not None and not self.log_completions:
@@ -1156,6 +1166,11 @@ class GRPOConfig(_BaseConfig):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        # CISPO bounds the importance weight itself, not its distance to 1, so falling back to `epsilon` would clip every
+        # weight
+        if self.loss_type == "cispo" and self.epsilon_high is None:
+            self.epsilon_high = 5.0
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(

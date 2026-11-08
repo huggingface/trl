@@ -24,7 +24,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, Qwen2Config
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -288,6 +288,13 @@ class TestCreateModelFromPath(TrlTestCase):
                 "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
+    )
+    def test_dequantizes_fp8_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
+        assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
 
 
 class TestModelAcceptsImages(TrlTestCase):
@@ -1451,6 +1458,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1673,7 +1681,13 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize(
-        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
+        ],
     )
     def test_aux_loss(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
@@ -1692,6 +1706,18 @@ class TestAddFusedLMHead:
         )
 
         torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
 
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1783,6 +1809,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -2211,7 +2238,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
         # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
@@ -2307,7 +2334,7 @@ class TestAdjustedMfu(TrlTestCase):
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
         # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
         derived = adjusted_mfu(100.0, cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)

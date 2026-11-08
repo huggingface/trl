@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_math/async_distillation_mopd.py
+CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_mopd/async_distillation_mopd.py
 """
 
 from datasets import interleave_datasets, load_dataset
@@ -92,8 +92,8 @@ def main() -> None:
             "if": "http://localhost:8003",
         },
         vllm_server_base_url="http://localhost:8000",
-        # 16K-token completions can take longer than the default 600 s to generate under load
-        request_timeout=3600,
+        # 16K-token completions can take longer than the default 1800 s to generate under load
+        vllm_server_timeout=3600,
         max_staleness=8,
         max_steps=90,
         save_strategy="no",

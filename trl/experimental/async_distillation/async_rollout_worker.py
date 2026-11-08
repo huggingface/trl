@@ -106,18 +106,23 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> None:
+def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> threading.Thread:
     # Daemon thread that translates the parent's mp.Event into the child's
     # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
-        stop_event.wait()
+        # Poll instead of `stop_event.wait()`: a thread still blocked in `wait()` when this process dies is never
+        # woken, and the parent's `stop_event.set()` in `stop()` then waits for it forever
+        while not stop_event.is_set():
+            time.sleep(0.1)
         try:
             rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
         except RuntimeError:
             # Loop already closed (run() returned before stop fired). Nothing to do.
             pass
 
-    threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher").start()
+    watcher = threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher")
+    watcher.start()
+    return watcher
 
 
 def _child_main(
@@ -147,12 +152,18 @@ def _child_main(
         metrics_queue=metrics_queue,
     )
     child_ready_event.set()
-    _spawn_stop_watcher(rollout_loop, stop_event)
+    watcher = _spawn_stop_watcher(rollout_loop, stop_event)
     try:
         rollout_loop.run()
     except Exception:
         traceback.print_exc()
         raise
+    finally:
+        # The worker is stopping either way: release the watcher so it does not outlive `run()`
+        stop_event.set()
+        watcher.join(timeout=1.0)
+        if watcher.is_alive():
+            logger.warning("Stop watcher did not exit within 1s.")
 
 
 def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | None) -> tuple[list[int], list[float]]:
@@ -180,12 +191,12 @@ def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | Non
 class _AsyncRolloutLoop:
     """Asyncio generate-and-score loop. Lives entirely inside the spawned child process.
 
-    Structurally this is [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop`] with the
+    Structurally this is [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop`] with the
     group-relative-advantage machinery removed (distillation has no group baseline: each prompt yields exactly one
     on-policy sample) and the reward scoring step replaced by a teacher-scoring HTTP call. Because there is no
     grouping, generation and scoring happen in a single task per sample (`_generate_and_score_one`) rather than two
     loops connected by an internal queue, concurrency across in-flight samples still comes from running up to
-    `max_inflight_tasks` such tasks at once, exactly as in the GRPO worker.
+    `max_concurrent_rollouts` such tasks at once, exactly as in the GRPO worker.
 
     Every server it talks to is a plain `vllm serve`, reached through the same OpenAI-compatible `/v1/completions`
     endpoint, in two different modes: the student's server samples a real completion (`_generate_one_turn`), and one or
@@ -209,7 +220,7 @@ class _AsyncRolloutLoop:
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         metrics_queue: MPQueue,
-        max_inflight_tasks: int = 128,
+        max_concurrent_rollouts: int = 128,
         queue_maxsize: int = 0,
         vllm_server_url: str = "http://localhost:8000",
         lora_name: str | None = None,
@@ -222,7 +233,7 @@ class _AsyncRolloutLoop:
         top_k: int = 0,
         min_p: float | None = None,
         repetition_penalty: float = 1.0,
-        request_timeout: int = 120,
+        vllm_server_timeout: float = 1800.0,
         chat_template_kwargs: dict[str, Any] | None = None,
         log_completions: bool = False,
         log_completions_steps: int = 100,
@@ -251,7 +262,7 @@ class _AsyncRolloutLoop:
         self._pushed_completion_tokens = 0
         self._pushed_at = time.monotonic()
 
-        self.max_inflight_tasks = max_inflight_tasks
+        self.max_concurrent_rollouts = max_concurrent_rollouts
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -259,7 +270,7 @@ class _AsyncRolloutLoop:
         self.top_k = top_k
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
-        self.request_timeout = request_timeout
+        self.vllm_server_timeout = vllm_server_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.log_completions = log_completions
         self.log_completions_steps = log_completions_steps
@@ -314,10 +325,12 @@ class _AsyncRolloutLoop:
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks)) as session:
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=2 * self.max_concurrent_rollouts)
+        ) as session:
             self.session = session
             logger.info(
-                f"vllm worker started: max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
+                f"vllm worker started: max_concurrent_rollouts={self.max_concurrent_rollouts}, temperature={self.temperature}, "
                 f"top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
@@ -334,7 +347,7 @@ class _AsyncRolloutLoop:
         """
         for teacher_id, url in self.teacher_server_urls.items():
             models = await self._retry(
-                lambda url=url: self._get(url, "/v1/models", self.request_timeout),
+                lambda url=url: self._get(url, "/v1/models", self.vllm_server_timeout),
                 max_attempts=30,
                 label=f"teacher {teacher_id} /v1/models",
             )
@@ -345,8 +358,8 @@ class _AsyncRolloutLoop:
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
-        inflight_tasks: dict[asyncio.Task, int] = {}
-        free_slots = set(range(self.max_inflight_tasks))
+        rollout_tasks: dict[asyncio.Task, int] = {}
+        free_slots = set(range(self.max_concurrent_rollouts))
         work_iter = self._repeat_iterator()
 
         try:
@@ -356,20 +369,20 @@ class _AsyncRolloutLoop:
                     prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
                     task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
-                    inflight_tasks[task] = slot
+                    rollout_tasks[task] = slot
 
-                if not inflight_tasks:
+                if not rollout_tasks:
                     if stop_event.is_set():
                         return
                     await asyncio.sleep(0.01)
                     continue
 
-                done, _ = await asyncio.wait(inflight_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
+                done, _ = await asyncio.wait(rollout_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
                 if not done:
                     continue
 
                 for task in done:
-                    slot = inflight_tasks.pop(task)
+                    slot = rollout_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
@@ -379,7 +392,7 @@ class _AsyncRolloutLoop:
                     now = time.monotonic()
                     self._push_metrics(
                         {
-                            "rollout/inflight": float(len(inflight_tasks)),
+                            "rollout/concurrency": float(len(rollout_tasks)),
                             # Windowed, not cumulative. A cumulative average cannot show a generation stall.
                             "rollout/generated_tok_s": (
                                 float(self._total_completion_tokens - self._pushed_completion_tokens),
@@ -422,15 +435,15 @@ class _AsyncRolloutLoop:
                     if t_blocked is not None:
                         self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
         finally:
-            for task in inflight_tasks:
+            for task in rollout_tasks:
                 task.cancel()
-            if inflight_tasks:
-                await asyncio.gather(*inflight_tasks, return_exceptions=True)
+            if rollout_tasks:
+                await asyncio.gather(*rollout_tasks, return_exceptions=True)
 
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
         """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
 
-        Ported from [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop._retry`]. Every retried call
+        Ported from [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._retry`]. Every retried call
         in this loop targets a vLLM server — the student's or a teacher's — so the counter is named for the dependency
         rather than for the transport.
         """
@@ -465,8 +478,8 @@ class _AsyncRolloutLoop:
         """One rollout: what the student generated, and the teacher call that scored it.
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
-        so unlike [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop._push_rollout_metrics`] there
-        is no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
+        so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
+        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift or tool metrics to report.
         """
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
@@ -600,7 +613,7 @@ class _AsyncRolloutLoop:
         if self.min_p is not None:
             payload["min_p"] = self.min_p
         output = await self._retry(
-            lambda: self._post(self.vllm_server_url, "/v1/completions", payload, self.request_timeout),
+            lambda: self._post(self.vllm_server_url, "/v1/completions", payload, self.vllm_server_timeout),
             max_attempts=30,
             label="student vllm /v1/completions",
         )
@@ -631,7 +644,7 @@ class _AsyncRolloutLoop:
             "prompt_logprobs": self.teacher_top_k,
         }
         output = await self._retry(
-            lambda: self._post(teacher_server_url, "/v1/completions", payload, self.request_timeout),
+            lambda: self._post(teacher_server_url, "/v1/completions", payload, self.vllm_server_timeout),
             max_attempts=30,
             label="teacher /v1/completions",
         )
