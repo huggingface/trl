@@ -503,32 +503,34 @@ def _rollout_loop(**kwargs):
     return _AsyncRolloutLoop(**kwargs)
 
 
-class TestTokenAllowance:
-    def test_generation_stops_at_the_allowance(self):
-        # The worker runs for real against a fake vLLM server that serves both the student and the teacher. Every
-        # completion is the same two tokens, so every sample has the same length and the count the allowance admits is
-        # exact.
-        from aiohttp import web
-        from aiohttp.test_utils import TestServer
+@pytest.fixture
+def fake_vllm_server():
+    """A vLLM server that serves both the student and the teacher: the student always answers with the same two tokens."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
 
+    async def completions(request):
+        payload = await request.json()
+        if "prompt_logprobs" in payload:  # the teacher scoring the sequence
+            return web.json_response(
+                {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+            )
+        return web.json_response({"choices": [{"token_ids": [7, 8]}]})
+
+    async def models(request):
+        return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+
+    app = web.Application()
+    app.router.add_post("/v1/completions", completions)
+    app.router.add_get("/v1/models", models)
+    return TestServer(app)
+
+
+class TestTokenAllowance:
+    def test_generation_stops_at_the_allowance(self, fake_vllm_server):
+        # Every sample has the same length, so the number of rollouts the allowance admits is exact
         PartialState()
         loop = _rollout_loop(token_allowance=mp.Value("q", 1))
-        eos_token_id = loop.eos_token_ids[0]
-
-        async def completions(request):
-            payload = await request.json()
-            if "prompt_logprobs" in payload:  # the teacher scoring the sequence
-                return web.json_response(
-                    {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
-                )
-            return web.json_response({"choices": [{"token_ids": [7, eos_token_id]}]})
-
-        async def models(request):
-            return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
-
-        app = web.Application()
-        app.router.add_post("/v1/completions", completions)
-        app.router.add_get("/v1/models", models)
 
         def drain():
             return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
@@ -544,7 +546,7 @@ class TestTokenAllowance:
             assert loop.rollout_buffer.qsize() == expected
 
         async def run():
-            async with TestServer(app) as server:
+            async with fake_vllm_server as server:
                 url = str(server.make_url("")).rstrip("/")
                 loop.vllm_server_url = url
                 loop.teacher_server_urls = {"default": url}
