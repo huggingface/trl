@@ -768,13 +768,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
         if self.args.lend_kv_cache_during_step:
             # The step allocates from the cache's memory until the loan ends in `_resume_generation`, which gives back
-            # all of it but the free sectors and blocks: the rollouts in flight, and the zeros padding tokens read
+            # all of it but the free memory: the rollouts in flight, and the zeros padding tokens read
             import sublet
 
             lend_start = time.perf_counter()
             cache = self._manager.batch_processor.cache
             cache.evict_cached_blocks()  # blocks kept only to share prefixes: the step may write over them
-            free = [(s * cache.bytes_per_sector, (s + 1) * cache.bytes_per_sector) for s in cache.pool.free_sectors]
+            free = [(cache.bytes_per_sector, 2 * cache.bytes_per_sector)]  # the trash sector padding tokens write to
+            free += [(s * cache.bytes_per_sector, (s + 1) * cache.bytes_per_sector) for s in cache.pool.free_sectors]
             for allocator in cache.cache_allocators.values():
                 size = allocator.bytes_per_block
                 for leaves in cache.pool._free_blocks[allocator.index].trees.values():
