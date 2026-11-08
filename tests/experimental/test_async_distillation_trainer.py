@@ -505,36 +505,59 @@ def _rollout_loop(**kwargs):
 
 class TestTokenAllowance:
     def test_generation_stops_at_the_allowance(self):
+        # The worker runs for real against a fake vLLM server that serves both the student and the teacher. Every
+        # completion is the same two tokens, so every sample has the same length and the count the allowance admits is
+        # exact.
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
         PartialState()
-        loop = _rollout_loop(token_allowance=mp.Value("q", 30))
+        loop = _rollout_loop(token_allowance=mp.Value("q", 1))
+        eos_token_id = loop.eos_token_ids[0]
 
-        async def fake_generate_and_score_one(prompt_id, row):
-            await asyncio.sleep(0.01)
-            return RolloutSample(
-                prompt=[],
-                completion=[],
-                input_ids=np.array([1, 2, 3]),
-                completion_mask=np.array([0, 1, 1]),
-                teacher_topk_ids=np.full((3, 1), -1),
-                teacher_topk_logprobs=np.full((3, 1), -np.inf),
-                model_version=0,
-                metrics={},
-                teacher_id="default",
-                prompt_id=prompt_id,
-            )
+        async def completions(request):
+            payload = await request.json()
+            if "prompt_logprobs" in payload:  # the teacher scoring the sequence
+                return web.json_response(
+                    {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+                )
+            return web.json_response({"choices": [{"token_ids": [7, eos_token_id]}]})
 
-        loop._generate_and_score_one = fake_generate_and_score_one
+        async def models(request):
+            return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+
+        app = web.Application()
+        app.router.add_post("/v1/completions", completions)
+        app.router.add_get("/v1/models", models)
+
+        def drain():
+            return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
+
+        async def settled(expected):
+            deadline = time.monotonic() + 10
+            while loop.rollout_buffer.qsize() < expected:
+                assert time.monotonic() < deadline, (
+                    f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
+                )
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.3)  # nothing more is generated
+            assert loop.rollout_buffer.qsize() == expected
 
         async def run():
-            stop_event = asyncio.Event()
-            task = asyncio.create_task(loop._generate_loop(stop_event))
-            await asyncio.sleep(0.5)
-            assert loop.rollout_buffer.qsize() == 10
-            loop._token_allowance.value += 30
-            await asyncio.sleep(0.5)
-            assert loop.rollout_buffer.qsize() == 20
-            stop_event.set()
-            await task
+            async with TestServer(app) as server:
+                url = str(server.make_url("")).rstrip("/")
+                loop.vllm_server_url = url
+                loop.teacher_server_urls = {"default": url}
+                stop_event = asyncio.Event()
+                worker = asyncio.create_task(loop._run_loops(stop_event))
+                # Any allowance above 0 admits the first rollout
+                await settled(1)
+                sample_tokens = len(drain()[0].input_ids)
+                # The allowance now has room for 2.5 more rollouts: the worker starts 3 and stops there
+                loop._token_allowance.value = sample_tokens + sample_tokens * 5 // 2
+                await settled(3)
+                stop_event.set()
+                await worker
 
         try:
             loop._loop.run_until_complete(run())

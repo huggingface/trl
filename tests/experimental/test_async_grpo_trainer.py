@@ -1783,28 +1783,70 @@ def alternating_reward(completions, **kwargs):
 
 class TestTokenAllowance(TrlTestCase):
     def test_generation_stops_at_the_allowance_and_admits_whole_groups(self):
+        # The worker runs for real against a fake vLLM server that answers every prompt with the same two tokens, so
+        # every sample has the same length and the number of groups the allowance admits is exact.
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
         PartialState()
-        loop = _rollout_loop(num_generations=4, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 30))
+        num_generations = 4
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hi"}]] * 8})
+        loop = _rollout_loop(
+            num_generations=num_generations,
+            max_concurrent_rollouts=8,
+            dataset=dataset,
+            reward_funcs=[alternating_reward],
+            token_allowance=mp.Value("q", 1),
+        )
+        eos_token_id = loop.eos_token_ids[0]
 
-        async def fake_generate_one(prompt, tools, group_id=0):
-            await asyncio.sleep(0.01)
-            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
+        async def completions(request):
+            return web.json_response(
+                {"choices": [{"token_ids": [7, eos_token_id], "logprobs": {"token_logprobs": [-0.1, -0.1]}}]}
+            )
 
-        loop.generate_one = fake_generate_one
+        async def metrics(request):
+            return web.Response(
+                text='vllm:cache_config_info{engine="0",kv_cache_size_tokens="8000"} 1.0\n'
+                'vllm:kv_cache_usage_perc{engine="0"} 0.1\n'
+                'vllm:num_requests_waiting{engine="0"} 0.0\n'
+            )
+
+        async def models(request):
+            return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+
+        app = web.Application()
+        app.router.add_post("/v1/completions", completions)
+        app.router.add_get("/metrics", metrics)
+        app.router.add_get("/v1/models", models)
+
+        def drain():
+            return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
+
+        async def settled(expected):
+            deadline = time.monotonic() + 10
+            while loop.rollout_buffer.qsize() < expected:
+                assert time.monotonic() < deadline, (
+                    f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
+                )
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.3)  # nothing more is generated
+            assert loop.rollout_buffer.qsize() == expected
 
         async def run():
-            stop_event = asyncio.Event()
-            tasks = [
-                asyncio.create_task(loop._generate_loop(stop_event)),
-                asyncio.create_task(loop._score_loop(stop_event)),
-            ]
-            await asyncio.sleep(0.5)
-            assert loop.rollout_buffer.qsize() == 12
-            loop._token_allowance.value += 30
-            await asyncio.sleep(0.5)
-            assert loop.rollout_buffer.qsize() == 20
-            stop_event.set()
-            await asyncio.gather(*tasks)
+            async with TestServer(app) as server:
+                loop.vllm_server_url = str(server.make_url("")).rstrip("/")
+                stop_event = asyncio.Event()
+                worker = asyncio.create_task(loop._run_loops(stop_event))
+                # Any allowance above 0 admits the first group in full
+                await settled(num_generations)
+                sample_tokens = len(drain()[0].input_ids)
+                group_tokens = num_generations * sample_tokens
+                # The allowance now has room for 1.5 more groups: the worker starts both and stops there
+                loop._token_allowance.value = group_tokens + group_tokens * 3 // 2
+                await settled(2 * num_generations)
+                stop_event.set()
+                await worker
 
         try:
             loop._loop.run_until_complete(run())
