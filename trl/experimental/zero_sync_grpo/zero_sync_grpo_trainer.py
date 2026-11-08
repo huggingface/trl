@@ -17,6 +17,7 @@ import functools
 import inspect
 import math
 import os
+import textwrap
 import time
 import uuid
 import warnings
@@ -36,12 +37,10 @@ from torch import nn
 from torch.distributed.tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    ProcessorMixin,
     TrainerCallback,
 )
 from transformers.distributed.configuration_utils import DistributedConfig
@@ -67,7 +66,6 @@ from ...trainer.utils import (
     get_peak_flops_per_device,
     identity,
     is_async_callable,
-    model_accepts_images,
     nanmax,
     nanmin,
     print_prompt_completions_sample,
@@ -1312,42 +1310,28 @@ class _RolloutStream(torch.utils.data.IterableDataset):
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and training
-    share ONE copy of the weights: a transformers continuous batching manager generates from the same parameter tensors
-    the optimizer updates in place, so there is no second engine, no weight synchronization and no generation/training
-    memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of the completions and
-    are used as the old policy in the clipped loss.
-
-    Generation and training take turns on those weights. Prompts are submitted to the engine continuously, each
-    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands, and
-    a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
-    forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
-    never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a
-    bounded number of optimizer steps; the measured logprob gap this introduces is small and concentrated in each
-    completion's earliest tokens, and the clipped loss against the engine's own logprobs accounts for it.
-
-    Groups are formed per process: each process generates and scores its own prompts, so advantages require no
-    cross-process communication.
+    Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
+    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
+    Models](https://huggingface.co/papers/2402.03300). This trainer is the zero-sync version of GRPO, where generation
+    and training share one copy of the weights: a transformers continuous batching engine generates from the parameter
+    tensors the optimizer updates in place, so there is no second engine and no weight synchronization. The engine is
+    paused for each training step and resumes with its rollouts in flight.
 
     Example:
 
     ```python
-    from datasets import load_dataset
-    from trl.experimental.zero_sync_grpo import ZeroSyncGRPOTrainer
+    >>> from trl.experimental.zero_sync_grpo import ZeroSyncGRPOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/tldr-chat", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-
-    def reward_num_unique_chars(completions, **kwargs):
-        return [len(set(c[0]["content"])) for c in completions]
-
-
-    trainer = ZeroSyncGRPOTrainer(
-        model="Qwen/Qwen3-0.6B",
-        reward_funcs=reward_num_unique_chars,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = ZeroSyncGRPOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -1357,30 +1341,85 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
+              with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+              vision-language checkpoint (whose vision tower is loaded but frozen),
+              [`~transformers.AutoModelForCausalLM`] otherwise.
             - A [`~transformers.PreTrainedModel`] object.
-        reward_funcs (`Callable` or `list[Callable]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. The functions are provided with one group's
-            prompts, completions and completion ids, plus any additional columns in the dataset, and must return a list
-            of floats (or `None` for samples the function does not apply to).
-        args ([`~trl.experimental.zero_sync_grpo.ZeroSyncGRPOConfig`], *optional*):
+            functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
+            by the environment through `environment_factory` (see below). Can be either:
+
+            - A single reward function: The function is provided with the prompts and the generated completions, plus
+              any additional columns in the dataset. It should return a list of rewards. Reward functions can be either
+              synchronous or asynchronous and can also return `None` when the reward is not applicable to those
+              samples. This is useful for multi-task training where different reward functions apply to different types
+              of samples. When a reward function returns `None` for a sample, that reward function is excluded from the
+              reward calculation for that sample. For more details, see [Using a custom reward
+              function](#using-a-custom-reward-function).
+            - A list of reward functions, where each item is a reward function as described above. Rewards from all
+              functions are summed.
+
+        args ([`experimental.zero_sync_grpo.ZeroSyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. It must include a column `"prompt"` in the
-            [conversational](dataset_formats#conversational) format (a list of messages). Any additional columns are
-            passed to the reward functions.
-        eval_dataset ([`~datasets.Dataset`], *optional*):
-            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
-            with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's tokenizer
-            is used; only text-only data is supported.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
+            Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
+            ignored. The format of the samples can be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+
+            May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
+            generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
+            to define the training length.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Processing class used to process the data. The padding side must be set to "left". If `None`, the
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
+            `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
-            List of callbacks to customize the training loop.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-            None)`): A tuple containing the optimizer and the scheduler to use.
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+            method.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        tools (list of `Callable`, *optional*):
+            A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
+            should be a standard Python function with properly type-hinted arguments and return values, and a
+            Google-style docstring describing its purpose, arguments, and return value. For more details, see:
+            https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
+            type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
+            use and that it has been fine-tuned for tool calling.
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. The environment may also define a `get_reward` method taking no
+            argument and returning a `float`: when present, the environment owns the reward, and `get_reward` is called
+            once per completed rollout to score it from the environment's internal state. It acts as an additional
+            reward source (with weight 1, logged under the environment's class name) alongside `reward_funcs`, which
+            then becomes optional.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
+
+    To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
+    [`experimental.zero_sync_grpo.ZeroSyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop
+    when generation starts:
+
+    ```python
+    >>> class CurriculumTrainer(ZeroSyncGRPOTrainer):
+    ...     loop_cls = CurriculumRolloutLoop
+    ```
     """
 
     loop_cls: type[ZeroSyncRolloutLoop] = ZeroSyncRolloutLoop
@@ -1389,6 +1428,18 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "zero-sync-grpo"]
     _name = "Zero-Sync GRPO"
+    _paper = {
+        "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
+        "id": "2402.03300",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{shao2024deepseekmath,
+                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
+                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+                year         = 2024,
+                eprint       = {arXiv:2402.03300},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1396,7 +1447,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: ZeroSyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         tools: list[Callable] | None = None,
@@ -1408,10 +1459,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = ZeroSyncGRPOConfig(f"{model_name}-ZeroSyncGRPO")
 
-        # Model. The architecture (causal LM or vision-language model) is inferred from the checkpoint; VLMs are
-        # supported with text-only data.
+        # Training arguments
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.temperature = args.temperature
+        self.tp_size = args.tp_size
+
+        # Model
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
             model_init_kwargs.setdefault("dtype", "auto")
             # Distributed training requires device_map=None ("auto" fails)
@@ -1444,70 +1501,34 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
 
-        # Processing class
-        if processing_class is None:
-            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
-            processing_class = processor_class.from_pretrained(
-                get_config_model_id(model.config),
-                revision=model_revision,
-                truncation_side="left",
-                padding_side="left",
+        if args.use_liger_kernel:
+            raise NotImplementedError("`use_liger_kernel` is not supported yet.")
+
+        text_config = model.config.get_text_config()
+
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
             )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
-        # Handle pad token for processors or tokenizers
-        if isinstance(processing_class, ProcessorMixin):
-            self._tokenizer = processing_class.tokenizer
-            self._is_vlm = True
-        elif isinstance(processing_class, PreTrainedTokenizerBase):
-            self._tokenizer = processing_class
-            self._is_vlm = False
-        else:
-            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
-
-        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
-        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
-        # this by default without gradient checkpointing, which TRL turns on by default
-        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
-        if (
-            self._is_vlm
-            and args.ddp_find_unused_parameters is None
-            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
-        ):
-            args.ddp_find_unused_parameters = True
-
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
-
-        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
-        # configs.
-        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
-        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
-
-        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
-        eos_token_ids = model.generation_config.eos_token_id
-        if eos_token_ids is None:
-            eos_token_ids = []
-        elif isinstance(eos_token_ids, int):
-            eos_token_ids = [eos_token_ids]
-        if self._tokenizer.eos_token_id not in eos_token_ids:
-            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
-        self.eos_token_ids = eos_token_ids
-
-        # Reward functions
-        if reward_funcs is None:
-            reward_funcs = []
-        elif not isinstance(reward_funcs, list):
-            reward_funcs = [reward_funcs]
-        # The rollout loop gets them, with the tools and the environments, when the engine starts
-        self.reward_funcs = reward_funcs
-        self.tools = tools
-        self.environment_factory = environment_factory
-
-        # Training arguments
-        self.epsilon_low = args.epsilon
-        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
-        self.temperature = args.temperature
-        self.tp_size = args.tp_size
+        self._is_vlm = text_config is not model.config
+        if self._is_vlm:
+            # Train the text model only. It is located through the text config, since module names differ across
+            # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
+            text_model = next(
+                module
+                for module in model.modules()
+                if isinstance(module, PreTrainedModel) and module is not model and module.config is text_config
+            )
+            model.requires_grad_(False)
+            text_model.requires_grad_(True)
+            model.get_output_embeddings().requires_grad_(True)
 
         # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
         # agree on the update. Their gradients are summed over a group holding one rank per replica: the ranks that
@@ -1584,6 +1605,60 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # decodes through this same object, keeps the standard one.
         add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
+        # Reward functions
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
+            reward_funcs = [reward_funcs]
+
+        if train_dataset is None:
+            # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
+            # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout loop,
+            # which goes over it once per epoch (so its length only needs to be non-degenerate).
+            if environment_factory is None:
+                raise ValueError("`train_dataset` is required unless an `environment_factory` is provided.")
+            if isinstance(environment_factory, dict):
+                raise ValueError(
+                    "A `dict` `environment_factory` (multiple environments) requires a `train_dataset` with an "
+                    "`environment` column to route each example to its environment. Provide a dataset, or pass a "
+                    "single environment factory."
+                )
+            if args.max_steps <= 0:
+                raise ValueError(
+                    "When training without a `train_dataset` (the environment owns the data and returns the prompt "
+                    "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
+                    "it via `ZeroSyncGRPOConfig(max_steps=...)`."
+                )
+            num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
+            train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+
+        # The rollout loop gets them, with the tools and the environments, when the engine starts
+        self.reward_funcs = reward_funcs
+        self.tools = tools
+        self.environment_factory = environment_factory
+
         super().__init__(
             model=model,
             args=args,
@@ -1598,6 +1673,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # model must be on its final device first), the loop on the ranks that run the rollouts
         self._manager = None
         self.rollout_loop = None
+
+        # The base Trainer's data-skip replay loop doesn't apply to ZeroSyncGRPO's live rollout stream;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for ZeroSyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout stream."
+            )
+        self.args.ignore_data_skip = True
 
         precision = self.accelerator.mixed_precision
         self.compute_dtype = {
@@ -1681,8 +1765,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         generation_kwargs = {
             "max_new_tokens": self.args.max_completion_length,
             "do_sample": True,
-            "pad_token_id": self._tokenizer.pad_token_id,
-            "bos_token_id": self._tokenizer.bos_token_id,
+            "pad_token_id": self.processing_class.pad_token_id,
+            "bos_token_id": self.processing_class.bos_token_id,
             "eos_token_id": self.eos_token_ids,
             "temperature": self.temperature,
             "top_p": self.args.top_p,
@@ -1740,7 +1824,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self.args,
                 manager=self._manager,
                 reward_funcs=self.reward_funcs,
-                processing_class=self._tokenizer,
+                processing_class=self.processing_class,
                 eos_token_ids=self.eos_token_ids,
                 metrics=self._metrics["train"],
                 model_version_fn=lambda: self.state.global_step,
@@ -2139,12 +2223,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The fused head scores the positions whose next-token label is not -100, which is the completion tokens.
         labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
         forward_start = time.time()
+        # MoE models: request router logits so the forward returns the load-balancing loss
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs.get("attention_mask"),
             position_ids=inputs.get("position_ids"),
             labels=labels,
             fused_lm_head=True,
+            **router_kwargs,
             **boundary_kwargs,
         )
         # The loss terms: the completion tokens of the packed row, each predicted by the position before it
@@ -2156,16 +2243,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         segment_id = inputs["seq_idx"][:, 1:][selected].long()
         self._last_forward_time_s = time.time() - forward_start
 
-        # The trained tokens, forwarded tokens and samples of the micro-batch, over the replicas. Each rank of a tensor
-        # parallel group holds its replica's micro-batch, so the sum over all ranks counts each one `tp_size` times.
+        # The trained tokens, forwarded tokens and samples of the micro-batch, summed over the ranks. Each rank of a
+        # tensor parallel group holds its replica's micro-batch, so the sum counts each replica `tp_size` times.
         local_counts = [
             float(log_probs.numel()),
             float(inputs["input_ids"].numel()),
             float(len(inputs["cu_seq_lens_q"]) - 1),
         ]
-        global_counts = (
-            self.accelerator.reduce(torch.tensor(local_counts, device=log_probs.device), "sum") / self.tp_size
-        )
+        global_counts = self.accelerator.reduce(torch.tensor(local_counts, device=log_probs.device), "sum")
 
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
@@ -2181,12 +2266,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # = world_size / global_n_tokens, so after DDP averaging the effective
         loss = per_token_loss.sum()
         global_n_tokens = global_counts[0]
-        world_size = self.dp_size  # the replicas the gradients are averaged over, see `training_step`
+        world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
         loss = loss / tokens_per_rank.to(torch.float32)
         # For DAPO, we would scale like this instead:
         # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
+
+        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():
             local_ratio_sum = coef_1.sum()
@@ -2263,12 +2353,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
             self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
+
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
-        # `_log_step_metrics`. The counts are batch-wide, summed over the replicas above.
-        n_forward_tokens = float(global_counts[1])
+        # `_log_step_metrics`. The counts are batch-wide, each replica counted once.
+        n_forward_tokens = float(global_counts[1]) / self.tp_size
         mean_seq_len = float(global_counts[1] / global_counts[2])
         self._step_forward_tokens += n_forward_tokens
-        self._step_trained_tokens += float(global_n_tokens)
+        self._step_trained_tokens += float(global_n_tokens) / self.tp_size
         self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
         self._step_samples += n_forward_tokens / mean_seq_len
         self._step_forward_s += self._last_forward_time_s
