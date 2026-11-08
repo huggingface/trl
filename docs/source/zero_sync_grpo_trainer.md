@@ -149,7 +149,7 @@ decodes from the training parameters themselves, with the attention implementati
 chose, so a weight update is visible to the next decoding step without any copy.
 
 Which knob to turn depends on whether generation or training takes the step's time, and
-`generation_wait_s` says which: it logs how long each step waited for the engine after resuming it.
+`perf/rollout_wait_s` says which: it logs how long each step waited for the engine after resuming it.
 Generation and training take turns, so a step costs the training step plus that wait, and the wait
 is the time to decode what was still missing when the previous step ended. Under tensor parallelism
 three more numbers say where a step's time goes: `generation/pause_s` is how long the pause took to be

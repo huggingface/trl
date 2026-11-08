@@ -59,9 +59,12 @@ from ...chat_template_utils import (
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     add_fused_lm_head,
+    compute_flops_per_token,
+    compute_mfu,
     create_model_from_path,
     get_callable_name,
     get_config_model_id,
+    get_peak_flops_per_device,
     identity,
     is_async_callable,
     model_accepts_images,
@@ -120,6 +123,38 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
+
+
+class StepIntervalCallback(TrainerCallback):
+    """
+    A callback that calls a function every N optimization steps.
+    """
+
+    def __init__(self, fn, every_n_steps: int):
+        self.fn = fn
+        self.every_n_steps = every_n_steps
+
+    def on_step_end(self, _args, state, _control, **_kwargs):
+        if state.global_step % self.every_n_steps == 0:
+            self.fn()
+
+
+class _OptimizerTimeCallback(TrainerCallback):
+    """Times the optimizer step, which `training_step` cannot see.
+
+    Without it, clip + step + zero_grad land in the same unmeasured gap as the rollout-queue wait and get read as
+    starvation. Covers `optimizer.step()` only, not the gradient clipping that precedes it.
+    """
+
+    def __init__(self, trainer: "ZeroSyncGRPOTrainer"):
+        self._trainer = trainer
+        self._t0 = None
+
+    def on_pre_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._t0 = time.perf_counter()
+
+    def on_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._trainer._step_optimizer_s += time.perf_counter() - self._t0
 
 
 @dataclass(frozen=True)
@@ -1350,6 +1385,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     loop_cls: type[ZeroSyncRolloutLoop] = ZeroSyncRolloutLoop
     _rollout_loop_kwargs: dict[str, Any] = {}
+    loss_is_scaled_for_ga = True
 
     _tag_names = ["trl", "zero-sync-grpo"]
     _name = "Zero-Sync GRPO"
@@ -1517,7 +1553,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # step, see `_pause_generation`.
         self._pause = None
         self._loan = None  # (sublet loan of the KV cache, mode) during a step, when lending the KV cache
-        self._step_generation_wait = 0.0
+        self._step_rollout_wait_s = 0.0
 
         # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
         # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
@@ -1563,8 +1599,30 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._manager = None
         self.rollout_loop = None
 
+        precision = self.accelerator.mixed_precision
+        self.compute_dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
+
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._current_train_step_time = 0.0
+        self._last_step_end_time = None
+        # Accumulated across one optimizer step's micro-batches, flushed by `_log_step_metrics`.
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
+
+        # Add callbacks
+        self.add_callback(_OptimizerTimeCallback(self))
+        self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1812,7 +1870,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             wait_start = time.perf_counter()
             batch = [None]
             torch.distributed.broadcast_object_list(batch, src=self._tp_driver, group=self._tp_cpu_group)
-            self._step_generation_wait += time.perf_counter() - wait_start
+            self._step_rollout_wait_s += time.perf_counter() - wait_start
             samples = batch[0]
             if samples:
                 self._pause_generation(mode)
@@ -1848,7 +1906,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if enough or int(counts[1]) == self.dp_size:
                     break
         # Logged once per optimizer step, in `training_step`
-        self._step_generation_wait += time.perf_counter() - wait_start
+        self._step_rollout_wait_s += time.perf_counter() - wait_start
         if not enough:  # every prompt of the epoch is generated and scored, short of a step's samples
             if self._tp_cpu_group is not None:
                 torch.distributed.broadcast_object_list([[]], src=self._tp_driver, group=self._tp_cpu_group)
@@ -2048,12 +2106,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 local = param.data.to_local() if isinstance(param.data, DTensor) else param.data
                 torch.distributed.broadcast(local, src=owner * self.tp_size + shard, group=self._replica_group)
 
-    def training_step(self, *args, **kwargs):
-        output = super().training_step(*args, **kwargs)
-        if self.accelerator.sync_gradients:
-            mode = "train" if self.model.training else "eval"
-            self._metrics[mode]["generation_wait_s"].append(self._step_generation_wait)
-            self._step_generation_wait = 0.0
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
         # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
         # optimizer step rather than one per accumulation micro-step.
         # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
@@ -2067,11 +2122,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 grad = param.grad.to_local() if isinstance(param.grad, DTensor) else param.grad
                 torch.distributed.all_reduce(grad, group=self._replica_group)
                 grad /= self.dp_size
+        self._step_microbatches += 1
+        self._current_train_step_time += time.perf_counter() - time_before
         return output
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         completion_mask = inputs["completion_mask"]
-        advantages = inputs["advantages"]
 
         # Per-token logprobs of the sampled tokens under the current policy, computed by the chunked lm_head, so
         # only completion positions are scored and the full-vocab logits never materialize.
@@ -2082,6 +2138,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
         # The fused head scores the positions whose next-token label is not -100, which is the completion tokens.
         labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
+        forward_start = time.time()
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs.get("attention_mask"),
@@ -2090,48 +2147,195 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             fused_lm_head=True,
             **boundary_kwargs,
         )
-        per_token_logps = outputs["log_probs"]
-        mask = completion_mask[:, 1:].to(per_token_logps.dtype)
+        # The loss terms: the completion tokens of the packed row, each predicted by the position before it
+        selected = completion_mask[:, 1:].bool()
+        log_probs = outputs.log_probs[selected]
+        entropy = outputs.entropy[selected]
+        old_log_probs = inputs["old_per_token_logps"][:, 1:][selected]
+        advantages = inputs["advantages"][:, 1:][selected]
+        segment_id = inputs["seq_idx"][:, 1:][selected].long()
+        self._last_forward_time_s = time.time() - forward_start
 
-        # Clipped surrogate loss. The old policy is the generation engine itself: its logprobs are exact for the
-        # sampled tokens, so no extra forward pass is needed to obtain them.
-        old_per_token_logps = inputs["old_per_token_logps"][:, 1:]
-        log_ratio = per_token_logps - old_per_token_logps
+        # The trained tokens, forwarded tokens and samples of the micro-batch, over the replicas. Each rank of a tensor
+        # parallel group holds its replica's micro-batch, so the sum over all ranks counts each one `tp_size` times.
+        local_counts = [
+            float(log_probs.numel()),
+            float(inputs["input_ids"].numel()),
+            float(len(inputs["cu_seq_lens_q"]) - 1),
+        ]
+        global_counts = (
+            self.accelerator.reduce(torch.tensor(local_counts, device=log_probs.device), "sum") / self.tp_size
+        )
+
+        log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
+        low, high = self.args.importance_sampling_clip_min, self.args.importance_sampling_clip_max
+        is_masked = (coef_1 < low) | (coef_1 > high)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        # Packed rows hold several samples, so the advantage is per token there; padded rows hold one each
-        advantages = advantages[:, 1:] if advantages.dim() == 2 else advantages.unsqueeze(1)
         per_token_loss1 = coef_1 * advantages
         per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
-        # Log the metrics
-        mode = "train" if self.model.training else "eval"
+        # DDP/FSDP averages gradients across ranks (world_size).
+        # To get correct per-token normalization we scale by 1/tokens_per_rank
+        # = world_size / global_n_tokens, so after DDP averaging the effective
+        loss = per_token_loss.sum()
+        global_n_tokens = global_counts[0]
+        world_size = self.dp_size  # the replicas the gradients are averaged over, see `training_step`
+        tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
+        loss = loss / tokens_per_rank.to(torch.float32)
+        # For DAPO, we would scale like this instead:
+        # loss = loss / max(per_token_loss.size(0), 1)
+        loss = loss / self.current_gradient_accumulation_steps
 
-        def masked_seq_mean(x):
-            return (x * mask).sum(-1) / mask.sum(-1)
+        with torch.no_grad():
+            local_ratio_sum = coef_1.sum()
+            local_count = torch.full_like(local_ratio_sum, float(log_probs.numel()))
+            local_logp_diff_sum = log_ratio.abs().sum()
+            local_entropy_sum = entropy.sum()
 
-        def global_masked_mean(x):
-            local_sum, local_count = (x * mask).sum(), mask.sum().float()
-            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
-            return (totals[0] / totals[1].clamp(min=1.0)).item()
+            # Compute the clipped probability ratios
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+            local_low_clip_sum = is_low_clipped.float().sum()
+            local_high_clip_sum = is_high_clipped.float().sum()
+            local_region_clip_sum = is_region_clipped.float().sum()
+            local_masked_sum = is_masked.float().sum()
 
-        # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
-        is_region_clipped = is_low_clipped | is_high_clipped
-        self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
-        self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
-        self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
-        gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
-        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
-        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        self._metrics[mode]["entropy"].append(
-            self.accelerator.gather((outputs["entropy"] * mask).sum() / mask.sum().clamp(min=1.0)).mean().item()
-        )
+            # Batch all-reduce: [ratio_sum, logp_diff_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum,
+            # masked_sum, count]
+            stats = torch.stack(
+                [
+                    local_ratio_sum,
+                    local_logp_diff_sum,
+                    local_entropy_sum,
+                    local_low_clip_sum,
+                    local_high_clip_sum,
+                    local_region_clip_sum,
+                    local_masked_sum,
+                    local_count,
+                ]
+            )
+            stats = self.accelerator.reduce(stats, reduction="sum")
+            (
+                global_ratio_sum,
+                global_logp_diff_sum,
+                global_entropy_sum,
+                global_low_clip_sum,
+                global_high_clip_sum,
+                global_region_clip_sum,
+                global_masked_sum,
+                global_count,
+            ) = stats.unbind(0)
+            ratio_min, ratio_max, logp_diff_max = (
+                self.accelerator.gather(torch.stack([coef_1.min(), coef_1.max(), log_ratio.abs().max()]))
+                .view(-1, 3)
+                .unbind(1)
+            )
+            self._metrics["train"]["sampling/importance_sampling_ratio/min"].append(nanmin(ratio_min).item())
+            self._metrics["train"]["sampling/importance_sampling_ratio/mean"].append(
+                (global_ratio_sum / global_count).item()
+            )
+            self._metrics["train"]["sampling/importance_sampling_ratio/max"].append(nanmax(ratio_max).item())
+            self._metrics["train"]["sampling/sampling_logp_difference/mean"].append(
+                (global_logp_diff_sum / global_count).item()
+            )
+            self._metrics["train"]["sampling/sampling_logp_difference/max"].append(nanmax(logp_diff_max).item())
+            self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
+            self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+            self._metrics["train"]["sampling/masked_mean"].append((global_masked_sum / global_count).item())
+
+            num_seq = int(segment_id.max()) + 1  # completions in this rank's row
+
+            def seg_sum(vals):  # per-completion segment sum over the flat selection
+                return torch.zeros(num_seq, device=vals.device).index_add_(0, segment_id, vals)
+
+            seq_tokens = seg_sum(torch.ones_like(coef_1, dtype=torch.float32))
+            seq_low = seg_sum(is_low_clipped.float())
+            seq_high = seg_sum(is_high_clipped.float())
+            per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
+            per_seq_high = seq_high / seq_tokens
+            gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
+            gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
+
+        # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
+        # `_log_step_metrics`. The counts are batch-wide, summed over the replicas above.
+        n_forward_tokens = float(global_counts[1])
+        mean_seq_len = float(global_counts[1] / global_counts[2])
+        self._step_forward_tokens += n_forward_tokens
+        self._step_trained_tokens += float(global_n_tokens)
+        self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
+        self._step_samples += n_forward_tokens / mean_seq_len
+        self._step_forward_s += self._last_forward_time_s
         return loss
+
+    def _log_step_metrics(self) -> None:
+        """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput.
+
+        Called from `on_step_end`, i.e. after `optimizer.step()`, so `perf/optimizer_s` covers this step.
+        """
+        time_after = time.perf_counter()
+        metrics = self._metrics["train"]
+        fwd_bwd_s = self._current_train_step_time
+        # The first step has no predecessor, so there is nothing to measure between yet.
+        step_s = time_after - self._last_step_end_time if self._last_step_end_time is not None else None
+
+        metrics["perf/fwd_bwd_s"].append(fwd_bwd_s)
+        metrics["perf/fwd_s"].append(self._step_forward_s)
+        metrics["perf/optimizer_s"].append(self._step_optimizer_s)
+        metrics["batch/microbatches_per_step"].append(float(self._step_microbatches))
+        metrics["batch/forwarded_tokens_per_step"].append(self._step_forward_tokens)
+        metrics["batch/trained_tokens_per_step"].append(self._step_trained_tokens)
+        metrics["batch/samples_per_step"].append(self._step_samples)
+        if step_s is not None:
+            metrics["perf/step_s"].append(step_s)
+        self.state.num_input_tokens_seen += int(self._step_forward_tokens)
+        metrics["num_tokens"] = [self.state.num_input_tokens_seen]
+
+        metrics["perf/rollout_wait_s"].append(self._step_rollout_wait_s)
+        self._step_rollout_wait_s = 0.0
+
+        # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
+        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        if self._step_forward_tokens > 0:
+            mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
+            world_size = self.accelerator.num_processes
+            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            if self._peak_flops_per_device is not None:
+                metrics["perf/mfu_fwd_bwd"].append(
+                    compute_mfu(
+                        flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
+                    )
+                )
+            if step_s is not None:
+                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
+                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                if self._peak_flops_per_device is not None:
+                    metrics["perf/mfu_wall_clock"].append(
+                        compute_mfu(
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
+                        )
+                    )
+
+        self._last_step_end_time = time_after
+        self._current_train_step_time = 0.0
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"

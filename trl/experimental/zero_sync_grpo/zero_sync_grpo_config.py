@@ -89,6 +89,12 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        importance_sampling_clip_min (`float`, *optional*, defaults to `0.5`):
+            Lower bound C_min of the importance ratio between the policy and the engine that sampled. Tokens whose
+            ratio falls outside [`importance_sampling_clip_min`, `importance_sampling_clip_max`] are dropped from the
+            loss (masked importance sampling).
+        importance_sampling_clip_max (`float`, *optional*, defaults to `5.0`):
+            Upper bound C_max of the importance ratio.
 
         > Parameters that control the logging
 
@@ -181,8 +187,8 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=32,
         metadata={
             "help": "Maximum number of rollouts in flight at once. A rollout that finishes is replaced immediately by "
-            "the next one, so the decode batch stays full instead of emptying and refilling once per optimizer step. Set it as high as the KV cache holds: past that, rollouts crowd the cache and "
-            "decode slows."
+            "the next one, so the decode batch stays full instead of emptying and refilling once per optimizer step. "
+            "Set it as high as the KV cache holds: past that, rollouts crowd the cache and decode slows."
         },
     )
     continuous_batching_config: dict | str | None = field(
@@ -228,6 +234,18 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
+    )
+    importance_sampling_clip_min: float = field(
+        default=0.5,
+        metadata={
+            "help": "Lower bound C_min of the importance ratio between the policy and the engine that sampled. "
+            "Tokens whose ratio falls outside [`importance_sampling_clip_min`, `importance_sampling_clip_max`] are "
+            "dropped from the loss."
+        },
+    )
+    importance_sampling_clip_max: float = field(
+        default=5.0,
+        metadata={"help": "Upper bound C_max of the importance ratio."},
     )
 
     # Parameters that control the logging
