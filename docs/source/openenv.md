@@ -734,6 +734,14 @@ The producer excludes auxiliary calls and discarded retries. There are no `train
 
 Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
+### Metrics
+
+The harness trainer logs the [tool metrics](async_grpo_trainer#tools) of [`experimental.async_grpo.AsyncGRPOTrainer`] under the same names, with these differences:
+
+- When the agent owns its loop (no `harness_adapter`), a tool failure is a tool result whose text looks like an error, and `tools/latency_s` isn't logged, because OpenEnv's trace has no timestamps.
+- With a `harness_adapter`, `tools/latency_s` is the wall time between one model turn's reply and the next turn's request, so it includes the harness's own overhead.
+- `tools/unknown_name_count`, `tools/parallel_calls_mean` and `tools/loop_exhausted_frac` come from the built-in tool loop and aren't logged.
+
 ### Requirements
 
 The OpenEnv Harbor server owns the dataset and the sandboxes. It needs the credential of the sandbox backend (for example `E2B_API_KEY`):

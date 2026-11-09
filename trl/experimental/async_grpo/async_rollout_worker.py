@@ -760,7 +760,7 @@ class AsyncRolloutLoop:
             self._push_metrics(
                 {
                     "rollout/concurrency_cap": float(self._kv_cap),
-                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_kv_cache_usage_frac": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
                     "rollout/vllm_preemption_count": preemptions - preemptions_seen,

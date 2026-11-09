@@ -433,40 +433,52 @@ A **completion** is what vLLM generated for one prompt, counted across _every tu
 
 A **rollout** is **one full** conversation: a prompt generated to completion, including every tool round-trip it took to get there. `num_generations` rollouts share a prompt and form a group.
 
-| metric                                                             | meaning                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rollout/duration_s`                                               | wall time for one rollout, from dispatch until the loop collects the finished rollout.                                                                                                                                                                              |
-| `rollout/generated_tokens_per_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
-| `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
-| `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
-| `rollout/samples_per_rollout`                                      | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all)                                                                                            |
-| `rollout/fork_frac`                                                | fraction of turn boundaries where the re-tokenized prompt didn't extend the held tokens, so the turn started a new sample                                                                                                                    |
-| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a fork re-rendered, averaged over turn boundaries (a clean boundary counts as 0). It's what each fork adds to the trainer's forward, since the new sample shares the tokens before the divergence                       |
-| `rollout/score_queue_size`                                         | completed groups waiting to be scored.                                                                                                                                                                                                       |
-| `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
-| `rollout/vllm_retry_count`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
-| `rollout/backpressure_s`                                           | how long generation waited because it was `max_staleness` steps ahead. See [concurrency](#concurrency)                                                                                                                                       |
-| `rollout/concurrency_cap`                                          | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency)                                                                                                           |
-| `rollout/kv_cache_usage`                                           | vLLM KV cache usage (max over engines) at the last poll. The cap is cut when it passes 0.8 and grows while it stays under 0.6                                                                                                                |
-| `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses                                                   |
-| `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
-| `rollout/vllm_preemption_count`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
-| `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
+The conversation:
 
-A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
+| metric | meaning |
+| --- | --- |
+| `rollout/duration_s` | wall time for one rollout, from dispatch until the loop collects the finished rollout. |
+| `rollout/turns_mean`, `rollout/turns_max` | mean and max turns per conversation |
+| `rollout/samples_per_rollout` | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all) |
+| `rollout/fork_frac` | fraction of turn boundaries where the re-tokenized prompt didn't extend the held tokens, so the turn started a new sample |
+| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max` | how many held tokens a fork re-rendered, averaged over turn boundaries (a clean boundary counts as 0). It's what each fork adds to the trainer's forward, since the new sample shares the tokens before the divergence |
+
+The generation pipeline, from starting a rollout to putting its samples in the queue:
+
+| metric | meaning |
+| --- | --- |
+| `rollout/generated_tokens_per_s` | generation throughput over the last interval (windowed), so a stall shows up |
+| `rollout/concurrency` | rollouts in flight to vLLM. |
+| `rollout/concurrency_cap` | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency) |
+| `rollout/backpressure_s` | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue) |
+| `rollout/score_queue_size` | completed groups waiting to be scored. |
+| `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full |
+
+The vLLM server. All but the retry count are read from the server's `/metrics` endpoint every 5 seconds:
+
+| metric | meaning |
+| --- | --- |
+| `rollout/vllm_kv_cache_usage_frac` | vLLM KV cache usage (max over engines) at the last poll. The cap is cut when it passes 0.8 and grows while it stays under 0.6 |
+| `rollout/vllm_running_requests` | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses |
+| `rollout/vllm_queued_requests` | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero |
+| `rollout/vllm_preemption_count` | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal |
+| `rollout/vllm_retry_count` | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
 
 ### Tools
 
-Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>/*` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
+Logged only when the model calls tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>/*` repeats per reward function, because one failing tool is invisible in an average over all of them.
 
-| metric                                                  | path                       | meaning                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools/call_frequency`, `tools/failure_frequency`       | built-in, harness          | calls per rollout, and the fraction that failed. On the loop-owning harness path a failure is a tool result whose text looks like an error                                                                                                                                                  |
-| `tools/latency_s`, `tools/<name>/latency_s`             | built-in, white-box harness | time spent executing the tool. On the white-box harness path it is the wall time between one model turn's reply and the next turn's request, which includes harness overhead. The loop-owning path has no latency: OpenEnv's trace does not timestamp its entries, so there is nothing to derive it from |
-| `tools/<name>/call_count`, `tools/<name>/failure_count` | built-in, harness          | per-tool call and failure counts                                                                                                                                                                                                                                                             |
-| `tools/unknown_name_count`                              | built-in                   | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised                                                                                                                                                                                     |
-| `tools/parallel_calls_mean`                             | built-in                   | tool calls requested in a single assistant message                                                                                                                                                                                                                                           |
-| `tools/loop_exhausted_frac`                             | built-in                   | conversations cut off at `max_tool_calling_iterations` while still asking for tools                                                                                                                                                                                                          |
+| metric | meaning |
+| --- | --- |
+| `tools/call_frequency` | tool calls per rollout |
+| `tools/failure_frequency` | fraction of tool calls that failed: the tool raised, or the model named a tool that doesn't exist |
+| `tools/latency_s`, `tools/<name>/latency_s` | time spent running the tool |
+| `tools/<name>/call_count`, `tools/<name>/failure_count` | calls and failures of each tool |
+| `tools/unknown_name_count` | calls to a tool that doesn't exist. This is a policy error, unlike a tool that ran and raised |
+| `tools/parallel_calls_mean` | tool calls requested in a single assistant message |
+| `tools/loop_exhausted_frac` | fraction of conversations cut off at `max_tool_calling_iterations` while the model was still calling tools |
+
+`HarnessAsyncGRPOTrainer` logs most of these under the same names. See [training on harnesses](openenv#metrics) for the differences.
 
 ### Environments
 
@@ -494,11 +506,14 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 
 | metric | meaning |
 | --- | --- |
+| `frac_reward_zero_std`, `reward_kept` | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
 | `reward_group_std` | std of the reward within each sample's group, averaged over the samples that were trained on. This is what the default `compute_advantages` divides by. GRPO's `reward_std` is the std over the whole batch, a different quantity: a batch of easy prompts all at 1 and hard prompts all at 0 has a batch std of 0.5 but a group std of 0 |
 | `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
 | `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
 | `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
 | `num_tokens` | tokens forwarded since the start of training. With tree packing, a prefix shared by several samples is counted once |
+
+A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
 ### Batches
 
