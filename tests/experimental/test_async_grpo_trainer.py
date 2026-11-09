@@ -1523,7 +1523,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.skip(reason="The trainer hangs when the rollout worker dies (#8038)")
     def test_reward_func_wrong_number_of_rewards(self, vllm_server):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
         # broadcasting (when it returns a single value) or failing later with an opaque shape error.
@@ -2013,7 +2012,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert records["zip"] and all(answer == "42" for answer in records["zip"])
         assert records["count"] and all(answer == 42 for answer in records["count"])
 
-    @pytest.mark.skip(reason="The trainer hangs when the rollout worker dies (#8038)")
     @require_response_parsing
     def test_train_with_unknown_environment_raises(self, vllm_server):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
