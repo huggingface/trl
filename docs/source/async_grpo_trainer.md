@@ -275,15 +275,16 @@ Let's also define some terms to make token metrics unambiguous:
 - **forwarded** tokens are every token the _forward_ pass processes: the prompt, any tool results, and the generated tokens.
 - **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. They're the generated tokens, minus any that a harness capture masks.
 
-Each logged value covers one **logging window**: everything recorded since the previous log, so the last `logging_steps` optimizer steps. Most metrics are the mean over the window, and the suffix of a name says what the number is:
+Metrics are logged once per **logging window**, which holds everything recorded since the previous log (the last `logging_steps` optimizer steps). A metric is the mean over the window, unless its suffix says otherwise:
 
-- `_count` counts events in the window, summed over it: `sample/dropped_stale_count` is how many samples were dropped since the last log, not since the start.
-- `_s` is a duration in seconds. `_per_s` is a rate over the window: all the tokens divided by all the seconds, not a mean of per-step rates.
-- `_mean`, `_max` and `_min` aggregate over the samples, rollouts or rows the metric is about.
-- `_frac` is a fraction between 0 and 1.
-- `_per_step` is summed over one optimizer step.
+- `_count`: number of events in the window. `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- `_s`: duration in seconds.
+- `_per_s`: rate over the window, as total tokens divided by total seconds.
+- `_mean`, `_max`, `_min`: mean, maximum or minimum over the samples, rollouts or rows the metric describes.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: total over one optimizer step.
 
-Names shared with [`GRPOTrainer`] keep that trainer's spelling (`completions/mean_length`, `completions/clipped_ratio`, `tools/call_frequency`).
+Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`, `tools/call_frequency`).
 
 ### How the batch numbers compose
 
