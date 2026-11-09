@@ -224,7 +224,7 @@ class TestDPOTrainer(TrlTestCase):
         ],
     )
     def test_train(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -263,9 +263,11 @@ class TestDPOTrainer(TrlTestCase):
     def test_evaluate_with_eval_dataset(self, eval_dataset_type, precompute_ref_log_probs):
         # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
         # at init. See https://github.com/huggingface/trl/issues/6115.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         streaming = "iterable" in eval_dataset_type
-        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming)
+        eval_split = load_dataset(
+            "trl-internal-testing/zen", "conversational_preference", split="test", streaming=streaming
+        )
         if eval_dataset_type in ("dataset", "iterable_dataset"):
             eval_dataset = eval_split
         elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
@@ -296,8 +298,8 @@ class TestDPOTrainer(TrlTestCase):
     def test_evaluate_precompute_ref_log_probs_after_training_raises(self):
         # Full fine-tuning with `precompute_ref_log_probs=True` and no `ref_model` uses `self.model` as the reference.
         # That's valid only before training; a dataset passed to `evaluate()` afterwards can't get a correct reference.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="test")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="test")
         training_args = DPOConfig(
             output_dir=self.tmp_dir, max_steps=1, precompute_ref_log_probs=True, report_to="none"
         )
@@ -318,8 +320,8 @@ class TestDPOTrainer(TrlTestCase):
         # Regression for the guard above: an `eval_dataset` set at init has its reference log-probs precomputed once
         # (against the untrained reference) and stored, so no-arg `evaluate()` reuses those stored values and must not
         # raise after training, even with full fine-tuning and `precompute_ref_log_probs=True`.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        eval_split = load_dataset("trl-internal-testing/zen", "standard_preference", split="test")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "conversational_preference", split="test")
         if eval_dataset_type == "dataset":
             eval_dataset = eval_split
         elif eval_dataset_type == "dataset_dict":
@@ -347,7 +349,7 @@ class TestDPOTrainer(TrlTestCase):
             assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
         with pytest.raises(ValueError, match="custom code"):
@@ -445,7 +447,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_model(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -486,7 +488,7 @@ class TestDPOTrainer(TrlTestCase):
         ],
     )
     def test_train_loss_types(self, loss_type):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -516,7 +518,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_multi_loss_types(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -542,7 +544,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_wpo(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -568,7 +570,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_ld(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -598,7 +600,7 @@ class TestDPOTrainer(TrlTestCase):
         ["reverse_kl", "forward_kl", "js_divergence", "alpha_divergence"],
     )
     def test_train_with_f_divergence(self, f_divergence_type):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -625,7 +627,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("loss_type", ["apo_zero", "apo_down", "aot", "aot_unpaired", "nca_pair", "sppo_hard"])
     def test_init_fails_with_f_divergence_and_unsupported_loss(self, loss_type):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # These losses are not built on the chosen-rejected reward difference, so a non-default value is rejected.
         training_args = DPOConfig(
@@ -643,7 +645,7 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     def test_train_with_explicit_ref_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -676,7 +678,7 @@ class TestDPOTrainer(TrlTestCase):
             torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed.")
 
     def test_train_with_sync_ref_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -706,7 +708,7 @@ class TestDPOTrainer(TrlTestCase):
 
     def test_ref_model_like_model_instance(self):
         # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
         )
@@ -717,7 +719,7 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.ref_model.config._attn_implementation == "eager"
 
     def test_train_model_dtype(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -749,7 +751,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_peft
     def test_peft_init_is_seeded(self):
         # Two trainers with the same seed start from the same adapter weights
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         adapters = []
         for global_seed in range(2):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
@@ -771,7 +773,7 @@ class TestDPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -806,7 +808,7 @@ class TestDPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -845,7 +847,7 @@ class TestDPOTrainer(TrlTestCase):
         lora_config = LoraConfig()
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -880,7 +882,7 @@ class TestDPOTrainer(TrlTestCase):
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -917,7 +919,7 @@ class TestDPOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -951,7 +953,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_ref_logps_use_mixed_precision(self):
         # Reference precomputation runs outside `compute_loss`, so it has to enter autocast itself. Without that the
         # backbone would silently run in fp32 under bf16 training.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
@@ -975,7 +977,7 @@ class TestDPOTrainer(TrlTestCase):
         assert torch.isfinite(ref_chosen_logps).all() and torch.isfinite(ref_rejected_logps).all()
 
     def test_train_with_precomputed_ref_logps(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
@@ -995,7 +997,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_peft_lm_head_raises(self):
         # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
@@ -1016,7 +1018,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_peft_ref_model_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
         ref_model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
@@ -1032,7 +1034,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_peft_prompt_tuning(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1061,9 +1063,9 @@ class TestDPOTrainer(TrlTestCase):
         # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is
         # therefore incompatible with a streaming `IterableDataset` — whether passed directly or nested in a dict or
         # `IterableDatasetDict` as the eval dataset.
-        map_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        map_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         iterable_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_preference", split="train", streaming=True
+            "trl-internal-testing/zen", "conversational_preference", split="train", streaming=True
         )
 
         train_dataset, eval_dataset = map_dataset, None
@@ -1090,7 +1092,7 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     def test_train_with_iterable_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train", streaming=True)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train", streaming=True)
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1119,7 +1121,7 @@ class TestDPOTrainer(TrlTestCase):
         reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1267,7 +1269,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
 
         training_args = DPOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = DPOTrainer(
@@ -1282,7 +1284,7 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
     def test_train_with_multiple_eval_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
 
         training_args = DPOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = DPOTrainer(
@@ -1303,7 +1305,7 @@ class TestDPOTrainer(TrlTestCase):
             train_dataset = None
         else:
             train_dataset = load_dataset(
-                "trl-internal-testing/zen", "standard_preference", split="train", streaming=streaming
+                "trl-internal-testing/zen", "conversational_preference", split="train", streaming=streaming
             )
             if train_dataset_type == "unsupported_dataset_dict":
                 # `DatasetDict` is representative of any unsupported type here; not exhaustive
@@ -1345,14 +1347,14 @@ class TestDPOTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "standard_preference", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_preference", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -1381,7 +1383,7 @@ class TestDPOTrainer(TrlTestCase):
             assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
 
         def dummy_compute_metrics(eval_pred):
             # The logits are the full-vocabulary logits, as before the fused LM head
@@ -1409,7 +1411,7 @@ class TestDPOTrainer(TrlTestCase):
 
     def test_logits_metrics_match_full_logits(self):
         # `logits/*` and `mean_token_accuracy` come from the fused LM head's kernel; check them against the full logits
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, per_device_train_batch_size=4, report_to="none")
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1436,7 +1438,7 @@ class TestDPOTrainer(TrlTestCase):
     # `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1461,7 +1463,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_torch_accelerator
     def test_train_with_fp16(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1485,7 +1487,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_tag_added(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1497,7 +1499,7 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_tag_added_peft(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1511,7 +1513,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -1550,7 +1552,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_dora_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -1594,7 +1596,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_pad_token_id_synced_with_model_config(self):
         # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DPOTrainer(
