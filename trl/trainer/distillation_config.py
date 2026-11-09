@@ -138,8 +138,8 @@ class DistillationConfig(_BaseConfig):
             divergence itself; there is no reference-model KL penalty.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
+            stops when the model generates a response turn with no tool calls or when the completion (all turns and
+            tool results) reaches `max_completion_length` tokens.
 
         > Parameters that control the logging
 
@@ -368,8 +368,8 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
+            "generation stops when the model generates a response turn with no tool calls or when the completion "
+            "(all turns and tool results) reaches `max_completion_length` tokens."
         },
     )
 

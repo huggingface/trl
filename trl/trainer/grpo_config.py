@@ -317,8 +317,8 @@ class GRPOConfig(_BaseConfig):
             (and account for the token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
+            stops when the model generates a response turn with no tool calls or when the completion (all turns and
+            tool results) reaches `max_completion_length` tokens.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -921,8 +921,8 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
+            "generation stops when the model generates a response turn with no tool calls or when the completion "
+            "(all turns and tool results) reaches `max_completion_length` tokens."
         },
     )
     vllm_importance_sampling_correction: bool = field(
