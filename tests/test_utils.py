@@ -1982,18 +1982,20 @@ class TestAddFusedLMHeadLoss:
         out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
         out.loss.backward()
 
+        # Rounding scales with the largest gradient of each tensor, so the absolute tolerance does too
         # lm_head gradient
-        torch.testing.assert_close(
-            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
-        )
+        ref_grad = ref_model.lm_head.weight.grad
+        atol = 1e-4 * ref_grad.abs().max().item()
+        torch.testing.assert_close(chunked_model.lm_head.weight.grad, ref_grad, atol=atol, rtol=1e-5)
         # Base decoder gradients
         for name, ref_param in ref_model.model.named_parameters():
             chunked_grad = chunked_model.model.get_parameter(name).grad
             ref_grad = ref_param.grad
             assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
             if ref_grad is not None:
+                atol = 1e-4 * ref_grad.abs().max().item()
                 torch.testing.assert_close(
-                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                    chunked_grad, ref_grad, atol=atol, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
                 )
 
     @pytest.mark.parametrize(
