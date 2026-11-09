@@ -1826,6 +1826,15 @@ class TestGetTrainingChatTemplate:
         assert region_starts == 2
 
 
+class TestGetTrainingChatTemplateRequirePrefixPreservation:
+    def test_require_prefix_preservation(self):
+        # This template has generation markers but supports tools without being prefix-preserving
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        with pytest.raises(ValueError, match="not training-compatible"):
+            get_training_chat_template(tokenizer)
+        assert get_training_chat_template(tokenizer, require_prefix_preservation=False) is None
+
+
 class TestDeepseekTrainingChatTemplates:
     @pytest.mark.parametrize(
         "tokenizer_name",
