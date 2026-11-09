@@ -349,60 +349,6 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
-class FixedCountBatcher(torch.utils.data.IterableDataset):
-    """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
-
-    Buffers `microbatch_size` (= `per_device_train_batch_size × num_processes`) samples, then partitions them across
-    the `num_processes` rows (one per DP rank) balanced by attention cost so no rank straggles at the per-micro-batch
-    all-reduce. The sample count is fixed, so this does not bound peak memory — use [`TokenBudgetBatcher`] for that.
-
-    A group's samples stay together so they share their prefix, and groups are placed costliest-first into the least
-    loaded row (LPT scheduling); attention is superlinear in length, so equal token counts would not equalize
-    wall-time. A micro-batch has fewer groups than rows as soon as `num_generations` exceeds
-    `per_device_train_batch_size`, so the largest group is halved until every rank gets one: a rank forwarding nothing
-    would desync FSDP/EP collectives. With `microbatch_size >= num_processes` such a group always exists.
-
-    Args:
-        dataset ([`RolloutQueueDataset`]):
-            Source yielding single rollout-sample dicts.
-        num_processes (`int`):
-            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
-        microbatch_size (`int`):
-            Number of samples buffered into each micro-batch before it is partitioned and emitted.
-    """
-
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
-        self.dataset = dataset
-        self.num_processes = num_processes
-        self.microbatch_size = microbatch_size
-
-    def __iter__(self):
-        batch = []
-        for sample in self.dataset:
-            batch.append(sample)
-            if len(batch) < self.microbatch_size:
-                continue
-            groups = {}
-            for queued in batch:
-                groups.setdefault(queued["group_id"], []).append(queued)
-            groups = list(groups.values())
-            while len(groups) < self.num_processes:
-                largest = groups.pop(max(range(len(groups)), key=lambda i: len(groups[i])))
-                groups += [largest[: len(largest) // 2], largest[len(largest) // 2 :]]
-            priced = []
-            for group in groups:
-                priced.append(TreeRow())
-                for queued in group:
-                    priced[-1].add(queued)
-            rows = [TreeRow() for _ in range(self.num_processes)]
-            for group in sorted(priced, key=lambda row: row.load, reverse=True):
-                row = min(rows, key=lambda row: row.load)
-                for queued in group.samples:
-                    row.add(queued)
-            yield rows
-            batch = []
-
-
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
@@ -509,8 +455,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     Each row is a [`~packing.TreeRow`], so a token shared by several of its samples is forwarded once.
 
     The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
-    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at
-    the gradient all-reduce — so the collator only packs and tensorizes the given rows.
+    ([`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at the gradient all-reduce
+    — so the collator only packs and tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
@@ -1386,14 +1332,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
-            # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
-            # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
-            if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
-            else:
-                dataset = FixedCountBatcher(
-                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
-                )
+            dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
 
@@ -1411,7 +1350,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.
-                    token_budget=max(self.args.token_budget or 0, 0),
+                    token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
                 # NOTE(@aminediro):
