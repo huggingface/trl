@@ -64,7 +64,9 @@ class _BaseConfig(TrainingArguments):
     gradient_checkpointing: bool | None = field(
         default=None,
         metadata={
-            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training."
+            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training.",
+            "nargs": "?",
+            "const": True,
         },
     )
     bf16: bool | None = field(
