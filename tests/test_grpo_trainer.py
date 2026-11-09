@@ -357,21 +357,18 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         with pytest.raises(ValueError, match="custom code"):
             GRPOTrainer(
                 model=model_id,
                 args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                reward_funcs=reward_func,
+                reward_funcs=str_length_reward,
                 train_dataset=dataset,
             )
 
         trainer = GRPOTrainer(
             model=model_id,
             args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
@@ -1008,14 +1005,14 @@ class TestGRPOTrainer(TrlTestCase):
             modules_to_save=["lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
         )
-        kwargs = {
-            "model": model,
-            "reward_funcs": str_length_reward,
-            "args": training_args,
-            "train_dataset": dataset,
-            "peft_config": peft_config,
-        }
-        GRPOTrainer(**kwargs)  # must construct without raising
+        # Must construct without raising
+        GRPOTrainer(
+            model=model,
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
 
     @require_peft
     def test_train_peft_prompt_tuning(self):
@@ -2432,7 +2429,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2884,9 +2881,6 @@ class TestGRPOTrainer(TrlTestCase):
         sums per-token contributions (length-weighting each sequence instead of following the GSPO objective)."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def dummy_reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             importance_sampling_level="sequence",
@@ -2899,7 +2893,7 @@ class TestGRPOTrainer(TrlTestCase):
         with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=dummy_reward_func,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -3900,10 +3894,6 @@ class TestGRPOTrainer(TrlTestCase):
                 """
                 return text
 
-        def reward_func(completions, **kwargs):
-            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property.
-            return [1.0] * len(completions)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -3914,7 +3904,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=reward_func,
+            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=PropertyEnvironment,
         )
@@ -4262,9 +4253,6 @@ class TestGRPOTrainer(TrlTestCase):
             completion_ids = torch.tensor([rows[i % 3] for i in range(input_ids.shape[0])], device=input_ids.device)
             return torch.cat([input_ids, completion_ids], dim=-1)
 
-        def reward_len(completions, **kwargs):
-            return [float(len(completion[-1]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4277,7 +4265,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            reward_funcs=reward_len,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=GuessTheWordEnvironment,
         )
@@ -4436,13 +4424,10 @@ class TestGRPOTrainer(TrlTestCase):
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4514,10 +4499,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4529,7 +4510,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4588,10 +4569,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4604,7 +4581,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4629,10 +4606,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -4645,7 +4618,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4673,10 +4646,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4688,7 +4657,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -4719,10 +4688,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4740,7 +4705,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -4776,10 +4741,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_dora_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4797,7 +4758,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -4836,10 +4797,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4852,7 +4809,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4887,10 +4844,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4904,7 +4857,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4940,7 +4893,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=lambda completions, **kwargs: [float(len(c[0]["content"])) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4959,10 +4912,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4974,7 +4923,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -5003,10 +4952,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
@@ -5018,7 +4963,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -5060,7 +5005,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
             # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5133,7 +5078,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
             # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5214,7 +5159,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5276,7 +5221,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],

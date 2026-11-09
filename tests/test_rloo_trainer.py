@@ -225,21 +225,18 @@ class TestRLOOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         with pytest.raises(ValueError, match="custom code"):
             RLOOTrainer(
                 model=model_id,
                 args=RLOOConfig(output_dir=self.tmp_dir, report_to="none"),
-                reward_funcs=reward_func,
+                reward_funcs=str_length_reward,
                 train_dataset=dataset,
             )
 
         trainer = RLOOTrainer(
             model=model_id,
             args=RLOOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
@@ -1445,7 +1442,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2211,13 +2208,10 @@ class TestRLOOTrainer(TrlTestCase):
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2289,10 +2283,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2304,7 +2294,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2363,10 +2353,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
         # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2379,7 +2365,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2404,10 +2390,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -2420,7 +2402,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2448,10 +2430,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2463,7 +2441,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -2494,10 +2472,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2515,7 +2489,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -2551,10 +2525,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_dora_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2572,7 +2542,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -2621,10 +2591,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2638,7 +2604,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2665,10 +2631,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2680,7 +2642,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2709,10 +2671,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
@@ -2724,7 +2682,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
