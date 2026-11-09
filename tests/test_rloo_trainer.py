@@ -30,7 +30,6 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
-from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
@@ -1417,6 +1416,21 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
+        # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
+        with pytest.raises(ValueError, match="ensure_weight_tying"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+    @require_peft
     @require_vllm
     @require_torch_accelerator
     def test_vllm_weight_sync_skips_ref_adapter_modules_to_save(self):
@@ -1449,10 +1463,9 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.xfail(
-        condition=is_vllm_available(min_version="0.29.0"),
-        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises (see #7955)",
-        strict=True,
+    @pytest.mark.skipif(
+        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
+        reason="`ensure_weight_tying` requires PEFT >= 0.18",
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
@@ -1475,6 +1488,7 @@ class TestRLOOTrainer(TrlTestCase):
             target_modules="all-linear",
             # test with non-default modules as it adds extra keys in state_dict that we need to handle
             modules_to_save=["embed_tokens", "lm_head"],
+            ensure_weight_tying=True,  # vLLM holds the tied embeddings as one tensor
         )
         trainer = RLOOTrainer(
             model=model,

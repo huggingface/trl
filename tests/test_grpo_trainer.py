@@ -2435,10 +2435,25 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
     @require_peft
+    def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
+        # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
+        with pytest.raises(ValueError, match="ensure_weight_tying"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+    @require_peft
     @require_vllm
-    @pytest.mark.xfail(
-        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
-        strict=True,
+    @pytest.mark.skipif(
+        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
+        reason="`ensure_weight_tying` requires PEFT >= 0.18",
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
@@ -2461,6 +2476,7 @@ class TestGRPOTrainer(TrlTestCase):
             target_modules="all-linear",
             # test with non-default modules as it adds extra keys in state_dict that we need to handle
             modules_to_save=["embed_tokens", "lm_head"],
+            ensure_weight_tying=True,  # vLLM holds the tied embeddings as one tensor
         )
         trainer = GRPOTrainer(
             model=model,
