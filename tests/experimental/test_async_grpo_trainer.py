@@ -125,12 +125,6 @@ async def async_multiply_tool(a: int, b: int) -> int:
     return a * b
 
 
-def varied_reward(completions, **kwargs):
-    # Distinct rewards guarantee a non-degenerate group. Without that, once the policy collapses to one completion,
-    # every group is dropped for zero reward std and no step can complete.
-    return [float(i) for i in range(len(completions))]
-
-
 def unique_letters_reward(completions, **kwargs):
     """Reward function that rewards completions with more unique letters."""
     return [float(len(set(completion[0]["content"]))) for completion in completions]
@@ -530,7 +524,7 @@ class _StubRolloutWorker:
             prompt_completion_ids = tokenizer.apply_chat_template(
                 prompt_completions, tokenize=True, add_generation_prompt=False, return_dict=False
             )
-            rewards = np.array(varied_reward(completions))
+            rewards = np.arange(num_generations, dtype=float)  # distinct rewards, so the advantages are finite
             advantages = (rewards - rewards.mean()) / rewards.std()
             for idx in range(num_generations):
                 completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
@@ -1081,7 +1075,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1136,7 +1130,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:2]")
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = AsyncGRPOTrainer(
-            model=model_id, reward_funcs=varied_reward, args=training_args, train_dataset=dataset
+            model=model_id, reward_funcs=str_length_reward, args=training_args, train_dataset=dataset
         )
 
         assert trainer.router_aux_loss_coef == expect_coef
@@ -1150,7 +1144,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -1161,7 +1155,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1234,7 +1228,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1268,7 +1262,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1340,7 +1334,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
-        trainer = AsyncGRPOTrainer(model=model, reward_funcs=varied_reward, args=training_args, train_dataset=dataset)
+        trainer = AsyncGRPOTrainer(
+            model=model, reward_funcs=str_length_reward, args=training_args, train_dataset=dataset
+        )
         # The instance is trained in place, with its attention swapped for tree attention
         assert trainer.model is model
         assert trainer.model.config._attn_implementation == TREE_ATTENTION
@@ -1371,7 +1367,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1399,7 +1395,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
             trainer = AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, vllm_server_base_url=server.url, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
@@ -1427,7 +1423,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1468,7 +1464,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             AsyncGRPOTrainer(
                 model=model,
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
@@ -1499,7 +1495,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Must construct without raising
         AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=peft_config,
@@ -1512,7 +1508,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Prompt-learning"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
@@ -1537,7 +1533,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1575,7 +1571,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1615,7 +1611,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1651,7 +1647,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1838,7 +1834,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1869,7 +1865,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1937,7 +1933,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2001,7 +1997,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2032,7 +2028,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2073,7 +2069,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=tools,
@@ -2127,7 +2123,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[lookup_tool],
@@ -2162,7 +2158,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         with patch("trl.experimental.async_grpo.async_grpo_trainer.is_jmespath_available", return_value=False):
             AsyncGRPOTrainer(  # must construct without raising
                 model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 tools=[multiply_tool],
@@ -2196,7 +2192,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
@@ -2262,7 +2258,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
@@ -2305,7 +2301,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"counter": CounterEnvironment},
@@ -2339,7 +2335,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=IncrementEnvironment,
         )
@@ -2399,13 +2395,16 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             # Never reads `environments`, so nothing but tool discovery can touch the `reward` property
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=PropertyEnvironment,
         )
 
-        # No tool call, so one generation round per rollout
-        server.script = ScriptedTurns(trainer.processing_class, first_turns=["I won't increment<|im_end|>"])
+        # No tool call, so one generation round per rollout. Distinct-length completions within the group give reward
+        # variance, so advantages are non-zero.
+        server.script = ScriptedTurns(
+            trainer.processing_class, first_turns=["I won't increment<|im_end|>", "I won't increment it<|im_end|>"]
+        )
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -2664,7 +2663,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],
@@ -2730,7 +2729,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
 
@@ -2743,7 +2742,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
                 vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
@@ -2774,7 +2773,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer_cls(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2984,7 +2983,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3029,7 +3028,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3054,7 +3053,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         with pytest.raises(ValueError, match="vision-related"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=varied_reward,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -3092,7 +3091,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -3129,7 +3128,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3162,7 +3161,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=varied_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
