@@ -19,6 +19,7 @@ import dataclasses
 import itertools
 import multiprocessing as mp
 import queue
+import random
 import threading
 import time
 from collections import defaultdict
@@ -27,8 +28,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 from accelerate import PartialState
+from datasets import Dataset
 from transformers import AutoTokenizer
+from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("openenv.core.harness.training")
@@ -43,7 +47,9 @@ from openenv.core.harness import (
 )
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import TurnRecord, _chain_to_sequences, _SampleBuilder
+from trl.experimental.async_grpo.async_rollout_worker import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
+
+from ..testing_utils import is_ampere_or_newer, require_vllm
 
 
 def entry(prompt, completion, logprobs, mask=None):
@@ -67,8 +73,8 @@ def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
         entry([1, 2, 3, 4, 99, 6], [7], [-0.4], [0, 0, 0, 0, 0, 0, 1]),
     ]
     turns = convert(entries)
-    rows, tally = _chain_to_sequences(turns, "rollout", 0)
-    assert len(rows) == 2 and tally["realign"] == 0
+    rows, drifts = _chain_to_sequences(Rollout([], [], turns))
+    assert len(rows) == 2 and drifts == [1]
     assert rows[0].input_ids == [1, 2, 3, 4, 5]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
     assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
@@ -85,7 +91,7 @@ def test_missing_or_invalid_sample_logprobs_cannot_be_filled_with_zeros(logprobs
 
 @pytest.mark.parametrize("mask,logprobs", [(1, None), (1, []), ([1, 0], [-0.1]), (0, [])])
 def test_builder_rejects_misaligned_arrays_before_mutation(mask, logprobs):
-    builder = _SampleBuilder(fork_threshold=0)
+    builder = _SampleBuilder("rollout")
     with pytest.raises(ValueError):
         builder._append([2], mask=mask, logprobs=logprobs)
     assert builder.tokens == builder.loss_mask == builder.logprobs == []
@@ -97,17 +103,10 @@ def test_consumer_rejects_invalid_full_masks(mask):
         convert([entry([1], [2], [-0.1], mask)])
 
 
-@pytest.mark.parametrize(
-    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (MCPHarnessAdapter(), True, 1024)]
-)
-def test_loop_owning_capture_defaults_to_lossless_reconciliation(make_loop, adapter, lossless, threshold):
+@pytest.mark.parametrize("adapter", [None, MCPHarnessAdapter()])
+def test_agent_owned_loop_gets_the_training_sampling(make_loop, adapter):
     factory_calls = []
-    loop = make_loop(
-        factory_builder=lambda **kwargs: factory_calls.append(kwargs),
-        harness_adapter=adapter,
-        lossless_capture=lossless,
-    )
-    assert loop._fork_threshold_tokens == threshold
+    make_loop(factory_builder=lambda **kwargs: factory_calls.append(kwargs), harness_adapter=adapter)
     if adapter is not None:
         assert factory_calls == [{}]
     else:
@@ -183,6 +182,50 @@ class Session:
 
     def close(self):
         self.closed.set()
+
+
+class SessionFactory:
+    """Picklable stand-in for a Harbor factory: every session replays `captured_entry()`."""
+
+    def __init__(self, **kwargs):
+        pass
+
+    def create(self, prompt, **kwargs):
+        return Session(captured_entry())
+
+
+def random_reward(outcome):
+    return random.random()
+
+
+@require_vllm
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+)
+def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(tmp_path):
+    trainer = openenv_harness.HarnessAsyncGRPOTrainer(
+        model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+        harness_session_factory=SessionFactory,
+        args=AsyncGRPOConfig(
+            output_dir=str(tmp_path),
+            num_generations=2,
+            max_steps=1,
+            temperature=0.8,
+            vllm_server_base_url="http://127.0.0.1:9",
+            report_to="none",
+        ),
+        train_dataset=Dataset.from_dict({"prompt": [[{"role": "user", "content": "task"}]] * 4}),
+        rollout_reward_fn=random_reward,
+    )
+    trainer.rollout_worker.start()
+    try:
+        sample = trainer.rollout_queue.get(timeout=120)
+    finally:
+        trainer.rollout_worker.stop()
+    assert sample.input_ids.tolist() == [1, 2, 3]
+    assert sample.completion_mask.tolist() == [0, 1, 0]
+    assert sample.advantage != 0
 
 
 def test_loop_owning_capture_rejects_truncated_sampling(make_loop):
@@ -267,7 +310,7 @@ def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     result, _ = loop._run_session([])
-    rows, _ = _chain_to_sequences(result.turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(result)
     assert result.reward == 0.25
     assert rows[0].input_ids == [1, 2, 3]
     assert rows[0].completion_mask == [0, 1, 0]
@@ -441,7 +484,7 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
     trace = to_training_trace(result)
     assert factory.sampling == policy
     turns = openenv_harness._turns_from_training_trace(trace)
-    rows, _ = _chain_to_sequences(turns, "test", 0)
+    rows, _ = _chain_to_sequences(Rollout([], [], turns))
     assert rows[0].input_ids == [10, 11, 12, 13, 14]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
     assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
@@ -508,7 +551,7 @@ def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward)
     actual, _ = loop._run_session([])
     assert actual.reward == reward
     assert actual.tool_call_count == 2  # Usage includes the zero-masked agent call.
-    rows, _ = _chain_to_sequences(actual.turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(actual)
     assert len(rows) == 1
     assert rows[0].input_ids == [10, 11, 12]
     assert rows[0].completion_mask == [0, 1, 0]
@@ -530,7 +573,7 @@ def test_shared_prefix_is_supervised_once_across_both_branches():
         ]
     }
     turns = openenv_harness._turns_from_training_trace(to_training_trace(graph, document))
-    rows, _ = _chain_to_sequences(turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(Rollout([], [], turns))
     supervised = [
         token for row in rows for token, mask in zip(row.input_ids, row.completion_mask, strict=True) if mask
     ]

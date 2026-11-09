@@ -71,14 +71,7 @@ def openr1_examples():
 
 @pytest.fixture(scope="module")
 def countdown_examples():
-    try:
-        dataset = load_dataset(
-            "HuggingFaceTB/Countdown-Tasks-3to4",
-            "gkd_verified_Qwen2.5-7B-Instruct",
-            split="train[:3]",
-        )
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"Countdown dataset unavailable: {exc}")
+    dataset = load_dataset("HuggingFaceTB/Countdown-Task-GOLD", "verified_Qwen2.5-7B-Instruct", split="train[:3]")
     return [{"messages": row["messages"]} for row in dataset]
 
 
@@ -768,6 +761,10 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(tmp_path, qwen_tokenizer)
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
     row = _prepared_row(
@@ -798,6 +795,10 @@ def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_
     assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_tokenizer):
     input_ids, labels, _, byte_offsets = build_teacher_inputs_from_texts(
         gemma4_tokenizer,
@@ -827,6 +828,10 @@ class _NoBackendTokenizer:
         return self._tokenizer(*args, **kwargs)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
     slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
 
@@ -841,6 +846,10 @@ def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gem
     assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path, gemma4_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
     trainer = GOLDTrainer(
@@ -939,6 +948,10 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_encode_with_byte_offsets_drops_batch_padding(gemma4_tokenizer):
     # Gemma's tokenizer.json enables batch padding, so the shorter text would get pad tokens
     texts = ["a much longer first text", "short"]
@@ -1578,6 +1591,10 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     student_tokenizer = smolvlm_processor.tokenizer
     teacher_tokenizer = qwen3_vl_processor.tokenizer
@@ -1595,6 +1612,10 @@ def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor
     _assert_alignment_covers_completion(loss, batch, teacher_input_ids, teacher_labels, teacher_byte_offsets)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(tmp_path, vlm_dataset, vlm_examples):
     """Cross-architecture VLM ULD must render the teacher prompt through the teacher processor (so it
     actually sees the image via pixel_values) while keeping completion byte offsets relative to the original completion
@@ -1678,6 +1699,10 @@ def _get_prompt_turn_texts(example):
     return texts
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     # 2048 to not truncate the completion tokens
     collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
@@ -1739,6 +1764,10 @@ def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
     batch = collator(vlm_examples)
@@ -1942,6 +1971,10 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch, tmp_path
     assert isinstance(trainer._vlm_collator, DataCollatorForVisionLanguageChatML)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
     a ValueError telling the user to enable ULD loss."""
@@ -1955,6 +1988,10 @@ def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
             )
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=True, GOLDTrainer should store
     the teacher's processor and emit a warning about cross-architecture distillation."""
@@ -2210,6 +2247,10 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(tmp_path, vlm_datase
     assert inputs["_raw_prompts"] == expected_prompts
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.0.0"),
+    reason="LFM2.5-VL requires transformers>=5.0.0",
+)
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(tmp_path, vlm_dataset):
     # LFM2-VL's processor returns `spatial_shapes`, which generation needs alongside the pixel values
     trainer = GOLDTrainer(
@@ -2294,6 +2335,10 @@ _TINY_LFM2_VL = "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
     student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
@@ -2347,6 +2392,21 @@ def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
     assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
 
+def test_generation_suppresses_vision_start_token(tmp_path, vlm_dataset):
+    # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    expected = [trainer.model.config.image_token_id]
+    if Version(transformers.__version__) < Version("5.3.0"):
+        expected.append(trainer.model.config.vision_start_token_id)
+    assert trainer.generation_config.suppress_tokens == expected
+
+
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 _TINY_SMOLLM3 = "trl-internal-testing/tiny-SmolLM3ForCausalLM"
 
@@ -2355,6 +2415,10 @@ _TINY_SMOLLM3 = "trl-internal-testing/tiny-SmolLM3ForCausalLM"
     condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
     strict=True,
+)
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
 )
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
