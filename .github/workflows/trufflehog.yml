@@ -26,13 +26,13 @@ jobs:
         # the scan step mounts this directory, `.git/config` included, into a third-party container
         persist-credentials: false
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2  # v3.99.7
+      uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb  # v3.99.8
       with:
         # the action only wraps the scanner, which runs as a container selected by `version`
         # its default, `:latest`, is mutable, so the SHA pins the wrapper and this digest the scanner
         # Dependabot bumps only the SHA, so both are kept in sync by hand
         # Upstream issue: https://github.com/trufflesecurity/trufflehog/issues/4857
         # Remove once: the action defaults `version` to its own release, making this pin redundant
-        version: 3.99.7@sha256:0d003fc3abc4e1565eca8462b992001314de51451e96e3c44de80d116794d5d1
+        version: 3.99.8@sha256:674b2f187620a19df77f44cf9a7d77efcc581a5662accef2f2739cbb46ba4a3a
         # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
         extra_args: --results=verified,unknown --fail-on-scan-errors
