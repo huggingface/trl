@@ -48,7 +48,6 @@ from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer
 from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
-    FixedCountBatcher,
     TokenBudgetBatcher,
     _iter_vllm_named_params,
     _reduce_metric,
@@ -1217,34 +1216,6 @@ def _row_tokens(group: list[dict]) -> int:
 class TestPackingAwareBatching(TrlTestCase):
     """Packing-aware dynamic batching is pure scheduling/tensorization, so these run without a GPU."""
 
-    def test_balance_partitions_all_samples_into_non_empty_rows(self):
-        samples = [_rollout_sample(length) for length in (5, 1, 1, 1, 1)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        assert len(groups) == 2
-        assert all(len(group) > 0 for group in groups)
-        # Every sample is placed exactly once.
-        flat = [sample for group in groups for sample in group]
-        assert sorted(len(s["input_ids"]) for s in flat) == sorted(len(s["input_ids"]) for s in samples)
-
-    def test_balance_equalizes_attention_cost(self):
-        # [3, 3, 2, 2] across two rows packs as [3, 2] | [3, 2] -> equal attention cost, not equal counts by accident.
-        samples = [_rollout_sample(length) for length in (3, 3, 2, 2)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        loads = [_tree_row(group).load for group in groups]
-        assert loads[0] == loads[1]
-
-    def test_balance_prefers_attention_cost_over_count(self):
-        # One long sample alone balances attention cost better than splitting by count: [4] | [3, 2, 1].
-        samples = [_rollout_sample(length) for length in (4, 3, 2, 1)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        counts = sorted(len(group) for group in groups)
-        assert counts == [1, 3]
-        loads = sorted(_tree_row(group).load for group in groups)
-        assert loads == [10, 10]  # causal score pairs: [4] -> 10, [3, 2, 1] -> 6 + 3 + 1
-
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
@@ -1281,17 +1252,6 @@ class TestPackingAwareBatching(TrlTestCase):
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
             assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
-
-    def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
-        source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
-        batcher = FixedCountBatcher(source, num_processes=2, microbatch_size=4)
-
-        micro_batches = list(itertools.islice(_micro_batches(batcher), 3))
-        assert len(micro_batches) == 3
-        for groups in micro_batches:
-            assert len(groups) == 2
-            assert all(len(group) > 0 for group in groups)  # no rank forwards zero tokens
-            assert sum(len(group) for group in groups) == 4  # fixed sample count per micro-batch
 
     def test_collator_pads_unequal_rows(self):
         # The planner hands the collator a pre-partitioned micro-batch, wrapped in a length-1 list by the dataloader.
@@ -1556,13 +1516,6 @@ class TestTreePacking(TrlTestCase):
         micro_batch = next(_micro_batches(batcher))
 
         assert sum(len(group) for group in micro_batch) == 5
-
-    def test_a_lone_group_fills_every_row_of_a_fixed_count_micro_batch(self):
-        source = (_tree_sample(list(range(6)) + [100 + i], n_prompt=6, group_id=i // 8) for i in range(16))
-        batcher = FixedCountBatcher(source, num_processes=8, microbatch_size=8)
-
-        for micro_batch in itertools.islice(_micro_batches(batcher), 2):
-            assert all(len(group) > 0 for group in micro_batch)
 
     def test_a_group_is_split_rather_than_let_a_rank_starve(self):
         source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))
@@ -2546,11 +2499,11 @@ class TestEpochStop(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            token_budget=-1,  # FixedCountBatcher: deterministic samples/step, so groups accrue predictably
+            token_budget=64,
             vllm_server_timeout=5.0,
             report_to="none",
         )
-        rollout_worker = partial(_StubRolloutWorker, fork_k=fork_k, drop_every=drop_every)
+        rollout_worker = partial(_StubRolloutWorker, fork_k=fork_k, drop_every=drop_every, samples_per_weight_sync=30)
         with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", rollout_worker):
             trainer = AsyncGRPOTrainer(
                 model=model_id,
@@ -2571,11 +2524,6 @@ class TestEpochStop(TrlTestCase):
         # so we judge epochs by distinct prompt-groups trained, which is what the callback targets.)
         for trainer in (no_fork, forked):
             assert 2 * num_prompts <= len(trainer._trained_groups) < 3 * num_prompts
-
-        # Forks add rows, hence fixed-size optimizer steps: 3x rows per conversation must take strictly more
-        # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
-        # stop in FEWER prompt-passes (the pre-fix bug).
-        assert forked.state.global_step > no_fork.state.global_step
 
     def test_epoch_stop_counts_dropped_groups(self):
         trainer, num_prompts = self._train(fork_k=1, drop_every=2)
