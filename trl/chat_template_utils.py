@@ -1465,6 +1465,9 @@ def get_training_chat_template(
     if chat_template == qwen3_8_chat_template:
         return qwen3_8_training_chat_template
 
+    if chat_template == qwen3_8_v2_chat_template:
+        return qwen3_8_training_chat_template
+
     if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
 
