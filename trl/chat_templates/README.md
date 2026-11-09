@@ -260,6 +260,10 @@ Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, 
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `qwen3_8_v2.jinja`
+
+Qwen3.8 chat template as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant since 2026-11-07 (e.g. [3756181](https://huggingface.co/Qwen/Qwen3.8-27B/commit/37561816e66b5b9153b1b64c10968c18c1e6f4a0)). Same rendered text as `qwen3_8.jinja`, with the assistant output wrapped in `{% generation %}` / `{% endgeneration %}`. Response parsing reuses `qwen3_5_schema`.
+
 ### `qwen3_coder.jinja`
 
 Original Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Instruct` and `Qwen/Qwen3-Coder-480B-A35B-Instruct`). Renders tool calls in the same XML format as `qwen3_5_think.jinja` (`<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`), without a reasoning block. Response parsing reuses `qwen3_5_template`.
