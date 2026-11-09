@@ -61,8 +61,7 @@ class AsyncGRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         max_completion_length (`int`, *optional*, defaults to `2048`):
-            Maximum number of tokens generated per request to the vLLM server. In a multi-turn rollout, each turn can
-            generate up to this many tokens.
+            Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -251,10 +250,7 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     max_completion_length: int = field(
         default=2048,
-        metadata={
-            "help": "Maximum number of tokens generated per request to the vLLM server. In a multi-turn rollout, each "
-            "turn can generate up to this many tokens."
-        },
+        metadata={"help": "Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout."},
     )
     temperature: float = field(
         default=1.0,

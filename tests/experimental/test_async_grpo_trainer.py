@@ -1802,6 +1802,37 @@ class TestVLLMErrors(TrlTestCase):
             loop._loop.close()
         assert len(requests_seen) == 1
 
+    def test_a_server_error_is_retried(self):
+        import aiohttp
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
+        PartialState()
+        loop = _rollout_loop()
+        statuses = [500, 200]
+
+        async def completions(request):
+            status = statuses.pop(0)
+            if status == 500:
+                return web.Response(status=500, text="engine restarting")
+            return web.json_response({"choices": [{"token_ids": [7], "logprobs": {"token_logprobs": [-0.5]}}]})
+
+        app = web.Application()
+        app.router.add_post("/v1/completions", completions)
+
+        async def run():
+            async with TestServer(app) as server, aiohttp.ClientSession() as session:
+                loop.vllm_server_url = str(server.make_url("")).rstrip("/")
+                loop.session = session
+                return await loop.generate_one_turn([1, 2, 3])
+
+        try:
+            turn = loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
+        assert turn.output_ids == [7]
+        assert statuses == []
+
 
 class TestToolExecution(TrlTestCase):
     @staticmethod
