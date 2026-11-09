@@ -144,6 +144,8 @@ While training, we record the following metrics:
 
 The other metrics describe the asynchronous pipeline. Metrics ending in `_total` count events during the logging window.
 
+### Rollout metrics
+
 - `rollout/duration_s`: The wall time of one rollout, from dispatch until the rollout loop collects it.
 - `rollout/generated_tok_s`: The generation throughput, in generated tokens per second, since the previous report.
 - `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
@@ -162,19 +164,31 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `rollout/vllm_running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
 - `rollout/vllm_queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
 - `rollout/vllm_preemptions_total`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
+
+### Tool metrics
+
 - `tools/latency_s`, `tools/{tool_name}/latency_s`: The time spent executing a tool call, over all tools and per tool.
 - `tools/{tool_name}/call_total`, `tools/{tool_name}/failure_total`: The number of calls and failed calls per tool.
 - `tools/unknown_name_total`: The number of calls to a tool that does not exist. Unlike a tool that ran and raised, this is a policy error.
 - `tools/parallel_calls_mean`: The average number of tool calls in an assistant message that calls tools.
 - `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools. Logged only when tools are provided.
+
+### Environment metrics
+
 - `env/reset_s`: The time spent in the environment's `reset()` before a rollout starts. Logged only when `environment_factory` is provided.
 - `env/reward_s`: The time spent in the environment's `get_reward()` after a rollout ends. Logged only when the environment defines `get_reward`.
+
+### Sample metrics
+
 - `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max`: The average and maximum number of forwarded tokens per sample.
 - `sample/trained_tokens_mean`: The average number of trained tokens per sample.
 - `sample/rollout_queue_size`: The number of samples waiting in the rollout queue.
 - `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
 - `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. The `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` metrics combine this staleness with the training-inference mismatch: a ratio away from `1.0` or a log-probability difference away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
 - `sample/dropped_stale_total`: The number of samples dropped for exceeding `max_staleness`.
+
+### Batch metrics
+
 - `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`: The number of forwarded and trained tokens per step, over all processes.
 - `batch/samples_per_step`, `batch/groups_per_step`: The number of samples and of distinct groups per step. They differ by the number of samples per group.
 - `batch/microbatches_per_step`: The number of micro-batches per step.
@@ -185,6 +199,9 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `batch/packing_ratio`: The number of tokens before packing per forwarded token: the factor by which packing shrinks the forward, `1.0` when nothing is shared.
 - `batch/pad_frac`: The fraction of padding added to make the rows the same length. It only costs transfer, it is removed before the forward.
 - `batch/dropped_oversize_total`: The number of samples dropped for exceeding `token_budget`.
+
+### Performance metrics
+
 - `perf/step_s`: The wall time of a step, including the optimizer, the weight sync and the time waiting for samples.
 - `perf/fwd_bwd_s`, `perf/fwd_s`: The time spent in the forward and backward passes of a step, and in its forward passes alone.
 - `perf/optimizer_s`: The time spent in the optimizer step.
