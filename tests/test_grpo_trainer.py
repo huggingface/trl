@@ -2437,13 +2437,12 @@ class TestGRPOTrainer(TrlTestCase):
     @require_peft
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
         lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
         with pytest.raises(ValueError, match="ensure_weight_tying"):
             GRPOTrainer(
-                model=model,
+                model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,

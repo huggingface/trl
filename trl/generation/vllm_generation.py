@@ -303,10 +303,12 @@ class VLLMGeneration:
             embeddings = [base_model.get_input_embeddings(), base_model.get_output_embeddings()]
             originals = [m.original_module if isinstance(m, ModulesToSaveWrapper) else m for m in embeddings]
             if originals[0].weight is originals[1].weight and embeddings[0].weight is not embeddings[1].weight:
+                names = {module: name.rsplit(".", 1)[-1] for name, module in base_model.named_modules()}
+                copies = " and ".join(f"`{names[m]}`" for m in embeddings if isinstance(m, ModulesToSaveWrapper))
                 raise ValueError(
                     "The model ties its input embeddings and output layer, but PEFT's `modules_to_save` trains them "
                     "as separate copies, which vLLM cannot hold. Set `ensure_weight_tying=True` in the PEFT config "
-                    "(PEFT >= 0.18) to train a single copy, or remove them from `modules_to_save`."
+                    f"(PEFT >= 0.18) to train a single copy, or remove {copies} from `modules_to_save`."
                 )
 
         self._init_vllm()
