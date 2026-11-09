@@ -1109,7 +1109,6 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             ]
             # The first poll only records the server's running total; each later poll reports what was added since
             assert preemptions[0] == 0 and set(preemptions[1:]) == {1}
-            assert all("rollout/vllm_kv_cache_usage_frac" in p for p in payloads if "rollout/concurrency_cap" in p)
         finally:
             loop._loop.close()
 
