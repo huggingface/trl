@@ -128,7 +128,9 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 "top_p": self.config.top_p,
                 "top_k": self.config.top_k,
                 "min_p": self.config.min_p,
-                "repetition_penalty": self.config.repetition_penalty,
+                # Explicit: vLLM fills an omitted penalty from the model's generation config (1.05 for
+                # Qwen2.5-Instruct), and the trainer's log-probs carry none
+                "repetition_penalty": 1.0,
             }
             sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
             self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
