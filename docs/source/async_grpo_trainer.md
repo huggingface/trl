@@ -79,7 +79,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 ```
 
 > [!TIP]
-> Set `--max-model-len` to the maximum total sequence length (prompt + completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config. With tools, every turn adds up to `max_completion_length` tokens plus the tool results, so set it to the longest conversation you expect: the server rejects a turn whose prompt plus `max_completion_length` doesn't fit, and the run stops with the server's error.
+> Set `--max-model-len` to the maximum total sequence length (prompt + completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config. With tools, every turn adds up to `max_completion_length` tokens plus the tool results, so set it to the longest conversation you expect. If a turn's prompt plus `max_completion_length` is longer than `--max-model-len`, the server rejects the request and the run stops with the server's error. With `top_k` or `top_p`, the server instead stops that turn when it reaches `--max-model-len`, and only rejects a prompt that is already that long.
 
 ```bash
 # Terminal 2: training on GPU 1
