@@ -4,6 +4,9 @@
       This makes the template prefix-preserving for the [user, assistant] → [user, assistant, tool] transition.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the part of the thinking block that the generation prompt pre-fills before {% generation %},
+      so that assistant-only loss doesn't train it. With empty reasoning, the next '\n' goes with it too, since the
+      tokenizer merges '\n\n' into one token.
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -47,9 +50,15 @@
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
-        {{- '<|im_start|>' + message.role + '\n' }}
+        {%- if reasoning_content.strip('\n') %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n' }}
+            {%- set think_completion = reasoning_content.strip('\n') + '\n</think>\n\n' %}
+        {%- else %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n\n' }}
+            {%- set think_completion = '</think>\n\n' %}
+        {%- endif %}
         {%- generation %}
-        {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {{- think_completion + content.lstrip('\n') }}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}
