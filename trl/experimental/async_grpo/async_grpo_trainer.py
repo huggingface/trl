@@ -1145,6 +1145,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
+
         precision = self.accelerator.mixed_precision
         self.compute_dtype = {
             "bf16": "bfloat16",
