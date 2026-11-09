@@ -610,12 +610,13 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Ensure use_cache is disabled
         model.config.use_cache = False
 
-        # Enable gradient checkpointing on the base model for PEFT
-        if is_peft_model(model):
-            model.base_model.gradient_checkpointing_enable()
-        # Enable gradient checkpointing for non-PEFT models
+        # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
+        checkpointed_model = model.base_model if is_peft_model(model) else model
+        # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointed_model.activation_checkpointing_enable()
         else:
-            model.gradient_checkpointing_enable()
+            checkpointed_model.gradient_checkpointing_enable()
 
         model.enable_input_require_grads()
         return model
