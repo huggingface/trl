@@ -47,10 +47,8 @@ from trl.experimental.async_distillation import async_distillation_trainer as as
 from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
-    FixedCountBatcher,
     TokenBudgetBatcher,
     _add_tail_bucket,
-    _balance_by_squared_length,
     _chunked_csd_loss,
     _chunked_jsd_loss,
     _EpochStopCallback,
@@ -376,17 +374,6 @@ class TestPackingAwareBatching:
     run without a GPU. The teacher-candidate padding in the collator is new and is the focus here.
     """
 
-    def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
-        source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
-        batcher = FixedCountBatcher(source, num_processes=2, microbatch_size=4)
-
-        micro_batches = list(itertools.islice(iter(batcher), 3))
-        assert len(micro_batches) == 3
-        for groups in micro_batches:
-            assert len(groups) == 2
-            assert all(len(group) > 0 for group in groups)
-            assert sum(len(group) for group in groups) == 4
-
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
@@ -397,12 +384,6 @@ class TestPackingAwareBatching:
             assert len(groups) == 2
             assert all(len(group) > 0 for group in groups)
             assert all(sum(len(s["input_ids"]) for s in group) <= 8 for group in groups)
-
-    def test_balance_equalizes_squared_length(self):
-        samples = [_rollout_sample(length) for length in (3, 3, 2, 2)]
-        groups = _balance_by_squared_length(samples, num_groups=2)
-        loads = [sum(len(s["input_ids"]) ** 2 for s in group) for group in groups]
-        assert loads[0] == loads[1]
 
     def test_collator_pads_teacher_candidates_and_masks_prompt_positions(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=1)
@@ -997,7 +978,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,
-            token_budget=-1,
+            token_budget=160,
             report_to="none",
         )
         trainer = AsyncDistillationTrainer(
@@ -1048,7 +1029,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
-            token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            token_budget=160,
             logging_steps=1,
             report_to="none",
         )
@@ -1099,7 +1080,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,
                 teacher_top_k=TEACHER_TOP_K,
                 max_completion_length=8,
-                token_budget=-1,  # FixedCountBatcher, so a step consumes a fixed, predictable number of samples
+                token_budget=160,
                 vllm_server_timeout=5.0,
                 report_to="none",
                 **overrides,
@@ -1136,7 +1117,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,
-            token_budget=-1,
+            token_budget=160,
             beta=beta,
             report_to="none",
         )
@@ -1363,7 +1344,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             per_device_train_batch_size=3,
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
-            token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            token_budget=160,
             vllm_server_base_url=fake.url,
             vllm_server_timeout=5.0,
             report_to="none",

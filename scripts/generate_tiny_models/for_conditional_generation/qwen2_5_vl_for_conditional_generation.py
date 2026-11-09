@@ -39,27 +39,27 @@ generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 
 text_config = {
     "num_hidden_layers": 2,
-    "hidden_size": 16,
+    "hidden_size": 32,  # head size 32 // 4 = 8, as Flash Attention requires
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
     "layer_types": None,
-    "rope_scaling": {"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
+    "rope_scaling": {"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
 }
 vision_config = {
     "hidden_size": 16,
     "num_heads": 4,
     "depth": 2,
     "fullatt_block_indexes": [1],  # must contain valid layer indices (< depth)
-    "out_hidden_size": 16,
+    "out_hidden_size": 32,
 }
 
 config = AutoConfig.from_pretrained(
     MODEL_ID,
     text_config=text_config,
     vision_config=vision_config,
-    rope_scaling={"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
+    rope_scaling={"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
     num_hidden_layers=2,
-    hidden_size=16,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
 )
 model = Qwen2_5_VLForConditionalGeneration(config).to(dtype=torch.bfloat16)

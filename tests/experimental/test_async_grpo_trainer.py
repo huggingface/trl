@@ -48,7 +48,6 @@ from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer
 from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
-    FixedCountBatcher,
     TokenBudgetBatcher,
     _iter_vllm_named_params,
     _reduce_metric,
@@ -60,7 +59,6 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutLoop,
     AsyncRolloutWorker,
-    DriftKind,
     Rollout,
     RolloutGroup,
     RolloutSample,
@@ -68,7 +66,6 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     TurnRecord,
     _chain_to_sequences,
     _common_prefix_len,
-    _SampleBuilder,
     _spawn_stop_watcher,
 )
 from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
@@ -1219,34 +1216,6 @@ def _row_tokens(group: list[dict]) -> int:
 class TestPackingAwareBatching(TrlTestCase):
     """Packing-aware dynamic batching is pure scheduling/tensorization, so these run without a GPU."""
 
-    def test_balance_partitions_all_samples_into_non_empty_rows(self):
-        samples = [_rollout_sample(length) for length in (5, 1, 1, 1, 1)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        assert len(groups) == 2
-        assert all(len(group) > 0 for group in groups)
-        # Every sample is placed exactly once.
-        flat = [sample for group in groups for sample in group]
-        assert sorted(len(s["input_ids"]) for s in flat) == sorted(len(s["input_ids"]) for s in samples)
-
-    def test_balance_equalizes_attention_cost(self):
-        # [3, 3, 2, 2] across two rows packs as [3, 2] | [3, 2] -> equal attention cost, not equal counts by accident.
-        samples = [_rollout_sample(length) for length in (3, 3, 2, 2)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        loads = [_tree_row(group).load for group in groups]
-        assert loads[0] == loads[1]
-
-    def test_balance_prefers_attention_cost_over_count(self):
-        # One long sample alone balances attention cost better than splitting by count: [4] | [3, 2, 1].
-        samples = [_rollout_sample(length) for length in (4, 3, 2, 1)]
-        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
-
-        counts = sorted(len(group) for group in groups)
-        assert counts == [1, 3]
-        loads = sorted(_tree_row(group).load for group in groups)
-        assert loads == [10, 10]  # causal score pairs: [4] -> 10, [3, 2, 1] -> 6 + 3 + 1
-
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
@@ -1283,17 +1252,6 @@ class TestPackingAwareBatching(TrlTestCase):
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
             assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
-
-    def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
-        source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
-        batcher = FixedCountBatcher(source, num_processes=2, microbatch_size=4)
-
-        micro_batches = list(itertools.islice(_micro_batches(batcher), 3))
-        assert len(micro_batches) == 3
-        for groups in micro_batches:
-            assert len(groups) == 2
-            assert all(len(group) > 0 for group in groups)  # no rank forwards zero tokens
-            assert sum(len(group) for group in groups) == 4  # fixed sample count per micro-batch
 
     def test_collator_pads_unequal_rows(self):
         # The planner hands the collator a pre-partitioned micro-batch, wrapped in a length-1 list by the dataloader.
@@ -1559,13 +1517,6 @@ class TestTreePacking(TrlTestCase):
 
         assert sum(len(group) for group in micro_batch) == 5
 
-    def test_a_lone_group_fills_every_row_of_a_fixed_count_micro_batch(self):
-        source = (_tree_sample(list(range(6)) + [100 + i], n_prompt=6, group_id=i // 8) for i in range(16))
-        batcher = FixedCountBatcher(source, num_processes=8, microbatch_size=8)
-
-        for micro_batch in itertools.islice(_micro_batches(batcher), 2):
-            assert all(len(group) > 0 for group in micro_batch)
-
     def test_a_group_is_split_rather_than_let_a_rank_starve(self):
         source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))
         batcher = TokenBudgetBatcher(source, 2, 10, defaultdict(list))
@@ -1597,12 +1548,7 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
         pytest.param(
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
         ),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            {},
-            id="qwen25-vl",
-            marks=_VLM_TEXT_HEAD_DIM_4,
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen25-vl"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, id="llama31"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, id="llama32"),
         pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, id="mistral"),
@@ -1766,8 +1712,8 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
             )
 
 
-def _finalize(turns, rollout_id="r0", fork_threshold=1024):
-    rows, _tally = _chain_to_sequences(turns, rollout_id, fork_threshold)
+def _finalize(turns, rollout_id="r0"):
+    rows, _drifts = _chain_to_sequences(Rollout([], [], turns, rollout_id=rollout_id))
     return rows
 
 
@@ -1920,17 +1866,17 @@ class TestReconciler(TrlTestCase):
         assert rows[0].rollout_id == "r0"
 
     def test_sampling_mask_follows_the_sampled_tokens(self):
-        # Candidate sets ride with the sampled tokens; the prompt and a realigned tail are context and carry none.
+        # Candidate sets ride with the sampled tokens; the prompt and the tool result are context and carry none.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2], output_sampling_mask=[[10, 12], [11]])
-        turn2 = TurnRecord([1, 2, 3, 10, 99, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
+        turn2 = TurnRecord([1, 2, 3, 10, 11, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
         rows = _finalize([turn1, turn2])
         assert len(rows) == 1
-        assert rows[0].input_ids == [1, 2, 3, 10, 99, 20, 30]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 0, 1]
-        assert rows[0].sampling_mask == [[], [], [], [10, 12], [], [], [30, 31, 32]]
+        assert rows[0].input_ids == [1, 2, 3, 10, 11, 20, 30]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 1, 0, 1]
+        assert rows[0].sampling_mask == [[], [], [], [10, 12], [11], [], [30, 31, 32]]
 
     def test_clean_chain_stays_one_row(self):
-        # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]) -> CLEAN.
+        # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]), so it extends the row.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2])
         turn2 = TurnRecord([1, 2, 3, 10, 11, 20, 21], [30, 31], [-0.3, -0.4])
         rows = _finalize([turn1, turn2])
@@ -1940,64 +1886,36 @@ class TestReconciler(TrlTestCase):
         assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2, 0.0, 0.0, -0.3, -0.4]
 
     def test_rewrite_forks_into_two_rows(self):
-        # Divergence inside turn 1's answer + a turn >= fork_threshold -> FORK. Every generated token is
-        # trained in exactly one row (turn 1's tokens are context in row 2).
+        # Turn 2's prompt rewrites turn 1's answer, so turn 2 starts a new row. Every generated token is trained in
+        # exactly one row (turn 1's tokens are context in row 2).
         turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
         turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32], [-0.2] * 3)
-        rows = _finalize([turn1, turn2], fork_threshold=2)
+        rows = _finalize([turn1, turn2])
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
         assert rows[0].completion_mask == [0, 0, 0, 1, 1, 1, 1]
         assert rows[1].input_ids == [1, 2, 3, 10, 99, 88, 77, 30, 31, 32]
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
 
-    def test_fork_when_divergence_precedes_last_response(self):
-        # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
-        builder = _SampleBuilder(fork_threshold=1024)
-        builder.append_turn(
-            TurnRecord([1, 2, 3], [10, 11], [-0.2] * 2), DriftKind.CLEAN
-        )  # last_response_start_idx == 3
-        # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30], [-0.2] * 1)) == (DriftKind.FORK, 4)
-
-    def test_drift_tally_counts_transitions(self):
-        # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
-        # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
+    def test_reports_the_drift_of_each_fork(self):
         turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
         clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20], [-0.2] * 1)
         forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30], [-0.2] * 1)
+        assert _chain_to_sequences(Rollout([], [], [turn1]))[1] == []
+        # The fork diverges at the 5th held token (11 -> 99), so 4 of the 8 held tokens re-rendered.
+        assert _chain_to_sequences(Rollout([], [], [turn1, clean, forked]))[1] == [4]
 
-        _rows, tally = _chain_to_sequences([turn1], "r0", 2)
-        assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
-
-        _rows, tally = _chain_to_sequences([turn1, clean, forked], "r0", 2)
-        assert (tally["transitions"], tally["clean"], tally["fork"]) == (2, 1, 1)
-        assert tally["drift_max"] == 4  # the forking transition invalidated 4 held tokens
-
-    def test_tail_wobble_realigns_to_context(self):
-        # Last generated token re-renders (11 -> 12): a short wobble in the last answer -> REALIGN. Only the drifted
-        # token is masked to context; the matched part of the answer (10) keeps its training signal and logprob.
+    def test_tail_wobble_forks(self):
+        # Last generated token re-renders (11 -> 12). Turn 1 keeps its row and both its trained tokens; turn 2 starts
+        # a new row where the re-rendered answer is context.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2])
         turn2 = TurnRecord([1, 2, 3, 10, 12], [30, 31], [-0.3, -0.4])
         rows = _finalize([turn1, turn2])
-        assert len(rows) == 1
-        assert rows[0].input_ids == [1, 2, 3, 10, 12, 30, 31]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 1, 1]
-        assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, 0.0, -0.3, -0.4]
-
-    def test_large_drift_forks_even_when_next_turn_is_short(self):
-        # The Qwen3 case: turn 1 is a long trained answer (a reasoning block); the template drops it on turn 2, so
-        # the prompt diverges at the answer start (large drift) while turn 2's own answer is tiny. The decision must
-        # key on the drift (6 tokens invalidated), not the incoming turn's length (1) -> FORK, so turn 1 keeps its
-        # training signal. (fork_threshold sits between the two: gating on output length would wrongly REALIGN.)
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15], [-0.2] * 6)  # long trained answer
-        turn2 = TurnRecord([1, 2, 3, 99, 88], [30], [-0.2] * 1)  # answer dropped by the template; short next turn
-        rows = _finalize([turn1, turn2], fork_threshold=3)
         assert len(rows) == 2
-        assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13, 14, 15]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 1, 1, 1, 1, 1]  # long answer stays trained
-        assert rows[1].input_ids == [1, 2, 3, 99, 88, 30]
-        assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 1]
+        assert rows[1].input_ids == [1, 2, 3, 10, 12, 30, 31]
+        assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1, 1]
+        assert rows[1].old_log_probs == [0.0, 0.0, 0.0, 0.0, 0.0, -0.3, -0.4]
 
 
 # The vLLM server's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
@@ -2027,7 +1945,7 @@ def _run(*, turns, max_iters=None):
 
     loop.generate_one_turn = generate_one_turn
     rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], [t]))
-    rows, _tally = _chain_to_sequences(rollout.turns, "r", loop._fork_threshold_tokens)
+    rows, _drifts = _chain_to_sequences(rollout)
     return rollout, rows
 
 
@@ -2581,11 +2499,11 @@ class TestEpochStop(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            token_budget=-1,  # FixedCountBatcher: deterministic samples/step, so groups accrue predictably
+            token_budget=64,
             vllm_server_timeout=5.0,
             report_to="none",
         )
-        rollout_worker = partial(_StubRolloutWorker, fork_k=fork_k, drop_every=drop_every)
+        rollout_worker = partial(_StubRolloutWorker, fork_k=fork_k, drop_every=drop_every, samples_per_weight_sync=30)
         with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", rollout_worker):
             trainer = AsyncGRPOTrainer(
                 model=model_id,
@@ -2606,11 +2524,6 @@ class TestEpochStop(TrlTestCase):
         # so we judge epochs by distinct prompt-groups trained, which is what the callback targets.)
         for trainer in (no_fork, forked):
             assert 2 * num_prompts <= len(trainer._trained_groups) < 3 * num_prompts
-
-        # Forks add rows, hence fixed-size optimizer steps: 3x rows per conversation must take strictly more
-        # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
-        # stop in FEWER prompt-passes (the pre-fix bug).
-        assert forked.state.global_step > no_fork.state.global_step
 
     def test_epoch_stop_counts_dropped_groups(self):
         trainer, num_prompts = self._train(fork_k=1, drop_every=2)
