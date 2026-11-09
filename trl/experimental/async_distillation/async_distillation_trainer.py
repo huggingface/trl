@@ -369,42 +369,6 @@ def _chunked_jsd_loss(
     return loss, jsd_sum, entropy_sum, teacher_entropy_sum, per_teacher_stats
 
 
-def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
-    """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
-
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer._balance_by_squared_length`], packing and
-    load-balancing are loss-agnostic, so this needs no adaptation for distillation.
-    """
-    groups = [[] for _ in range(num_groups)]
-    squared_loads = [0] * num_groups
-    for example in sorted(examples, key=lambda e: len(e["input_ids"]), reverse=True):
-        n = len(example["input_ids"])
-        i = min(range(num_groups), key=lambda j: squared_loads[j])
-        groups[i].append(example)
-        squared_loads[i] += n * n
-    return groups
-
-
-class FixedCountBatcher(torch.utils.data.IterableDataset):
-    """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
-
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer.FixedCountBatcher`].
-    """
-
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
-        self.dataset = dataset
-        self.num_processes = num_processes
-        self.microbatch_size = microbatch_size
-
-    def __iter__(self):
-        batch = []
-        for sample in self.dataset:
-            batch.append(sample)
-            if len(batch) == self.microbatch_size:
-                yield _balance_by_squared_length(batch, self.num_processes)
-                batch = []
-
-
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
@@ -682,10 +646,10 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 class DataCollatorForRollout(DataCollatorMixin):
     """
     Padding-free collator (the packer) for rollout samples. Packs a micro-batch (already partitioned into
-    `num_processes` rows by the upstream planner, [`FixedCountBatcher`] or [`TokenBudgetBatcher`]) into one packed row
-    per DP rank, with `position_ids` resetting per sequence. Rows are padded only to the longest row, so the batch
-    stays rectangular for `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped
-    per-rank in `compute_loss`.
+    `num_processes` rows by the upstream planner, [`TokenBudgetBatcher`]) into one packed row per DP rank, with
+    `position_ids` resetting per sequence. Rows are padded only to the longest row, so the batch stays rectangular for
+    `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
+    `compute_loss`.
 
     Structurally the same as [`~trl.experimental.async_grpo.async_grpo_trainer.DataCollatorForRollout`], with
     `advantages` replaced by `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to
@@ -1511,12 +1475,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
-            if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
-            else:
-                dataset = FixedCountBatcher(
-                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
-                )
+            dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
 
@@ -1532,7 +1491,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.
-                    token_budget=max(self.args.token_budget or 0, 0),
+                    token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
             )
