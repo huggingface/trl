@@ -1723,8 +1723,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # blended versions above conflate teachers that can behave very differently (e.g. a "math" and a "code"
             # teacher). Student entropy isn't broken down here: it's a property of the student's own policy, not of
             # which teacher scored the sample, so the blended `entropy` metric already covers it. Named
-            # `teacher_jsd/{teacher_id}` (not `jsd/{teacher_id}`) so it doesn't collide with the flat `jsd` metric
-            # above in dashboards that treat `/` as a grouping separator (e.g. wandb/trackio).
+            # `teacher/{teacher_id}/jsd` (not `jsd/{teacher_id}`) so it doesn't collide with the flat `jsd` metric
+            # above in dashboards that treat `/` as a grouping separator (e.g. wandb/trackio), and so the teacher id,
+            # which the user chooses, isn't the last segment that `_reduce_metric` reads.
             # `teacher_id_idx` is either present on every rank or absent on every rank (it depends only on
             # `self.args.teacher_server_urls`, identical config on all ranks), so every rank takes this branch
             # together or skips it together — required for `accelerator.reduce` below to stay in sync across ranks.
@@ -1736,17 +1737,17 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     # each teacher scored, rather than a mean of per-step shares that micro-batches of unequal size
                     # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
                     # averages below use, since zero tokens is itself the answer here.
-                    self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                    self._metrics["train"][f"teacher/{teacher_id}/token_frac"].append(
                         (t_count.item(), global_count.item())
                     )
                     if t_count > 0:
-                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
-                        self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(
+                        self._metrics["train"][f"teacher/{teacher_id}/jsd"].append((t_jsd_sum / t_count).item())
+                        self._metrics["train"][f"teacher/{teacher_id}/entropy"].append(
                             (t_teacher_entropy_sum / t_count).item()
                         )
                     else:
-                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
-                        self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
+                        self._metrics["train"][f"teacher/{teacher_id}/jsd"].append(float("nan"))
+                        self._metrics["train"][f"teacher/{teacher_id}/entropy"].append(float("nan"))
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
