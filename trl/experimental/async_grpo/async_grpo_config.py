@@ -120,15 +120,13 @@ class AsyncGRPOConfig(_BaseConfig):
             centering. More cover more of the sampler's probability mass but cost more to serialize; the server's
             `--max-logprobs` bounds it.
         token_budget (`int`, *optional*):
-            Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
-            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows
-            each stay within this budget, bounding peak memory independently of the sample count (the number of samples
-            per row becomes dynamic). The budget bounds unique tokens rather than raw ones, so tokens shared by several
-            samples count once, and it bounds the row's loss terms too. If `None` (default), it is set to the vLLM
-            server's `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout
-            sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
-            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
-            num_processes` samples per micro-batch, balanced across the rows.
+            Maximum number of tokens forwarded in a single row (one DP rank's forward). A `TokenBudgetBatcher` forms
+            attention-cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory
+            independently of the sample count (the number of samples per row becomes dynamic). The budget bounds unique
+            tokens rather than raw ones, so tokens shared by several samples count once, and it bounds the row's loss
+            terms too. If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) —
+            the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer
+            than `token_budget` fits in no row and is dropped with a warning.
 
         > Parameters that control the async rollout pipeline
 
@@ -359,14 +357,11 @@ class AsyncGRPOConfig(_BaseConfig):
     token_budget: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic "
-            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms attention-cost-balanced "
-            "micro-batches whose rows each stay within this budget, bounding peak memory independently of the sample "
-            "count. If None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
-            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
-            "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
-            "`per_device_train_batch_size × num_processes` samples per micro-batch, attention-cost-balanced across "
-            "the rows."
+            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward). A "
+            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this "
+            "budget, bounding peak memory independently of the sample count. If None (default), it is set to the "
+            "vLLM server's `max_model_len` (queried at train start), so no rollout sample can ever exceed the budget. "
+            "A sample longer than `token_budget` fits in no row and is dropped with a warning."
         },
     )
 
