@@ -58,6 +58,7 @@ from trl.chat_template_utils import (
     lfm2_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
+    qwen3_6_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
@@ -664,22 +665,47 @@ class TestAddResponseSchema:
         "processor_name, chat_template",
         [
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v2_chat_template, id="gemma4-v2"
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                gemma4_v2_chat_template,
+                id="gemma4-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+                ),
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v3_chat_template, id="gemma4-v3"
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                gemma4_v3_chat_template,
+                id="gemma4-v3",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+                ),
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v4_chat_template, id="gemma4-v4"
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                gemma4_v4_chat_template,
+                id="gemma4-v4",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+                ),
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v5_chat_template, id="gemma4-v5"
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                gemma4_v5_chat_template,
+                id="gemma4-v5",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                qwen3_6_v2_chat_template,
+                id="qwen3.6-v2",
             ),
         ],
-    )
-    @pytest.mark.skipif(
-        not _SUPPORTS_RESPONSE_TEMPLATE,
-        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_vision
     def test_add_response_schema_vlm_template_revision(self, processor_name, chat_template):
@@ -687,7 +713,8 @@ class TestAddResponseSchema:
         processor = AutoProcessor.from_pretrained(processor_name)
         processor.chat_template = chat_template
         processor = add_response_schema(processor)
-        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        # String arguments: XML-style tool calls (Qwen3.6) only parse back typed values given the tool schemas
+        tool_calls = [{"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}}]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "content": "", "tool_calls": tool_calls},
