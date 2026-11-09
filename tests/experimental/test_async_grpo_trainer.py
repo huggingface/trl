@@ -1724,7 +1724,7 @@ class TestMetricReduction(TrlTestCase):
         assert _reduce_metric("perf/fwd_bwd_s", [1.0, 2.0, 6.0]) == 3.0
 
     def test_counter_is_summed(self):
-        assert _reduce_metric("sample/dropped_stale_total", [1.0, 1.0, 1.0]) == 3.0
+        assert _reduce_metric("sample/dropped_stale_count", [1.0, 1.0, 1.0]) == 3.0
 
     def test_extrema(self):
         assert _reduce_metric("sample/forwarded_tokens_max", [3.0, 9.0, 5.0]) == 9.0
@@ -1738,10 +1738,12 @@ class TestMetricReduction(TrlTestCase):
     def test_rate_is_sum_over_sum_not_mean_of_ratios(self):
         # The two windows have rates 1 tok/s and 100 tok/s. Meaning the ratios would give 50.5; the honest rate is
         # total tokens over total seconds. This is the defect that made `training_tok/s` unusable.
-        assert _reduce_metric("perf/forwarded_tok_s_e2e", [(100.0, 100.0), (100.0, 1.0)]) == pytest.approx(200 / 101)
+        assert _reduce_metric("perf/forwarded_tokens_per_s_e2e", [(100.0, 100.0), (100.0, 1.0)]) == pytest.approx(
+            200 / 101
+        )
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_e2e", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_e2e", [(0.0, 0.0)]))
 
 
 class TestWorkerMetricPush(TrlTestCase):
@@ -1749,7 +1751,7 @@ class TestWorkerMetricPush(TrlTestCase):
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = _rollout_loop()
-        loop._counters["tools/search/call_total"] += 2
+        loop._counters["tools/search/call_count"] += 2
         loop._rates["tools/latency_s"][0] += 3.0
         loop._rates["tools/latency_s"][1] += 2
         loop._push_metrics({"rollout/score_s": 0.5})
@@ -1757,7 +1759,7 @@ class TestWorkerMetricPush(TrlTestCase):
         payload = loop._metrics_queue.get(timeout=5)
         assert payload == {
             "rollout/score_s": 0.5,
-            "tools/search/call_total": 2.0,
+            "tools/search/call_count": 2.0,
             "tools/latency_s": (3.0, 2.0),
         }
         # Counters carry deltas: whatever was pushed must not be pushed again.
@@ -1807,8 +1809,8 @@ class TestToolExecution(TrlTestCase):
         assert messages[1]["content"] == "async:2"
         assert "boom:3" in messages[2]["content"]
         assert "unknown tool" in messages[3]["content"]
-        assert loop._counters["tools/failing_tool/failure_total"] == 1
-        assert loop._counters["tools/unknown_name_total"] == 1
+        assert loop._counters["tools/failing_tool/failure_count"] == 1
+        assert loop._counters["tools/unknown_name_count"] == 1
         assert loop._rates["tools/latency_s"][1] == 3
 
     def test_slow_sync_tool_does_not_block_the_event_loop(self):

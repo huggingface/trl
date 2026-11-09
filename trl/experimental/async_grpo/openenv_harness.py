@@ -160,9 +160,9 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
             for name, count in metrics.pop("tool_calls_by_name").items():
-                self._counters[f"tools/{name}/call_total"] += count
+                self._counters[f"tools/{name}/call_count"] += count
             for name, count in metrics.pop("tool_failures_by_name").items():
-                self._counters[f"tools/{name}/failure_total"] += count
+                self._counters[f"tools/{name}/failure_count"] += count
             for name, elapsed in metrics.pop("tool_latency"):
                 self._rates["tools/latency_s"][0] += elapsed
                 self._rates["tools/latency_s"][1] += 1

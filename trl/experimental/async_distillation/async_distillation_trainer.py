@@ -86,7 +86,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
-    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `count` word in the name is a count of events in the window, summed (producers push deltas).
     - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
       (`completions/max_length`) working alongside this trainer's own (`row_tokens_max`).
     - anything else is a gauge, and its window mean is meaningful.
@@ -97,7 +97,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
         numerator, denominator = (sum(v) for v in zip(*values, strict=True))
         return numerator / denominator if denominator else float("nan")
     words = key.split("/")[-1].split("_")
-    if "total" in words:
+    if "count" in words:
         return sum(values)
     if "max" in words:
         return max(values)
@@ -392,7 +392,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
-                self.metrics["batch/dropped_oversize_total"].append(1.0)
+                self.metrics["batch/dropped_oversize_count"].append(1.0)
                 continue
             fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
             if not fits:
@@ -595,7 +595,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             staleness = version - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
-                self.metrics["sample/dropped_stale_total"].append(1.0)
+                self.metrics["sample/dropped_stale_count"].append(1.0)
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
@@ -1803,7 +1803,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None:
                 metrics["perf/mfu_fwd_bwd"].append(
                     compute_mfu(
@@ -1811,8 +1811,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
+                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(

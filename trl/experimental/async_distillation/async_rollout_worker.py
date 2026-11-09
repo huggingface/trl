@@ -394,7 +394,7 @@ class _AsyncRolloutLoop:
                         {
                             "rollout/concurrency": float(len(rollout_tasks)),
                             # Windowed, not cumulative. A cumulative average cannot show a generation stall.
-                            "rollout/generated_tok_s": (
+                            "rollout/generated_tokens_per_s": (
                                 float(self._total_completion_tokens - self._pushed_completion_tokens),
                                 now - self._pushed_at,
                             ),
@@ -453,7 +453,7 @@ class _AsyncRolloutLoop:
             except _RETRYABLE_HTTP_ERRORS as e:
                 if attempt >= max_attempts - 1:
                     raise
-                self._counters["rollout/vllm_retry_total"] += 1
+                self._counters["rollout/vllm_retry_count"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
                 logger.warning(
                     f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
