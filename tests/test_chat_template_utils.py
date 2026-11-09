@@ -354,9 +354,10 @@ class TestAddResponseSchema:
         [
             pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
             pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
+            pytest.param(qwen3_6_v2_chat_template, id="qwen3.6-v2"),
         ],
     )
-    def test_add_response_schema_qwen3_coder(self, chat_template):
+    def test_add_response_schema_qwen3_xml_tool_calls(self, chat_template):
         # Without the tools' schema, XML argument values parse back as strings, so the arguments here are strings
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         tokenizer.chat_template = chat_template
@@ -665,47 +666,22 @@ class TestAddResponseSchema:
         "processor_name, chat_template",
         [
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                gemma4_v2_chat_template,
-                id="gemma4-v2",
-                marks=pytest.mark.skipif(
-                    not _SUPPORTS_RESPONSE_TEMPLATE,
-                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
-                ),
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v2_chat_template, id="gemma4-v2"
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                gemma4_v3_chat_template,
-                id="gemma4-v3",
-                marks=pytest.mark.skipif(
-                    not _SUPPORTS_RESPONSE_TEMPLATE,
-                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
-                ),
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v3_chat_template, id="gemma4-v3"
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                gemma4_v4_chat_template,
-                id="gemma4-v4",
-                marks=pytest.mark.skipif(
-                    not _SUPPORTS_RESPONSE_TEMPLATE,
-                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
-                ),
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v4_chat_template, id="gemma4-v4"
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                gemma4_v5_chat_template,
-                id="gemma4-v5",
-                marks=pytest.mark.skipif(
-                    not _SUPPORTS_RESPONSE_TEMPLATE,
-                    reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                qwen3_6_v2_chat_template,
-                id="qwen3.6-v2",
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v5_chat_template, id="gemma4-v5"
             ),
         ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_vision
     def test_add_response_schema_vlm_template_revision(self, processor_name, chat_template):
@@ -713,8 +689,7 @@ class TestAddResponseSchema:
         processor = AutoProcessor.from_pretrained(processor_name)
         processor.chat_template = chat_template
         processor = add_response_schema(processor)
-        # String arguments: XML-style tool calls (Qwen3.6) only parse back typed values given the tool schemas
-        tool_calls = [{"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}}]
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "content": "", "tool_calls": tool_calls},
