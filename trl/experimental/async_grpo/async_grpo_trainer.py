@@ -1135,6 +1135,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        if "image" in dataset_sample or "images" in dataset_sample:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but `AsyncGRPOTrainer` "
+                "trains on text only, vision-language models included. Please remove the images from your dataset."
+            )
+
         # Initialize the Trainer
         super().__init__(
             model=model,
