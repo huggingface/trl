@@ -203,6 +203,19 @@ def screenshot_tool() -> str:
     return "The image shows a red square."
 
 
+def screenshot_image_tool() -> list:
+    """
+    Takes a screenshot and returns it.
+
+    Returns:
+        A list of content blocks with the screenshot image.
+    """
+    from PIL import Image as PILImage
+
+    img = PILImage.new("RGB", (64, 64), color="red")
+    return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
+
+
 def record(key: str, value):
     """Append `value` under `key` to the file `TRL_TEST_RECORD` names.
 
@@ -2997,6 +3010,45 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         [
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+        ],
+    )
+    @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
+    def test_train_vlm(self, model_id, vllm_server):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server(model_id).url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 marks=pytest.mark.xfail(
@@ -3103,6 +3155,158 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
+    def test_train_vlm_multi_image(self, vllm_server):
+        model_id = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server(model_id).url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(raises=TypeError, reason="`log_multimodal` is not supported", strict=True)
+    def test_train_vlm_log_multimodal_false(self, vllm_server):
+        model_id = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server(model_id).url,
+            report_to="none",
+            log_completions=True,
+            log_multimodal=False,
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == 0
+
+    @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
+    @require_response_parsing
+    def test_train_with_tools_multimodal_response(self, vllm_server):
+        # Test that tools returning images (multimodal responses) work correctly with a VLM.
+        # The tool returns a list of content blocks including an image.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=512,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_image_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "<tool_call>\n<function=screenshot_image_tool>\n</function>\n</tool_call><|im_end|>",
+                "I don't know any tool<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # With num_generations=2: 1 out of 2 completions is a tool call (1/2), and it succeeds (0 failures).
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
+    @require_response_parsing
+    def test_train_with_tools_text_response_multimodal_prompt(self, vllm_server):
+        # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=512,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>",
+                "I don't know any tool<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def _trainer(self, model_id, **config_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
