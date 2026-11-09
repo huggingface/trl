@@ -2978,6 +2978,118 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 environment_factory={"a": EnvA, "b": EnvB},
             )
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.xfail(
+                    raises=AttributeError,
+                    reason="`compute_flops_per_token` reads MoE config fields this config does not have",
+                    strict=True,
+                ),
+            ),
+        ],
+    )
+    def test_train_vlm_text_only_data(self, model_id, vllm_server):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server(model_id).url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    def test_vision_dataset_with_text_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="vision-related"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=varied_reward,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    raises=RuntimeError,
+                    reason="The rollout worker parses every completion with a response schema, and transformers has "
+                    "none for this chat template",
+                    strict=True,
+                ),
+            ),
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        ],
+    )
+    @require_peft
+    def test_train_vlm_peft(self, model_id, vllm_server):
+        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server(model_id).url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
 
 def _vision_parameter_names(model) -> set[str]:
     """Names of the parameters belonging to a vision-language model's vision tower.
@@ -3058,26 +3170,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         assert streamed.keys() == {n for n, p in trainer.model.named_parameters() if p.requires_grad}
         assert any(name.startswith("model.language_model.") for name in streamed)
         assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
-
-    def test_train(self, model_id):
-        if "Moe" in model_id:
-            # `compute_flops_per_token` reads `num_local_experts`, `intermediate_size` and `decoder_sparse_step`,
-            # none of which exist on `Qwen3_5MoeTextConfig`. Text-only Qwen3.5-MoE hits this too.
-            pytest.skip("compute_flops_per_token does not support the Qwen3.5-MoE config shape")
-        trainer = self._trainer(model_id)
-        previous_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        vision = _vision_parameter_names(trainer.model)
-        for n, param in previous_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in vision:
-                assert torch.equal(param, new_param), f"Vision-tower parameter {n} has changed."
-            elif new_param.requires_grad:
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
