@@ -450,7 +450,7 @@ The generation pipeline, from starting a rollout to putting its samples in the q
 | `rollout/generated_tokens_per_s` | generation throughput over the last interval (windowed), so a stall shows up |
 | `rollout/concurrency` | rollouts in flight to vLLM |
 | `rollout/concurrency_cap` | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency) |
-| `rollout/backpressure_s` | how long generation waited on a full rollout queue, averaged over the waits in the window. See [the rollout queue](#the-rollout-queue) |
+| `rollout/backpressure_s` | how long the score loop waited to put samples in a full rollout queue, averaged over the waits in the window. See [the rollout queue](#the-rollout-queue) |
 | `rollout/score_queue_size` | completed groups waiting to be scored |
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full |
 
@@ -470,13 +470,13 @@ Logged when the trainer has tools. `tools/<name>/*` repeats per tool name, the s
 
 | metric | meaning |
 | --- | --- |
-| `tools/call_frequency` | tool calls per rollout, averaged over the training samples of groups where at least one rollout called a tool |
-| `tools/failure_frequency` | fraction of a rollout's tool calls that failed (0 for a rollout with no calls), averaged over the same samples. A call fails when the tool raises or when the model names a tool that doesn't exist |
+| `tools/call_frequency` | tool calls per rollout, averaged over the training samples of kept groups where at least one rollout called a tool. GRPO's `tools/call_frequency` averages over every completion in the batch |
+| `tools/failure_frequency` | fraction of a rollout's tool calls that failed (0 for a rollout with no calls), averaged over the same samples. A call fails when the tool raises or when the model names a tool that doesn't exist. GRPO's `tools/failure_frequency` is failed calls over all calls in the batch |
 | `tools/latency_s`, `tools/<name>/latency_s` | time spent running the tool |
 | `tools/<name>/call_count`, `tools/<name>/failure_count` | calls and failures of each tool |
 | `tools/unknown_name_count` | calls to a tool that doesn't exist. This is a policy error, unlike a tool that ran and raised |
 | `tools/parallel_calls_mean` | tool calls requested in a single assistant message |
-| `tools/loop_exhausted_frac` | fraction of rollouts cut off at `max_tool_calling_iterations` while the model was still calling tools. Logged for every rollout, including ones that called no tool |
+| `tools/loop_exhausted_frac` | fraction of rollouts cut off at `max_tool_calling_iterations` while the model was still calling tools, over every rollout when the trainer has tools, including rollouts with no calls and rollouts in dropped groups |
 
 `HarnessAsyncGRPOTrainer` logs most of these under the same names. See [training on harnesses](openenv#metrics) for the differences.
 
@@ -513,7 +513,7 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
 | `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
 | `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
-| `sampling/masked_mean` | fraction of trained tokens dropped from the loss because their importance ratio is outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` |
+| `sampling/masked_mean` | fraction of trained tokens whose importance ratio is outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`. With `score_centering=False` these tokens are dropped from the loss; with score centering only their sampled-token term is, and the correction term stays |
 | `sampling/sampler_mass` | with `score_centering`, the sampler's probability mass covered by its top `num_sampler_logprobs` tokens |
 
 A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
@@ -523,7 +523,7 @@ A group whose rollouts all received the same reward (or fewer than two of which 
 | metric | meaning |
 | --- | --- |
 | `entropy` | mean entropy of the policy over the trained tokens |
-| `clip_ratio/low_mean`, `clip_ratio/high_mean`, `clip_ratio/region_mean` | fraction of trained tokens where the clipped objective is active: ratio below `1 - epsilon_low` with a negative advantage, above `1 + epsilon_high` with a positive advantage, or either |
+| `clip_ratio/low_mean`, `clip_ratio/high_mean`, `clip_ratio/region_mean` | fraction of trained tokens whose importance ratio is below `1 - epsilon_low` with a negative advantage, above `1 + epsilon_high` with a positive advantage, or either. The loss only clips these tokens with `score_centering=False` |
 | `clip_ratio/low_min`, `clip_ratio/high_max` | lowest per-completion low-clip fraction and highest per-completion high-clip fraction |
 | `aux_loss` | the MoE router's load-balancing loss, logged when the model returns router logits and `router_aux_loss_coef` isn't 0 |
 

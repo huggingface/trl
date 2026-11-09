@@ -284,7 +284,7 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `teacher/<id>/jsd`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
 | `teacher/<id>/entropy`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
 | `teacher/<id>/token_frac`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher/<id>/jsd`   |
-| `aux_loss` | the MoE router's load-balancing loss, logged when the model returns router logits and `router_aux_loss_coef` isn't 0 |
+| `aux_loss` | the MoE router's load-balancing loss per micro-batch, averaged over ranks, logged when the model returns router logits and `router_aux_loss_coef` isn't 0. Unlike the rows above, it isn't a per-token average |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 

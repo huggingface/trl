@@ -738,10 +738,10 @@ Malformed captures fail at the OpenEnv boundary and stop training. Transport fai
 
 The harness trainer logs the [tool metrics](async_grpo_trainer#tools) of [`experimental.async_grpo.AsyncGRPOTrainer`] under the same names, with these differences:
 
-- When the agent owns its loop (no `harness_adapter`), a tool call counts as failed when its result text contains `error`, `failed`, `traceback` or `exception` (case-insensitive). `tools/latency_s` and `tools/<name>/latency_s` aren't logged, because OpenEnv's trace has no timestamps.
+- When the agent owns its loop (no `harness_adapter`), failures are estimated from the tool results in the last request: a result counts as failed when its text contains `error`, `failed`, `traceback` or `exception` (case-insensitive), and results with the same tool and the same first 200 characters count once. `tools/latency_s` and `tools/<name>/latency_s` aren't logged, because OpenEnv's trace has no timestamps.
 - With a `harness_adapter`, a tool call counts as failed when the harness reports an error for it. The time between one model reply and the next request is split evenly across that turn's tool calls and logged as their `tools/latency_s`, so it includes the harness's own overhead. The last turn isn't timed.
 - `tools/unknown_name_count`, `tools/parallel_calls_mean` and `tools/loop_exhausted_frac` come from the built-in tool loop and aren't logged.
-- `rollout/correctness_mean` is the mean of the `correctness` value the session reports, over the rollouts that report one.
+- `rollout/correctness_mean` is logged only with a `rollout_reward_fn`: the verifier's `env_reward`, averaged over the rollouts that have one.
 
 ### Requirements
 
