@@ -1443,6 +1443,17 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_v2_chat_template),
+            id="qwen38_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
