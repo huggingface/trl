@@ -150,6 +150,10 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # The reward is read at the last token, so in the last layer only the experts that token is routed to
+            # get a gradient
+            if f"layers.{trainer.model.config.num_hidden_layers - 1}.mlp.experts" in n:
+                continue
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
