@@ -218,7 +218,8 @@ class VLLMGeneration:
             override them.
         return_sampling_mask (`bool`, *optional*, defaults to `False`):
             Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k, top-p
-            and min-p filtering. Colocate mode only. Requires vLLM >= 0.28 and `top_k > 0`.
+            and min-p filtering. Requires vLLM >= 0.28 and `top_k > 0`, and in server mode a server started with
+            `--return-sampling-mask`.
 
     """
 
@@ -673,6 +674,7 @@ class VLLMGeneration:
                     "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
                     "generation_kwargs": self.generation_kwargs,
+                    "return_sampling_mask": self.return_sampling_mask,
                 }
                 with profiler:
                     output = self.vllm_client.generate(
@@ -683,6 +685,7 @@ class VLLMGeneration:
                         output["completion_ids"],
                         output["logprobs"],
                         output.get("logprob_token_ids"),
+                        output.get("sampling_mask"),
                     )
             else:
                 payload = None
@@ -690,7 +693,7 @@ class VLLMGeneration:
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
             obj_list = [payload]
             broadcast_object_list(obj_list, from_process=0)
-            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids = obj_list[0]
+            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids, all_sampling_mask = obj_list[0]
 
             # vllm_client.generate(n=num_generations) returns num_generations completions per prompt.
             # Duplicate prompt_ids to align with per-completion entries.
@@ -704,7 +707,7 @@ class VLLMGeneration:
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
             logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
-            sampling_mask = None
+            sampling_mask = all_sampling_mask[process_slice] if all_sampling_mask is not None else None
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
