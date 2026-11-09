@@ -1824,9 +1824,11 @@ class TestTokenAllowance(TrlTestCase):
         def drain():
             return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
 
-        async def settled(expected):
+        async def settled(worker, expected):
             deadline = time.monotonic() + 10
             while loop.rollout_buffer.qsize() < expected:
+                if worker.done():
+                    worker.result()  # raises the worker's error instead of timing out
                 assert time.monotonic() < deadline, (
                     f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
                 )
@@ -1840,12 +1842,12 @@ class TestTokenAllowance(TrlTestCase):
                 stop_event = asyncio.Event()
                 worker = asyncio.create_task(loop._run_loops(stop_event))
                 # Any allowance above 0 admits the first group in full
-                await settled(num_generations)
+                await settled(worker, num_generations)
                 sample_tokens = len(drain()[0].input_ids)
                 group_tokens = num_generations * sample_tokens
                 # The allowance now has room for 1.5 more groups: the worker starts both and stops there
                 loop._token_allowance.value = group_tokens + group_tokens * 3 // 2
-                await settled(2 * num_generations)
+                await settled(worker, 2 * num_generations)
                 stop_event.set()
                 await worker
 

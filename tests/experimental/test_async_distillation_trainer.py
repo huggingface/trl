@@ -530,14 +530,17 @@ class TestTokenAllowance:
     def test_generation_stops_at_the_allowance(self, fake_vllm_server):
         # Every sample has the same length, so the number of rollouts the allowance admits is exact
         PartialState()
-        loop = _rollout_loop(token_allowance=mp.Value("q", 1))
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hi"}]]})
+        loop = _rollout_loop(dataset=dataset, token_allowance=mp.Value("q", 1))
 
         def drain():
             return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
 
-        async def settled(expected):
+        async def settled(worker, expected):
             deadline = time.monotonic() + 10
             while loop.rollout_buffer.qsize() < expected:
+                if worker.done():
+                    worker.result()  # raises the worker's error instead of timing out
                 assert time.monotonic() < deadline, (
                     f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
                 )
@@ -553,11 +556,11 @@ class TestTokenAllowance:
                 stop_event = asyncio.Event()
                 worker = asyncio.create_task(loop._run_loops(stop_event))
                 # Any allowance above 0 admits the first rollout
-                await settled(1)
+                await settled(worker, 1)
                 sample_tokens = len(drain()[0].input_ids)
                 # The allowance now has room for 2.5 more rollouts: the worker starts 3 and stops there
                 loop._token_allowance.value = sample_tokens + sample_tokens * 5 // 2
-                await settled(3)
+                await settled(worker, 3)
                 stop_event.set()
                 await worker
 
