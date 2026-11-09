@@ -58,6 +58,7 @@ from trl.chat_template_utils import (
     lfm2_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
+    qwen3_6_v2_chat_template,
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
@@ -354,10 +355,11 @@ class TestAddResponseSchema:
         [
             pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
             pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
+            pytest.param(qwen3_6_v2_chat_template, id="qwen3.6-v2"),
             pytest.param(qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
     )
-    def test_add_response_schema_qwen3_coder(self, chat_template):
+    def test_add_response_schema_qwen3_xml_tool_calls(self, chat_template):
         # Without the tools' schema, XML argument values parse back as strings, so the arguments here are strings
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         tokenizer.chat_template = chat_template
