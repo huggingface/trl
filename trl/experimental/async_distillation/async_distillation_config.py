@@ -407,9 +407,6 @@ class AsyncDistillationConfig(_BaseConfig):
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
 
-        if self.token_budget is not None and self.token_budget <= 0:
-            raise ValueError(f"`token_budget` must be positive or `None`, got {self.token_budget}.")
-
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
         ):
