@@ -988,7 +988,7 @@ def stub_weight_transfer(monkeypatch):
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
-        # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
+        # Test that AsyncGRPOTrainer can be instantiated with only model, reward function and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1496,14 +1496,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             modules_to_save=["lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
         )
-        kwargs = {
-            "model": model,
-            "reward_funcs": varied_reward,
-            "args": training_args,
-            "train_dataset": dataset,
-            "peft_config": peft_config,
-        }
-        AsyncGRPOTrainer(**kwargs)  # must construct without raising
+        # Must construct without raising
+        AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
 
     @require_peft
     def test_peft_prompt_learning_raises(self):
@@ -2561,30 +2561,32 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_dataset_required_without_environment(self):
         # The data has to come from somewhere: an external `train_dataset`, or an environment that owns it. With
         # neither, construction fails fast.
-        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=5, report_to="none")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(ValueError, match="`train_dataset` is required"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
                 args=training_args,
             )
 
+    @require_response_parsing
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
-        # training length. The guard fires before the rollout worker is built, so no worker/dataset is needed.
+        # training length.
         class DummyEnvironment:
             def reset(self, **kwargs):
                 return "Guess the 5-letter word."
 
-        args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
-                args=args,
+                args=training_args,
                 environment_factory=DummyEnvironment,
             )
 
+    @require_response_parsing
     def test_multiple_environments_without_dataset_raises(self):
         # Multiple environments (a `dict` factory) need a `train_dataset` with an `environment` column to route each
         # example. Without one, there is no per-rollout selector, so construction fails fast with a clear message.
@@ -2594,12 +2596,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         class EnvB:
             def reset(self, **kwargs): ...
 
-        args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
         with pytest.raises(ValueError, match="requires a `train_dataset`"):
             AsyncGRPOTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
-                args=args,
+                args=training_args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
 
@@ -3146,7 +3148,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
     @pytest.mark.xfail(raises=TypeError, reason="`log_multimodal` is not supported", strict=True)
     def test_train_vlm_log_multimodal_false(self, vllm_server):
-        model_id = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -3154,13 +3155,13 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Gemma3ForConditionalGeneration").url,
             report_to="none",
             log_completions=True,
             log_multimodal=False,
         )
         trainer = AsyncGRPOTrainer(
-            model=model_id,
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
