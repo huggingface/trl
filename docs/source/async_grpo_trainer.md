@@ -277,9 +277,9 @@ Let's also define some terms to make token metrics unambiguous:
 
 Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
 
-- A name ending in `_count` is summed. `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
-- A name ending in `_max` or `_min` keeps the largest or smallest value.
-- A metric measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
 - Any other metric is the mean of the values recorded in the window.
 
 Units:
@@ -289,7 +289,7 @@ Units:
 - `_frac`: fraction between 0 and 1.
 - `_per_step`: amount in one optimizer step, averaged over the steps in the window.
 
-Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`, `tools/call_frequency`).
+Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`, `tools/call_frequency`). Some of them are computed differently; their rows below say how.
 
 ### How the batch numbers compose
 
