@@ -3978,9 +3978,6 @@ class TestGRPOTrainer(TrlTestCase):
             def get_reward(self) -> float:
                 return 1.0 if self._solved else 0.0
 
-        def format_reward(completions, **kwargs):
-            return [0.0 for _ in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -3991,14 +3988,14 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=format_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=DummyEnvironment,
         )
 
         # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
         # a fixed weight of 1.
-        assert trainer.reward_func_names == ["format_reward", "DummyEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "DummyEnvironment"]
         assert trainer.reward_weights.tolist() == [0.5, 1.0]
         assert len(trainer.reward_funcs) == 2
         # `get_reward` is not exposed as a tool; `guess` is.
@@ -4052,9 +4049,6 @@ class TestGRPOTrainer(TrlTestCase):
                 """
                 return x
 
-        def format_reward(completions, **kwargs):
-            return [0.0 for _ in completions]
-
         # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
         dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
 
@@ -4066,7 +4060,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=format_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
@@ -4075,7 +4069,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
         # column is appended after the trainer-owned reward func, with a fixed weight of 1.
-        assert trainer.reward_func_names == ["format_reward", "ScoredEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "ScoredEnvironment"]
         assert trainer.reward_weights.tolist() == [1.0, 1.0]
 
         # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
