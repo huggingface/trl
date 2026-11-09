@@ -131,11 +131,6 @@ def varied_reward(completions, **kwargs):
     return [float(i) for i in range(len(completions))]
 
 
-def length_reward(completions, **kwargs):
-    """Reward function that gives higher scores to longer completion content."""
-    return [float(len(completion[0]["content"])) for completion in completions]
-
-
 def unique_letters_reward(completions, **kwargs):
     """Reward function that rewards completions with more unique letters."""
     return [float(len(set(completion[0]["content"]))) for completion in completions]
@@ -1687,7 +1682,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[length_reward, unique_letters_reward],
+            reward_funcs=[str_length_reward, unique_letters_reward],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1719,7 +1714,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[length_reward, constant_reward, async_unique_letters_reward, AsyncCallableReward()],
+            reward_funcs=[str_length_reward, constant_reward, async_unique_letters_reward, AsyncCallableReward()],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1751,7 +1746,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[length_reward, all_none_reward],  # One applicable, one non applicable
+            reward_funcs=[str_length_reward, all_none_reward],  # One applicable, one non applicable
             args=training_args,
             train_dataset=dataset,
         )
