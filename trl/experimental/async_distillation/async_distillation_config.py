@@ -141,14 +141,12 @@ class AsyncDistillationConfig(_BaseConfig):
             Whether to append a tail bucket representing the remaining probability mass outside `teacher_top_k`, to
             avoid a trivially small divergence when `teacher_top_k` is small.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
-            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
-            within this budget, bounding peak memory independently of the sample count (the number of samples per row
-            becomes dynamic). If `None` (default), it is set to the student vLLM server's `max_model_len` (queried at
-            train start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A
-            sample longer than `token_budget` fits in no row and is dropped with a warning, counted as
-            `batch/dropped_oversize_total`. Set `<= 0` to disable token budgeting and instead pack a fixed
-            `per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows.
+            Maximum number of real tokens packed into a single row (one DP rank's forward). A `TokenBudgetBatcher`
+            forms Σ Lᵢ²-balanced micro-batches whose rows each stay within this budget, bounding peak memory
+            independently of the sample count (the number of samples per row becomes dynamic). If `None` (default), it
+            is set to the student vLLM server's `max_model_len` (queried at train start) — the cap on prompt +
+            completion length — so no rollout sample can ever exceed the budget. A sample longer than `token_budget`
+            fits in no row and is dropped with a warning, counted as `batch/dropped_oversize_total`.
 
         > Parameters that control the async rollout pipeline
 
@@ -348,12 +346,10 @@ class AsyncDistillationConfig(_BaseConfig):
     token_budget: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
-            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
-            "whose rows each stay within this budget. If None (default), it is set to the student vLLM server's "
-            "`max_model_len`. A sample longer than token_budget fits in no row and is dropped with a warning. Set "
-            "<= 0 to pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch instead, Σ "
-            "Lᵢ²-balanced across the rows."
+            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward). A "
+            "`TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay within this budget. If "
+            "None (default), it is set to the student vLLM server's `max_model_len`. A sample longer than "
+            "token_budget fits in no row and is dropped with a warning."
         },
     )
 

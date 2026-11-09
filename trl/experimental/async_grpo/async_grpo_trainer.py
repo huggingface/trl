@@ -27,7 +27,6 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
@@ -113,48 +112,6 @@ class _SupportsReset(Protocol):
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
-
-
-class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to
-    [`experimental.async_grpo.AsyncGRPOTrainer`].
-
-    The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
-    `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
-    runs reward models on their own GPUs.
-
-    Attributes:
-        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
-            a group with nothing to train on (all its scored rewards equal) or of a prompt `filter_prompt` rejected, so
-            the prompt still counts as consumed for epochs and checkpoint resume. The two queue types are structurally
-            identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default
-            [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while an
-            in-process worker uses `queue.Queue`.
-        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
-            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
-            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
-    """
-
-    rollout_buffer: queue.Queue | MPQueue
-    metrics_queue: queue.Queue | MPQueue
-
-    def start(self) -> None:
-        """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
-        ...
-
-    def stop(self) -> None:
-        """Stop the worker and release its resources. Called on train end."""
-        ...
-
-    def update_model_version(self, model_version: int) -> None:
-        """Tell the worker which policy version is now live, so it can tag or drop stale samples."""
-        ...
-
-    def check_health(self, stale_after_s: float) -> None:
-        """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
-        ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -392,60 +349,6 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
-class FixedCountBatcher(torch.utils.data.IterableDataset):
-    """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
-
-    Buffers `microbatch_size` (= `per_device_train_batch_size × num_processes`) samples, then partitions them across
-    the `num_processes` rows (one per DP rank) balanced by attention cost so no rank straggles at the per-micro-batch
-    all-reduce. The sample count is fixed, so this does not bound peak memory — use [`TokenBudgetBatcher`] for that.
-
-    A group's samples stay together so they share their prefix, and groups are placed costliest-first into the least
-    loaded row (LPT scheduling); attention is superlinear in length, so equal token counts would not equalize
-    wall-time. A micro-batch has fewer groups than rows as soon as `num_generations` exceeds
-    `per_device_train_batch_size`, so the largest group is halved until every rank gets one: a rank forwarding nothing
-    would desync FSDP/EP collectives. With `microbatch_size >= num_processes` such a group always exists.
-
-    Args:
-        dataset ([`RolloutQueueDataset`]):
-            Source yielding single rollout-sample dicts.
-        num_processes (`int`):
-            Number of DP ranks; the number of rows (one per rank) in each micro-batch.
-        microbatch_size (`int`):
-            Number of samples buffered into each micro-batch before it is partitioned and emitted.
-    """
-
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
-        self.dataset = dataset
-        self.num_processes = num_processes
-        self.microbatch_size = microbatch_size
-
-    def __iter__(self):
-        batch = []
-        for sample in self.dataset:
-            batch.append(sample)
-            if len(batch) < self.microbatch_size:
-                continue
-            groups = {}
-            for queued in batch:
-                groups.setdefault(queued["group_id"], []).append(queued)
-            groups = list(groups.values())
-            while len(groups) < self.num_processes:
-                largest = groups.pop(max(range(len(groups)), key=lambda i: len(groups[i])))
-                groups += [largest[: len(largest) // 2], largest[len(largest) // 2 :]]
-            priced = []
-            for group in groups:
-                priced.append(TreeRow())
-                for queued in group:
-                    priced[-1].add(queued)
-            rows = [TreeRow() for _ in range(self.num_processes)]
-            for group in sorted(priced, key=lambda row: row.load, reverse=True):
-                row = min(rows, key=lambda row: row.load)
-                for queued in group.samples:
-                    row.add(queued)
-            yield rows
-            batch = []
-
-
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
@@ -552,8 +455,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     Each row is a [`~packing.TreeRow`], so a token shared by several of its samples is forwarded once.
 
     The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
-    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at
-    the gradient all-reduce — so the collator only packs and tensorizes the given rows.
+    ([`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at the gradient all-reduce
+    — so the collator only packs and tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
@@ -614,8 +517,9 @@ class DataCollatorForRollout(DataCollatorMixin):
         compute a number rank 0 already had.
         """
         # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
-        # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
-        # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
+        # forwarded — the prompt, tool results, masked tokens, and the earlier turns a fork re-sends as context. FLOPs
+        # are spent on both, so both are worth a number, and their ratio is what says how much of the forward earns no
+        # gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
         trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
@@ -1009,11 +913,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
             tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
             any time without prior notice.
-        rollout_worker (`RolloutWorkerProtocol`, *optional*):
-            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
-            is created, which spawns a CUDA-free child process and scores completions with the trainer's
-            `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
-            one that runs reward models on their own GPUs. A custom worker ignores the trainer's `loop_cls`.
 
     To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
     [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
@@ -1056,7 +955,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
-        rollout_worker: RolloutWorkerProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -1372,27 +1270,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                 )
 
-            if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                self.rollout_worker = rollout_worker
-                if self._lora_sync:
-                    # The worker was built before the server was probed, so it does not know the adapter name yet.
-                    # Without it, its requests name the base model and keep sampling the base policy.
-                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
-            else:
-                self.rollout_worker = AsyncRolloutWorker(
-                    self.args,
-                    loop_cls=self.loop_cls,
-                    model_name=get_config_model_id(model.config),
-                    lora_name=self._lora_name if self._lora_sync else None,
-                    dataset=train_dataset,
-                    reward_funcs=reward_funcs,
-                    processing_class=processing_class,
-                    eos_token_ids=self.eos_token_ids,
-                    tools=tools,
-                    environment_factory=environment_factory,
-                    **self._rollout_loop_kwargs,
-                )
+            self.rollout_worker = AsyncRolloutWorker(
+                self.args,
+                loop_cls=self.loop_cls,
+                model_name=get_config_model_id(model.config),
+                lora_name=self._lora_name if self._lora_sync else None,
+                dataset=train_dataset,
+                reward_funcs=reward_funcs,
+                processing_class=processing_class,
+                eos_token_ids=self.eos_token_ids,
+                tools=tools,
+                environment_factory=environment_factory,
+                **self._rollout_loop_kwargs,
+            )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -1442,14 +1332,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
-            # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
-            # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
-            if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
-            else:
-                dataset = FixedCountBatcher(
-                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
-                )
+            dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
 
@@ -1467,7 +1350,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.
-                    token_budget=max(self.args.token_budget or 0, 0),
+                    token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
                 # NOTE(@aminediro):
@@ -1933,7 +1816,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             config.save_pretrained(output_dir)
 
     def _save_checkpoint(self, model, trial):
-        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1948,10 +1831,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         super()._save_checkpoint(model, trial)
 
     def _inner_training_loop(self, *args, **kwargs):
-        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over.
-        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._groups_before_resume = 0
             resume_from_checkpoint = kwargs.get("resume_from_checkpoint")

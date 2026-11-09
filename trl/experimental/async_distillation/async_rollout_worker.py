@@ -479,7 +479,7 @@ class _AsyncRolloutLoop:
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
         so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
-        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
+        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift or tool metrics to report.
         """
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
