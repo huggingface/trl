@@ -444,7 +444,7 @@ class AsyncGRPOConfig(_BaseConfig):
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
         # and batches are broadcast to other processes rather than each process pulling independently.
-        if not hasattr(self, "accelerator_config") or self.accelerator_config is None:
+        if self.accelerator_config is None:
             self.accelerator_config = {"split_batches": True, "dispatch_batches": True}
         elif isinstance(self.accelerator_config, dict):
             self.accelerator_config["split_batches"] = True

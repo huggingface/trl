@@ -1283,7 +1283,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 environment_factory=environment_factory,
                 **self._rollout_loop_kwargs,
             )
-            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
@@ -1353,9 +1352,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
-                # NOTE(@aminediro):
-                # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
-                # dataloader prepared by the Accelerator is only iterated through on the main process a
             )
         )
 
@@ -1645,7 +1641,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        # Worker metrics describe training rollouts, so they go to the train metrics even during eval
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
