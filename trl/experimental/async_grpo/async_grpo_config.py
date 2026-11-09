@@ -358,10 +358,10 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward). A "
-            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory independently of the sample "
-            "count. If None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
-            "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
-            "dropped with a warning."
+            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this "
+            "budget, bounding peak memory independently of the sample count. If None (default), it is set to the "
+            "vLLM server's `max_model_len` (queried at train start), so no rollout sample can ever exceed the budget. "
+            "A sample longer than `token_budget` fits in no row and is dropped with a warning."
         },
     )
 

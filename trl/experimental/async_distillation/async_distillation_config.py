@@ -347,8 +347,9 @@ class AsyncDistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of real tokens packed into a single row (one DP rank's forward). A "
-            "`TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay within this budget. If None (default), it is set to the student vLLM server's "
-            "`max_model_len`. A sample longer than token_budget fits in no row and is dropped with a warning."
+            "`TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay within this budget. If "
+            "None (default), it is set to the student vLLM server's `max_model_len`. A sample longer than "
+            "token_budget fits in no row and is dropped with a warning."
         },
     )
 
