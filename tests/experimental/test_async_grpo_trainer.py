@@ -449,7 +449,14 @@ class TransformersVLLMServer:
         if path == "/version":
             return {"version": "0.28.0"}  # the first vLLM that returns it
         if path == "/server_info":
-            return {"vllm_config": {"model_config": {"return_sampling_mask": True}}}
+            return {
+                "vllm_config": {
+                    "model_config": {"return_sampling_mask": True},
+                    # As without `--enable-lora`: the trainer syncs a PEFT model's merged weights
+                    "lora_config": None,
+                    "parallel_config": {"data_parallel_size": 1},
+                }
+            }
         if path == "/openapi.json":
             return {"paths": {"/inference/v1/generate": {}}}
         return None
