@@ -1213,7 +1213,7 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             packing=True,
-            max_length=64,
+            max_length=256,
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1230,8 +1230,8 @@ class TestSFTTrainer(TrlTestCase):
         assert num_eval_seqs == 2  # we should still have 2 seqs
 
         # Check that all sequences are shorter than the max length
-        assert all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"])
-        assert all(sum(x) <= 64 for x in trainer.eval_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.train_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.eval_dataset["seq_lengths"])
 
         # Check the number of sequences in train and eval datasets
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
@@ -1246,7 +1246,7 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             packing=True,
             eval_packing=False,
-            max_length=64,
+            max_length=256,
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1264,7 +1264,7 @@ class TestSFTTrainer(TrlTestCase):
         assert "seq_lengths" not in trainer.eval_dataset
 
         # Check that all sequences are shorter than the max length
-        assert all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.train_dataset["seq_lengths"])
 
         # Check the number of sequences in train and eval datasets
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
