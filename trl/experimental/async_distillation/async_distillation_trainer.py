@@ -682,7 +682,6 @@ class DataCollatorForRollout(DataCollatorMixin):
     prompts_trained: set[int] = field(default_factory=set)
     # The trainer's metric sink, shared by reference (like `prompts_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
-    # Per-row token cap of the planner,
     token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -818,7 +817,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         # weights that move once the adapter has been merged into them.
         if not is_peft and not param.requires_grad:
             continue
-        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        # Strip the prefixes DDP/FSDP1 and gradient checkpointing add, so the names match vLLM's
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -1253,7 +1252,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # NOTE: See https://github.com/huggingface/transformers/issues/42489
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
@@ -1839,7 +1839,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # Worker metrics describe training rollouts, so they go to the train metrics even during eval
+                        # The worker only generates training rollouts, so its metrics always go to the train metrics
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
@@ -1849,6 +1849,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
             valid = [v for v in val if isinstance(v, tuple) or not math.isnan(v)]
             metrics[key] = _reduce_metric(key, valid) if valid else None
 
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
@@ -1877,7 +1879,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         else:
             t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
+        # Total time and its three phases
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)

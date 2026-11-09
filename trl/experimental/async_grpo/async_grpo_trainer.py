@@ -472,11 +472,10 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
-    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    # Distinct prompt-group ids: exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
     # The trainer's metric sink, shared by reference (like `groups_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
-    # Per-row token cap of the planner,
     token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -566,7 +565,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         # weights that move once the adapter has been merged into them.
         if not is_peft and not param.requires_grad:
             continue
-        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        # Strip the prefixes DDP/FSDP1 and gradient checkpointing add, so the names match vLLM's
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -1104,7 +1103,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # NOTE: See https://github.com/huggingface/transformers/issues/42489
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
@@ -1448,16 +1448,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
+        # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
+        # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
         loss = per_token_loss.sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
         loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
@@ -1641,7 +1638,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # Worker metrics describe training rollouts, so they go to the train metrics even during eval
+                        # The worker only generates training rollouts, so its metrics always go to the train metrics
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
@@ -1681,7 +1678,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
+        # Total time and its three phases
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)

@@ -781,10 +781,9 @@ class AsyncRolloutLoop:
                         )
                     # Draw a reusable environment instance for this rollout (creating one only if the pool is
                     # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
-                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
-                    # previously discarded, so an environment_factory whose task lives in the observation (not the
-                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
-                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # prompt and capture its initial observation (e.g. a task instruction), since an environment can
+                    # hold the task in the observation rather than in the dataset prompt. Mirror GRPOTrainer: fold the
+                    # observation into the last prompt message. reset() may be stochastic, so this is done per generation (each
                     # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
                     # field in multi-environment mode, so it is not forwarded to `reset`.
                     environment = None
@@ -1549,7 +1548,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 

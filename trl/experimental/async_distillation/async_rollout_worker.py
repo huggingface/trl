@@ -726,7 +726,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 
