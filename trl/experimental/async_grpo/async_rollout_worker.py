@@ -664,8 +664,7 @@ class AsyncRolloutLoop:
             logger.info(
                 f"vllm worker started: num_generations={self.config.num_generations}, "
                 f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
-                f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}, min_p={self.config.min_p}, "
-                f"repetition_penalty={self.config.repetition_penalty}"
+                f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}, min_p={self.config.min_p}"
             )
             await self.setup()
             try:
@@ -1023,7 +1022,10 @@ class AsyncRolloutLoop:
         return True
 
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
-        """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
+        """Retry an aiohttp coroutine on transport errors and 5xx responses with bounded exponential backoff, counting the
+        retries.
+
+        A 4xx is raised at once, since sending the same request again gets the same answer.
 
         Every retried call in this loop targets vLLM, so the counter is named for the dependency rather than for the
         transport.
@@ -1032,7 +1034,9 @@ class AsyncRolloutLoop:
             try:
                 return await coro_factory()
             except _RETRYABLE_HTTP_ERRORS as e:
-                if attempt >= max_attempts - 1:
+                if attempt >= max_attempts - 1 or (
+                    isinstance(e, aiohttp.ClientResponseError) and 400 <= e.status < 500
+                ):
                     raise
                 self._counters["rollout/vllm_retry_total"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
@@ -1267,7 +1271,9 @@ class AsyncRolloutLoop:
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
             "top_k": self.config.top_k,
-            "repetition_penalty": self.config.repetition_penalty,
+            # Explicit: vLLM fills an omitted penalty from the model's generation config (1.05 for Qwen2.5-Instruct),
+            # and the trainer's log-probs carry none
+            "repetition_penalty": 1.0,
             "n": 1,
             "logprobs": self.num_sampler_logprobs,
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
@@ -1489,7 +1495,10 @@ class AsyncRolloutLoop:
             async with self.session.post(
                 f"{self.vllm_server_url}{path}", json=payload, timeout=client_timeout
             ) as response:
-                response.raise_for_status()
+                if response.status >= 400:
+                    raise aiohttp.ClientResponseError(
+                        response.request_info, response.history, status=response.status, message=await response.text()
+                    )
                 content = await response.json()
                 return content if content else {}
 
