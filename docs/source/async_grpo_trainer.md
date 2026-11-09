@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 Then execute the script on GPU 1 using the following command:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
+CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
 ```
 
 ## Looking deeper into the Asynchronous GRPO method
@@ -227,7 +227,7 @@ VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
 - `VLLM_SERVER_DEV_MODE=1` and `--weight-transfer-config` expose the endpoints the trainer sends its weights through.
 - `--logprobs-mode processed_logprobs` makes the server return the log-probabilities of the distribution it sampled from, after temperature and top-k/top-p, which is what the importance ratio compares against.
 - `--api-server-count 8` keeps the top log-probabilities that score centering requests cheap to serve (see the warning below).
-- `--max-model-len` is the maximum total sequence length (prompt and completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config. It is also the default `token_budget`.
+- `--max-model-len` is the maximum total sequence length (prompt and completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config. With tools, every turn adds up to `max_completion_length` tokens plus the tool results, so set it to the longest conversation you expect. If a turn's prompt plus `max_completion_length` is longer than `--max-model-len`, the server rejects the request and the run stops with the server's error. With `top_k` or `top_p`, the server instead stops that turn when it reaches `--max-model-len`, and only rejects a prompt that is already that long. It is also the default `token_budget`.
 
 > [!WARNING]
 > Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.

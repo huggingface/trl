@@ -28,9 +28,8 @@
 pip install math_verify
 
 # For Qwen/Qwen2.5-VL-3B-Instruct
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/rloo_visual_math/rloo_visual_math.py \
+torchrun --nproc_per_node 8 examples/rloo_visual_math/rloo_visual_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir rloo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
@@ -45,9 +44,8 @@ accelerate launch \
 # For HuggingFaceTB/SmolVLM2-2.2B-Instruct
 pip install num2words==0.5.14
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/rloo_visual_math/rloo_visual_math.py \
+torchrun --nproc_per_node 8 examples/rloo_visual_math/rloo_visual_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir rloo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
