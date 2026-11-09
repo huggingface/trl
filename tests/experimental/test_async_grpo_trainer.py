@@ -44,6 +44,7 @@ from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
+from transformers.utils import is_peft_available
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
@@ -87,6 +88,11 @@ from ..testing_utils import (
     require_torch_accelerator,
     require_vllm,
 )
+
+
+if is_peft_available():
+    import peft
+    from peft import LoraConfig, PrefixTuningConfig, get_peft_model
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -1335,6 +1341,252 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             # Check the torch dtype
             assert new_param.dtype == torch.float16
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_init_is_seeded(self, vllm_server):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        server = vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=varied_reward,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, vllm_server_base_url=server.url, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
+    def test_train_peft_config(self, vllm_server):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    @pytest.mark.parametrize("target_modules", [["q_proj", "v_proj", "lm_head"], r".*_head$"])
+    def test_peft_lm_head_raises(self, target_modules):
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        # The check is on the module rather than on `target_modules`, which a regex can match without naming the head.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=target_modules,
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
+        with pytest.raises(ValueError, match="lm_head"):
+            AsyncGRPOTrainer(
+                model=model,
+                reward_funcs=varied_reward,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+    @require_peft
+    def test_peft_modules_to_save_lm_head_allowed(self, vllm_server):
+        # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
+        # so `lm_head.weight` resolves to the trained weight and the chunked projection trains it correctly. This is the documented
+        # workaround in the guard's error message, so it must stay unblocked.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        peft_config = LoraConfig(
+            target_modules=["q_proj", "v_proj"],
+            modules_to_save=["lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
+        kwargs = {
+            "model": model,
+            "reward_funcs": varied_reward,
+            "args": training_args,
+            "train_dataset": dataset,
+            "peft_config": peft_config,
+        }
+        AsyncGRPOTrainer(**kwargs)  # must construct without raising
+
+    @require_peft
+    def test_peft_prompt_learning_raises(self):
+        # Prompt-learning adds virtual tokens rather than weights, which the weight sync cannot carry to the vLLM server
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="Prompt-learning"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=varied_reward,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
+            )
+
+    @require_peft
+    def test_train_peft_model(self, vllm_server):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        lora_config = LoraConfig()
+        model = get_peft_model(model, lora_config)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_moe_peft_model(self, vllm_server):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
+        model = get_peft_model(model, lora_config)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
+    # default in `AsyncGRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly
+    # test PEFT + gradient checkpointing, which has caused issues in the past.
+    @require_peft
+    def test_train_peft_with_gradient_checkpointing(self, vllm_server):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            gradient_checkpointing=True,  # enable gradient checkpointing
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_fp16(self, vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -4900,33 +5152,6 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 train_dataset=dataset,
                 peft_config=peft_config,
             )
-
-    def test_train_peft_config(self, fake_vllm):
-        trainer = self._build(fake_vllm, self._lora_config())
-        previous_params = {n: p.clone() for n, p in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        for name, param in previous_params.items():
-            new_param = trainer.model.get_parameter(name)
-            if "lora_" in name:
-                assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
-            else:
-                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
-                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
-                # learning rate would move them by orders of magnitude more.
-                torch.testing.assert_close(
-                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
-                )
-
-    @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
-    def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
-        # The chunked log-probability path reads `lm_head.weight`, which on a PEFT-wrapped head is the base weight:
-        # the adapter delta would be silently dropped from every trainer logprob. The regex case is why the check is
-        # on the module and not on `target_modules` — that string never contains "lm_head".
-        with pytest.raises(ValueError, match="lm_head"):
-            self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
 
     def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
         # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
