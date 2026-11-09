@@ -4930,7 +4930,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -5003,7 +5002,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -5084,7 +5082,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -5146,7 +5143,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
