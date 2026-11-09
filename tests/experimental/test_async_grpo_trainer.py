@@ -1770,6 +1770,39 @@ class TestWorkerMetricPush(TrlTestCase):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
+class TestVLLMErrors(TrlTestCase):
+    def test_a_rejected_request_is_not_retried_and_keeps_the_server_message(self):
+        import aiohttp
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
+        PartialState()
+        loop = _rollout_loop()
+        requests_seen = []
+
+        async def completions(request):
+            requests_seen.append(await request.json())
+            return web.json_response(
+                {"error": {"message": "This model's maximum context length is 64 tokens"}}, status=400
+            )
+
+        app = web.Application()
+        app.router.add_post("/v1/completions", completions)
+
+        async def run():
+            async with TestServer(app) as server, aiohttp.ClientSession() as session:
+                loop.vllm_server_url = str(server.make_url("")).rstrip("/")
+                loop.session = session
+                with pytest.raises(aiohttp.ClientResponseError, match="maximum context length is 64 tokens"):
+                    await loop.generate_one_turn([1, 2, 3])
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
+        assert len(requests_seen) == 1
+
+
 class TestToolExecution(TrlTestCase):
     @staticmethod
     def _call(name, **arguments):
