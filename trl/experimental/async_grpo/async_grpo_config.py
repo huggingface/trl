@@ -424,9 +424,6 @@ class AsyncGRPOConfig(_BaseConfig):
                 "sampled token with `top_k` (e.g. `top_k=512`)."
             )
 
-        if self.token_budget is not None and self.token_budget <= 0:
-            raise ValueError(f"`token_budget` must be positive or `None`, got {self.token_budget}.")
-
         if self.num_generations < 2:
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
