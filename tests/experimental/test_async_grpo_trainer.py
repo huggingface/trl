@@ -1738,12 +1738,12 @@ class TestMetricReduction(TrlTestCase):
     def test_rate_is_sum_over_sum_not_mean_of_ratios(self):
         # The two windows have rates 1 tok/s and 100 tok/s. Meaning the ratios would give 50.5; the honest rate is
         # total tokens over total seconds. This is the defect that made `training_tok/s` unusable.
-        assert _reduce_metric("perf/forwarded_tokens_per_s_e2e", [(100.0, 100.0), (100.0, 1.0)]) == pytest.approx(
-            200 / 101
-        )
+        assert _reduce_metric(
+            "perf/forwarded_tokens_per_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)]
+        ) == pytest.approx(200 / 101)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_e2e", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_wall_clock", [(0.0, 0.0)]))
 
 
 class TestWorkerMetricPush(TrlTestCase):
