@@ -723,7 +723,7 @@ class AsyncRolloutLoop:
         resets the server's caches, which preempts every running request.
         """
         rollouts_at_change = 0
-        preemptions_seen = 0.0
+        preemptions_seen = None
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
@@ -750,6 +750,8 @@ class AsyncRolloutLoop:
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if preemptions_seen is None:
+                preemptions_seen = preemptions
             if usage > 0.8 and self._concurrency <= self._kv_cap:
                 self._kv_cap = max(1, int(self._kv_cap * 0.7))
                 rollouts_at_change = self._total_rollouts

@@ -1037,7 +1037,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 text=f'vllm:cache_config_info{{block_size="16",engine="0",kv_cache_size_tokens="4000"}} 1.0\n'
                 f'vllm:kv_cache_usage_perc{{engine="0"}} {usage}\n'
                 f'vllm:num_requests_waiting{{engine="0"}} 0.0\n'
-                f'vllm:num_preemptions_total{{engine="0"}} 0.0\n'
+                f'vllm:num_preemptions_total{{engine="0"}} {100 + load["polls"]}\n'  # counts since server start
             )
 
         async def models(request):
@@ -1103,6 +1103,13 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 if group is not None:  # the loop ends on a `None` sentinel for the score loop
                     groups.append(group)
             assert groups and all(len(group.completions) == 2 for group in groups)
+            payloads = [loop._metrics_queue.get(timeout=5) for _ in range(loop._metrics_queue.qsize())]
+            preemptions = [
+                p["rollout/vllm_preemption_count"] for p in payloads if "rollout/vllm_preemption_count" in p
+            ]
+            # The first poll only records the server's running total; each later poll reports what was added since
+            assert preemptions[0] == 0 and set(preemptions[1:]) == {1}
+            assert all("rollout/vllm_kv_cache_usage_frac" in p for p in payloads if "rollout/concurrency_cap" in p)
         finally:
             loop._loop.close()
 
