@@ -327,8 +327,9 @@ class GRPOConfig(_BaseConfig):
             the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
             later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`,
             `min_p > 0` and structured outputs, which restrict it to the tokens the grammar allows, require `top_k > 0`
-            (e.g. `top_k=512`). vLLM also applies `repetition_penalty` to the logprobs it returns, so
-            `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
+            (e.g. `top_k=512`). Structured outputs, which would otherwise stall training, also require
+            `vllm_mode="colocate"` and vLLM 0.28 or later. vLLM also applies `repetition_penalty` to the logprobs it
+            returns, so `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -936,8 +937,9 @@ class GRPOConfig(_BaseConfig):
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
             '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
             "candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured outputs, which restrict it to the "
-            "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`). vLLM also applies `repetition_penalty` "
-            "to the logprobs it returns, so `repetition_penalty != 1.0` requires "
+            "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`). Structured outputs, which would "
+            'otherwise stall training, also require `vllm_mode="colocate"` and vLLM 0.28 or later. vLLM also applies '
+            "`repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
             "`vllm_importance_sampling_correction=False`."
         },
     )

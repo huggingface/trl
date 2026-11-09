@@ -1159,6 +1159,16 @@ class GRPOTrainer(_BaseTrainer):
                 and self.temperature > 0
                 and is_vllm_available(min_version="0.28.0")
             )
+            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+                args.generation_kwargs or {}
+            )
+            if self.vllm_importance_sampling_correction and structured_outputs and not return_sampling_mask:
+                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
+                raise ValueError(
+                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
+                    "sampled token, which takes `vllm_mode='colocate'` and vLLM >= 0.28. Alternatively, set "
+                    "`vllm_importance_sampling_correction=False`."
+                )
             if self.vllm_importance_sampling_correction and filtered_sampling and not return_sampling_mask:
                 logger.warning(
                     "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "

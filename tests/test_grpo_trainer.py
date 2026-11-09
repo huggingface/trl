@@ -2407,6 +2407,26 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="top_k"):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
 
+    @require_vllm
+    def test_vllm_server_structured_outputs_raises(self):
+        # In server mode, the trainer gets no candidate set from vLLM, so the importance ratio would be ~0
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="server",
+            top_k=10,
+            vllm_structured_outputs_regex=r"\d+",
+        )
+        with pytest.raises(ValueError, match="vllm_mode='colocate'"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_vllm_repetition_penalty_requires_no_importance_sampling_correction(self):
         with pytest.raises(ValueError, match="repetition_penalty"):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", repetition_penalty=1.2)
