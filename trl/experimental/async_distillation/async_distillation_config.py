@@ -38,12 +38,10 @@ class AsyncDistillationConfig(_BaseConfig):
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
             defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
-            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked
-            through for them in [Defeating the trainer-generator precision mismatch in
-            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
-            trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
-            same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
-            unaffected: they are never updated.
+            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788)) is
+            sensitive to the trainer's own precision. Closing that gap end to end also requires serving the student's
+            vLLM server in the same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence.
+            Teacher servers are unaffected: they are never updated.
 
             This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
             default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
