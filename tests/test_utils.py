@@ -33,7 +33,6 @@ from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
     add_fused_lm_head,
-    adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
     create_model_from_path,
@@ -2299,6 +2298,23 @@ class TestComputeFlopsPerToken(TrlTestCase):
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",  # linear attention, shared experts
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_unsupported_model_type(self, model_id):
+        cfg = AutoConfig.from_pretrained(model_id).get_text_config()
+        assert compute_flops_per_token(cfg, 16384) is None
+
 
 class TestGetPeakFlops:
     @pytest.mark.parametrize(
@@ -2354,43 +2370,3 @@ class TestComputeMfu(TrlTestCase):
         world_size = 8
         tps = peak * world_size / flops
         assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
-
-
-class TestAdjustedMfu(TrlTestCase):
-    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
-
-    def test_consistent_with_formula(self):
-        # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
-        # `full = compute_flops_per_token(cfg, seq_len)` and
-        # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        seq_len = 16384
-        flops_full = compute_flops_per_token(cfg, seq_len)
-        half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
-        expected = 100.0 * (flops_full - half_attn) / flops_full
-        assert adjusted_mfu(100.0, cfg, seq_len) == pytest.approx(expected)
-
-    def test_proportional_to_input(self):
-        # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
-        # equal `2 * adjusted_mfu(x, ...)`.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        a = adjusted_mfu(50.0, cfg, 16384)
-        b = adjusted_mfu(100.0, cfg, 16384)
-        assert b == pytest.approx(2 * a)
-
-    def test_decreases_with_seq_len(self):
-        # Longer sequences → attention takes a larger share of total compute → causal
-        # correction subtracts a larger absolute amount → factor strictly decreases.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        f_short = adjusted_mfu(100.0, cfg, 4096)
-        f_med = adjusted_mfu(100.0, cfg, 16384)
-        f_long = adjusted_mfu(100.0, cfg, 65536)
-        assert f_short > f_med > f_long
-
-    def test_config_without_head_dim(self):
-        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
-        # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
-        derived = adjusted_mfu(100.0, cfg, 16384)
-        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
-        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
