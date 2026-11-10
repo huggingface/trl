@@ -1147,6 +1147,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
 
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        if "image" in dataset_sample or "images" in dataset_sample:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but `AsyncGRPOTrainer` "
+                "trains on text only, vision-language models included. Please remove the images from your dataset."
+            )
+
         # Initialize the Trainer
         super().__init__(
             model=model,
