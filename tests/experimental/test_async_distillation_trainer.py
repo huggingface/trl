@@ -19,8 +19,10 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import threading
 import time
 from collections import OrderedDict, defaultdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -54,6 +56,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
+    _pool_keepalive_timeout,
     _spawn_stop_watcher,
 )
 from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
@@ -1604,3 +1607,40 @@ class TestStopWatcher:
         stop_event.set()
         watcher.join(timeout=5)
         assert not watcher.is_alive()
+
+
+def _serve_keepalive(keepalive: int | None) -> ThreadingHTTPServer:
+    """Serve `/server_info` like a dev-mode vLLM server with `VLLM_HTTP_TIMEOUT_KEEP_ALIVE=keepalive`, or 404 it."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if keepalive is None:
+                self.send_error(404)
+                return
+            body = json.dumps({"vllm_env": {"VLLM_HTTP_TIMEOUT_KEEP_ALIVE": keepalive}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.mark.parametrize(
+    "keepalives, expected",
+    [([10], 9.0), ([10, None], 4.0), ([None], 4.0), ([3, 10], 2.0)],
+)
+def test_pool_keepalive_timeout_stays_under_the_shortest_server(keepalives, expected):
+    servers = [_serve_keepalive(k) for k in keepalives]
+    try:
+        urls = [f"http://127.0.0.1:{s.server_address[1]}" for s in servers]
+        assert asyncio.run(_pool_keepalive_timeout(urls)) == expected
+    finally:
+        for s in servers:
+            s.shutdown()
