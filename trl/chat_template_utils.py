@@ -146,7 +146,7 @@ def clone_chat_template(
 
 
 glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?$",
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|(?:user|observation|endoftext)\|>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?(?:<\|(?:user|observation|endoftext)\|>)?$",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -693,6 +693,16 @@ gemma4_v4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4.jinja").read_text(en
 
 gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(encoding="utf-8")
 
+gemma4_v6_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v6.jinja").read_text(encoding="utf-8")
+
+gemma4_v7_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v7.jinja").read_text(encoding="utf-8")
+
+gemma4_v8_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v8.jinja").read_text(encoding="utf-8")
+
+gemma4_v9_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v9.jinja").read_text(encoding="utf-8")
+
+gemma4_v10_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v10.jinja").read_text(encoding="utf-8")
+
 glm4_7_chat_template = (_CHAT_TEMPLATES_DIR / "glm4_7.jinja").read_text(encoding="utf-8")
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
@@ -757,10 +767,14 @@ phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
+
 # Also matches Qwen2-VL, which ships a byte-identical chat template.
 qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text(encoding="utf-8")
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="utf-8")
+
+qwen3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2.jinja").read_text(encoding="utf-8")
 
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
 
@@ -774,7 +788,11 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
+qwen3_6_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_v2.jinja").read_text(encoding="utf-8")
+
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
+qwen3_8_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_v2.jinja").read_text(encoding="utf-8")
 
 qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_text(encoding="utf-8")
 
@@ -828,11 +846,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == deepseekv3_chat_template:
+    if chat_template in [deepseekv3_chat_template, deepseekv3_training_chat_template]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseekv3_template
-    elif chat_template == glm4moe_chat_template:
+    elif chat_template in [glm4moe_chat_template, glm4moe_training_chat_template]:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template in [
         glm4_7_chat_template,
@@ -845,39 +863,57 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, glm4moe_template
-    elif chat_template == gptoss_chat_template:
+    elif chat_template in [gptoss_chat_template, gptoss_training_chat_template]:
         schema, template = gptoss_schema, gptoss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
+        qwen2_5_training_chat_template,
+        qwen2_5_base_chat_template,
+        qwen2_5_base_training_chat_template,
         qwen3_chat_template,
         qwen3_training_chat_template,
+        qwen3_v2_chat_template,
+        qwen3_v2_training_chat_template,
         qwen3_instruct_2507_chat_template,
+        qwen3_instruct_2507_training_chat_template,
         qwen3_vl_chat_template,
+        qwen3_vl_training_chat_template,
     ]:
         schema, template = qwen3_schema, qwen3_template
-    elif chat_template == qwen3_thinking_2507_chat_template:
+    elif chat_template in [qwen3_thinking_2507_chat_template, qwen3_thinking_2507_training_chat_template]:
         # Only the new-style template: the legacy `qwen3_schema` does not handle the `<think>` pre-fill
         schema, template = None, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
+        qwen3_5_nothink_training_chat_template,
         qwen3_5_think_chat_template,
+        qwen3_5_think_training_chat_template,
         qwen3_6_chat_template,
+        qwen3_6_v2_chat_template,
+        qwen3_6_training_chat_template,
         qwen3_8_chat_template,
+        qwen3_8_v2_chat_template,
+        qwen3_8_training_chat_template,
         qwen3_coder_chat_template,
         qwen3_coder_next_chat_template,
     ]:
         schema, template = qwen3_5_schema, qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
+        nemotron_3_nano_training_chat_template,
         nemotron_3_super_chat_template,
+        nemotron_3_super_training_chat_template,
         nemotron_3_ultra_chat_template,
+        nemotron_3_ultra_training_chat_template,
         nemotron_3_5_lightning_chat_template,
+        nemotron_3_5_lightning_training_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
     elif chat_template in [
         lfm2_v2_chat_template,
+        lfm2_v2_training_chat_template,
         lfm2_2_5_chat_template,
         lfm2_2_5_v2_chat_template,
         lfm2_2_5_vl_v2_chat_template,
@@ -895,11 +931,16 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         gemma4_v3_chat_template,
         gemma4_v4_chat_template,
         gemma4_v5_chat_template,
+        gemma4_v6_chat_template,
+        gemma4_v7_chat_template,
+        gemma4_v8_chat_template,
+        gemma4_v9_chat_template,
+        gemma4_v10_chat_template,
     ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
-    elif chat_template == deepseek_r1_distill_chat_template:
+    elif chat_template in [deepseek_r1_distill_chat_template, deepseek_r1_distill_training_chat_template]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseek_r1_distill_template
@@ -1200,9 +1241,13 @@ phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
+
 qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.jinja").read_text(encoding="utf-8")
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text(encoding="utf-8")
+
+qwen3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2_training.jinja").read_text(encoding="utf-8")
 
 qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(
     encoding="utf-8"
@@ -1232,17 +1277,22 @@ smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja"
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
     tokenizer: PreTrainedTokenizerBase | None = None,
+    require_prefix_preservation: bool = True,
 ) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
-    %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    The supported templates are listed in [Training templates](chat_templates#training-templates).
+    %%}` markers for assistant-only loss masking. A template with a stored training template always gets it, even when
+    it has markers of its own. Returns `None` if any other template already satisfies the requirements. The supported
+    templates are listed in [Training templates](chat_templates#training-templates).
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or processor instance to check.
+        require_prefix_preservation (`bool`, *optional*, defaults to `True`):
+            Whether a template without a stored training template must also be prefix-preserving to be returned as is.
+            Assistant-only loss only needs the markers, so `SFTTrainer` sets it to `False`.
 
     Returns:
         `str` or `None`:
@@ -1303,12 +1353,7 @@ def get_training_chat_template(
     if isinstance(chat_template, dict):
         chat_template = chat_template["default"]
 
-    # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
-    # (the check itself renders a tool message), so skip it otherwise.
-    prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and has_generation_markers(chat_template):
-        return None  # No patching needed
-
+    # A stored template gets its training template, even when it has markers of its own (#8182)
     if chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
@@ -1390,11 +1435,17 @@ def get_training_chat_template(
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
+    if chat_template == qwen2_5_base_chat_template:
+        return qwen2_5_base_training_chat_template
+
     if chat_template == qwen2_5_vl_chat_template:
         return qwen2_5_vl_training_chat_template
 
     if chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
+
+    if chat_template == qwen3_v2_chat_template:
+        return qwen3_v2_training_chat_template
 
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
@@ -1414,11 +1465,27 @@ def get_training_chat_template(
     if chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
+    if chat_template == qwen3_6_v2_chat_template:
+        return qwen3_6_training_chat_template
+
     if chat_template == qwen3_8_chat_template:
+        return qwen3_8_training_chat_template
+
+    if chat_template == qwen3_8_v2_chat_template:
         return qwen3_8_training_chat_template
 
     if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
+
+    # Otherwise, check if patching is needed. Prefix-preservation only matters when the template actually supports
+    # tools (the check itself renders a tool message), so skip it otherwise.
+    prefix_ok = (
+        not require_prefix_preservation
+        or not supports_tool_calling(processing_class)
+        or is_chat_template_prefix_preserving(processing_class)
+    )
+    if prefix_ok and has_generation_markers(chat_template):
+        return None  # No patching needed
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
