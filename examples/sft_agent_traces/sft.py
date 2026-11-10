@@ -71,7 +71,7 @@ def main():
         dataset = dataset.select(range(min(args.max_rows, len(dataset))))
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    template = get_training_chat_template(tokenizer)
+    template = get_training_chat_template(tokenizer, require_prefix_preservation=False)  # as SFTTrainer loads it
 
     def n_tokens(row):
         ids = tokenizer.apply_chat_template(
@@ -98,8 +98,7 @@ def main():
         bf16=torch.cuda.is_available(),
         logging_steps=1,
         save_strategy="no",
-        # Trackio publishes its dashboard as a public Space when the model is pushed, so a private run logs to the job
-        # output only.
+        # Trackio's dashboard is a Space that can be public, so a private run logs to the job output only.
         report_to="none" if args.private else "trackio",
         run_name=run_name,
         push_to_hub=True,

@@ -39,7 +39,7 @@ hf jobs uv run --flavor cpu-upgrade --timeout 4h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
     --model qwen/qwen3.5-397b-a17b --llm-url https://router.huggingface.co/novita/v3/openai \
     --dataset FineEnvs/SmolDataEnvs-harbor-train --exclude-datasets-of FineEnvs/SmolDataEnvs-harbor-eval \
-    --num-tasks 500 --workers 12 --push-to <you>/smoldataenvs-rollouts --run-name teacher-397b
+    --num-tasks 640 --workers 12 --push-to <you>/smoldataenvs-rollouts --private --run-name teacher-397b
 ```
 
 Evaluate a model (vLLM on the job's GPU):
@@ -47,9 +47,9 @@ Evaluate a model (vLLM on the job's GPU):
 ```sh
 hf jobs uv run --flavor a10g-large --timeout 3h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
-    --model Qwen/Qwen3.5-2B --serve \
+    --model Qwen/Qwen3.5-2B --serve --reward-key correctness,reward \
     --dataset FineEnvs/SmolDataEnvs-harbor-eval --num-tasks 144 --workers 8 \
-    --push-to <you>/smoldataenvs-rollouts --run-name eval-qwen3.5-2b
+    --push-to <you>/smoldataenvs-rollouts --private --run-name eval-qwen3.5-2b
 ```
 
 Locally, replace `hf jobs uv run ... rollouts.py` with `uv run examples/sft_agent_traces/rollouts.py`. Sandboxes are
@@ -73,6 +73,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub.hf_api import RepoFolder
 
 
 # Image of the SmolDataEnvs train split. The eval split ships the same Dockerfile but doesn't pin an image in
@@ -122,6 +123,15 @@ def kaggle_datasets(dataset: str, workdir: pathlib.Path) -> dict[str, str]:
     }
 
 
+def sandbox_env(config: dict) -> list:
+    """Every value of an `env` table in a `task.toml`, at any depth: what the task passes into its sandbox."""
+    values = []
+    for key, value in config.items():
+        if isinstance(value, dict):
+            values += list(value.values()) if key == "env" else sandbox_env(value)
+    return values
+
+
 def fetch_tasks(
     dataset: str, indices: list[int], workdir: pathlib.Path, docker_image: str, exclude_of: str | None = None
 ) -> list[str]:
@@ -130,7 +140,8 @@ def fetch_tasks(
     With `exclude_of`, tasks built on a Kaggle dataset that also backs a task of that split are skipped first, and
     `indices` count the remaining tasks.
     """
-    names = sorted(f.path for f in HfApi().list_repo_tree(dataset, repo_type="dataset", path_in_repo="tasks"))
+    tree = HfApi().list_repo_tree(dataset, repo_type="dataset", path_in_repo="tasks")
+    names = sorted(f.path for f in tree if isinstance(f, RepoFolder))  # one folder per task, as OpenEnv indexes them
     if exclude_of:
         held_out = set(kaggle_datasets(exclude_of, workdir / "exclude").values())
         own = kaggle_datasets(dataset, workdir / "metadata")
@@ -148,6 +159,8 @@ def fetch_tasks(
             text = text.replace("[environment]\n", f'[environment]\ndocker_image = "{docker_image}"\n', 1)
         # The task's files come from a public bucket, so the sandbox doesn't need the caller's token.
         text = re.sub(r'(?m)^HF_TOKEN\s*=\s*"\$\{HF_TOKEN\}"\s*\n', "", text)
+        if any("HF_TOKEN" in str(value) for value in sandbox_env(tomllib.loads(text))):
+            sys.exit(f"{task}/task.toml passes HF_TOKEN to the sandbox in a form this script doesn't remove")
         toml.write_text(text)
     return [p.split("/")[-1] for p in picked]
 
@@ -175,7 +188,7 @@ def serve(model: str, max_model_len: int, log_path: pathlib.Path) -> tuple[str, 
             return url, proc
         except OSError:
             time.sleep(10)
-    sys.exit(f"vLLM did not come up in 30 minutes, see {log_path}")
+    sys.exit(f"vLLM did not come up in time, see {log_path}")
 
 
 def main():
@@ -266,18 +279,24 @@ def main():
         ]  # fmt: skip
         if args.reward_key:
             cmd += ["--reward-key", args.reward_key]
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
-            log = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=args.task_timeout)
+            output, _ = proc.communicate(timeout=args.task_timeout)
         except subprocess.TimeoutExpired:
-            print(f"[{name}] killed after {args.task_timeout} s", flush=True)
+            # SIGTERM first, so `openenv` closes its tunnel and sandbox before the port is reused
+            proc.terminate()
+            try:
+                proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+            print(f"[{name}] stopped after {args.task_timeout} s", flush=True)
             return
         finally:
             ports.put(port)
         if not result.exists():
-            fatal = [
-                line.strip() for line in (log.stdout + log.stderr).splitlines() if "FATAL" in line or "Error" in line
-            ]
-            print(f"[{name}] no result (exit {log.returncode}): {' | '.join(fatal[-3:])}", flush=True)
+            fatal = [line.strip() for line in output.splitlines() if "FATAL" in line or "Error" in line]
+            print(f"[{name}] no result (exit {proc.returncode}): {' | '.join(fatal[-3:])}", flush=True)
             return
         upload(result)
         # OpenEnv labels most OpenCode rollouts FAILED, since OpenCode exits with code 1 even when it finishes
@@ -310,8 +329,10 @@ def main():
         "ungraded": sum(r is None for r in rewards),
     }
     summary["solve_rate"] = summary["solved"] / max(len(names), 1)  # a task with no result counts as unsolved
-    (out / "summary.json").write_text(json.dumps(summary, indent=2))
-    upload(out / "summary.json")
+    # named after the first task, so Jobs splitting one run into slices don't overwrite each other's
+    summary_path = out / f"summary_{indices[0]:05d}.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    upload(summary_path)
     if args.serve:
         upload(out / "vllm.log")
     print(json.dumps(summary, indent=2), flush=True)

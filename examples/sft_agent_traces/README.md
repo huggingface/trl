@@ -62,7 +62,7 @@ hf jobs uv run --flavor cpu-upgrade --timeout 4h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
     --model qwen/qwen3.5-397b-a17b --llm-url https://router.huggingface.co/novita/v3/openai \
     --dataset FineEnvs/SmolDataEnvs-harbor-train --exclude-datasets-of FineEnvs/SmolDataEnvs-harbor-eval \
-    --num-tasks 500 --workers 12 --push-to <you>/smoldataenvs-rollouts --run-name teacher-397b
+    --num-tasks 640 --workers 12 --push-to <you>/smoldataenvs-rollouts --private --run-name teacher-397b
 ```
 
 `--exclude-datasets-of` skips the training tasks built on a Kaggle dataset that the eval split also uses. The splits
@@ -119,13 +119,23 @@ hf jobs uv run --flavor a10g-large --timeout 3h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
     --model <you>/Qwen3.5-2B-SmolDataEnvs-SFT --serve --reward-key correctness,reward \
     --dataset FineEnvs/SmolDataEnvs-harbor-eval --num-tasks 144 --workers 8 \
-    --push-to <you>/smoldataenvs-rollouts --run-name eval-sft
+    --push-to <you>/smoldataenvs-rollouts --private --run-name eval-sft
 ```
 
 Every model below is evaluated on the same 307 tasks whose Kaggle dataset no training trace used: the 144 eval tasks
 and 163 of the 250 tasks of the [test split](https://huggingface.co/datasets/FineEnvs/SmolDataEnvs-harbor-test), the
 ones whose Kaggle dataset backs no training task outside the eval split's datasets. `--reward-key correctness,reward`
-reads whichever reward a task's grader wrote.
+reads whichever reward a task's grader wrote. The test indices are a file in the rollouts dataset, and the list is too
+long for a flag, so it goes in the `TASK_INDICES` environment variable:
+
+```sh
+hf jobs uv run --flavor a10g-large --timeout 3h --secrets HF_TOKEN \
+    -e TASK_INDICES="$(curl -sL https://huggingface.co/datasets/sergiopaniego/smoldataenvs-opencode-rollouts/resolve/main/test_indices.txt)" \
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
+    --model <you>/Qwen3.5-2B-SmolDataEnvs-SFT --serve --reward-key correctness,reward \
+    --dataset FineEnvs/SmolDataEnvs-harbor-test --workers 8 \
+    --push-to <you>/smoldataenvs-rollouts --private --run-name test-sft
+```
 
 | Model | Eval (144) | Test (163) |
 | --- | --- | --- |
@@ -133,8 +143,8 @@ reads whichever reward a task's grader wrote.
 | [Qwen3.5-2B-SmolDataEnvs-SFT-500](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-500) (the commands above) | 33.3% | 34.4% |
 | [Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) (teacher) | 71.5% | 74.2% |
 
-With about 500 traces the student goes from about 6% to about 34% on tasks built on data it never saw, close to half
-of the teacher. It also takes a median of 8 to 9 turns instead of 18 to 20, and, on the tasks
+With about 500 traces the student goes from 7.6% to 33.3% on the eval tasks (5.5% to 34.4% on test), on data it
+never saw, close to half of the teacher. It also takes a median of 8 to 9 turns instead of 18 to 20, and, on the tasks
 whose grader records it, an answer on two thirds of them instead of one third. What the student still gets wrong is
 mostly looping: a quarter of the tasks hit the task's 10-minute agent timeout (a tenth for the base model, which gives
 up sooner, and none for the teacher).
@@ -146,7 +156,7 @@ sandbox quota allows.
 ### How many traces?
 
 Most of the gain comes from the first few hundred traces. Generating from the whole clean train split
-(`--num-tasks 2879`) gives four times as many and adds 3 to 4 points:
+(`--num-tasks 2879`) gives about five times as many and adds 3 to 4 points:
 
 | Model | Traces | Eval (144) | Test (163) |
 | --- | --- | --- | --- |
@@ -154,8 +164,11 @@ Most of the gain comes from the first few hundred traces. Generating from the wh
 | [Qwen3.5-2B-SmolDataEnvs-SFT-1k](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-1k) | 963 | 32.6% | 38.7% |
 | [Qwen3.5-2B-SmolDataEnvs-SFT-full](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-full) | 2,238 | 36.8% | 38.7% |
 
-With 144 and 163 tasks, a difference of a few points is within noise. The traces, every raw rollout and the training
-curves are in [this collection](https://huggingface.co/collections/sergiopaniego/sft-on-agent-traces-with-trl).
+With 144 and 163 tasks, a difference of a few points is within noise. These models were trained before
+[huggingface/trl#8072](https://github.com/huggingface/trl/pull/8072), which leaves the empty thinking block of each
+assistant turn out of the loss, so a run with current TRL trains on slightly fewer tokens. The traces, every raw
+rollout and the training curves are in [this
+collection](https://huggingface.co/collections/sergiopaniego/sft-on-agent-traces-with-trl).
 
 ### Without the dataset filter
 

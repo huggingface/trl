@@ -66,12 +66,19 @@ def cut_short(result: dict) -> bool:
     return turn is not None and turn.get("finish_reason") == "tool_calls"
 
 
-def normalize_tool_calls(calls: list[dict]) -> list[dict]:
+def normalize_tool_calls(calls: list[dict]) -> list[dict] | None:
+    """Tool calls with their arguments as a dict, or None if one call's arguments aren't a JSON object."""
     out = []
     for call in calls:
         fn = call.get("function", call)  # turns carry flat {name, arguments}, request messages nest them
         args = fn.get("arguments")
-        args = json.loads(args) if isinstance(args, str) else (args or {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(args, dict):  # the chat template iterates over the arguments as a dict
+            return None
         out.append({"type": "function", "function": {"name": fn["name"], "arguments": args}})
     return out
 
@@ -89,6 +96,9 @@ def to_row(result: dict) -> dict | None:
     for msg in messages:
         if msg["role"] == "assistant" and msg.get("tool_calls"):
             msg["tool_calls"] = normalize_tool_calls(msg["tool_calls"])
+            if msg["tool_calls"] is None:  # a malformed call would teach the student a malformed call
+                print(f"{result.get('task_name')}: a tool call's arguments aren't a JSON object, skipped")
+                return None
     return {
         "messages": messages,
         "tools": turn.get("request_tools") or [],
