@@ -137,7 +137,9 @@ def fetch_tasks(
         kept = [n for n in names if own[n] not in held_out]
         print(f"{len(names) - len(kept)} of {len(names)} tasks share a Kaggle dataset with {exclude_of}, skipped")
         names = kept
-    picked = [names[i] for i in indices]
+    if indices and max(indices) >= len(names):
+        print(f"only {len(names)} tasks, indices from {len(names)} on are skipped", flush=True)
+    picked = [names[i] for i in indices if i < len(names)]
     snapshot_download(dataset, repo_type="dataset", local_dir=workdir, allow_patterns=[f"{p}/**" for p in picked])
     for task in picked:
         toml = workdir / task / "task.toml"
