@@ -16,9 +16,7 @@ import tempfile
 
 import torch
 from transformers import (
-    AutoConfig,
     AutoProcessor,
-    FineGrainedFP8Config,
     GenerationConfig,
     Glm5NextConfig,
     Glm5NextForConditionalGeneration,
@@ -87,11 +85,6 @@ vision_config = Glm5NextVisionConfig(
     image_size=448,
 )
 config = Glm5NextConfig(text_config=text_config, vision_config=vision_config)
-# FP8 weights, like the reference checkpoint: build the model in bfloat16, then quantize it at load with the
-# reference's quantization config, which computes the scale of each block (needs a GPU with FP8 support). The blocks
-# shrink with the model, from 128x128 to 32x32 (the FP8 kernel's smallest), so that every quantized weight is tiled.
-reference_quantization_config = AutoConfig.from_pretrained(MODEL_ID).quantization_config
-quantization_config = FineGrainedFP8Config.from_dict({**reference_quantization_config, "weight_block_size": [32, 32]})
 model = Glm5NextForConditionalGeneration(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 
@@ -100,9 +93,7 @@ for layer in model.model.language_model.layers[3:]:
     layer.mlp.gate.e_score_correction_bias.data = layer.mlp.gate.e_score_correction_bias.data.float()
 with tempfile.TemporaryDirectory() as tmp_dir:
     model.save_pretrained(tmp_dir)
-    model = Glm5NextForConditionalGeneration.from_pretrained(
-        tmp_dir, quantization_config=quantization_config, device_map="cuda"
-    )
+    model = Glm5NextForConditionalGeneration.from_pretrained(tmp_dir, device_map="cuda")
 smoke_test(model, processor)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)

@@ -92,6 +92,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trainer", choices=["sdpo", "sdft"], required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--deepspeed")
     parser.add_argument("--distillation_mode", default="sampled_token")
     parser.add_argument("--pattern", choices=["empty0", "empty1", "all_empty", "nonempty"], default="empty0")
     parser.add_argument("--precision", choices=["float32", "bfloat16", "float16"], default="float32")
@@ -124,6 +125,7 @@ def main():
         "report_to": "none",
         "disable_tqdm": True,
         "use_cpu": args.cpu,
+        "deepspeed": args.deepspeed,
         "bf16": args.precision == "bfloat16",
         "fp16": args.precision == "float16",
         "ddp_timeout": 60,
@@ -150,6 +152,8 @@ def main():
     trainer.add_callback(parameters)
     trainer.train()
 
+    if args.deepspeed is not None:
+        assert trainer.model_wrapped.zero_optimization_stage() == 3
     assert trainer.state.global_step == 2
     assert callback.checked_batches == 2
     losses = [row["self_distillation/distillation_loss"] for row in trainer.state.log_history if "grad_norm" in row]

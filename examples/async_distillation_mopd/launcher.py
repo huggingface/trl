@@ -47,7 +47,7 @@ hf jobs uv run \
     --image huggingface/trl \
     --secrets HF_TOKEN \
     --timeout 6h \
-    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_distillation_math/launcher.py
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_distillation_mopd/launcher.py
 ```
 """
 
@@ -66,7 +66,7 @@ import urllib.request
 
 
 # Use --train-script-url to test an unmerged revision.
-TRAIN_SCRIPT_URL = "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_distillation_math/async_distillation_mopd.py"
+TRAIN_SCRIPT_URL = "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_distillation_mopd/async_distillation_mopd.py"
 MODEL_PREFIX = "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B"
 
 _children: list[subprocess.Popen] = []
