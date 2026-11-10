@@ -150,15 +150,13 @@ class AsyncDistillationConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_concurrent_rollouts (`int`, *optional*):
+        max_concurrent_rollouts (`int`, *optional*, defaults to `512`):
             Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, generating
-            or being scored. If `None`, it is set to `max(max_staleness, 1) * per_device_train_batch_size *
-            gradient_accumulation_steps * num_processes`.
+            or being scored.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped.
-        queue_maxsize (`int`, *optional*, defaults to `1024`):
-            Maximum number of rollout samples to buffer in the rollout queue.
+            being dropped. Generation is held to it: a rollout starts only while the tokens queued and in flight fit in
+            what the trainer consumes in `max(max_staleness, 1)` steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the student's vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -354,24 +352,20 @@ class AsyncDistillationConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_concurrent_rollouts: int | None = field(
-        default=None,
+    max_concurrent_rollouts: int = field(
+        default=512,
         metadata={
             "help": "Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, "
-            "generating or being scored. If `None`, it is set to `max(max_staleness, 1) * "
-            "per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
+            "generating or being scored."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model "
-            "version before being dropped."
+            "version before being dropped. Generation is held to it: a rollout starts only while the tokens queued "
+            "and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
         },
-    )
-    queue_maxsize: int = field(
-        default=1024,
-        metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
     )
     weight_sync_steps: int = field(
         default=1,
