@@ -1802,6 +1802,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self._rollout_dataset.lookahead_tokens = (
                     max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
                 )
+                self._rollout_dataset.token_allowance.value = (
+                    self._rollout_dataset.consumed_tokens + self._rollout_dataset.lookahead_tokens
+                )
             self._rollout_dataset.step_tokens = 0
 
         # Throughput and MFU are reported on TWO bases, because for async distillation one number cannot answer both
