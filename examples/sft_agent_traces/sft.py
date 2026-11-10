@@ -44,7 +44,6 @@ hf jobs uv run --flavor h200 --timeout 2h --secrets HF_TOKEN \
 
 import argparse
 
-import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
@@ -95,7 +94,6 @@ def main():
         per_device_train_batch_size=1,
         gradient_accumulation_steps=args.grad_accum,
         gradient_checkpointing=True,
-        bf16=torch.cuda.is_available(),
         logging_steps=1,
         save_strategy="no",
         # Trackio's dashboard is a Space that can be public, so a private run logs to the job output only.
