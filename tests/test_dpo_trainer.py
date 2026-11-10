@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
 import transformers
@@ -483,6 +485,7 @@ class TestDPOTrainer(TrlTestCase):
             "discopop",
             "sft",
             "sigmoid_norm",
+            "udpo",
         ],
     )
     def test_train_loss_types(self, loss_type):
@@ -491,7 +494,7 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             loss_type=loss_type,
-            label_smoothing=1e-3 if loss_type == "exo_pair" else 0.0,
+            label_smoothing={"exo_pair": 1e-3, "udpo": 0.2}.get(loss_type, 0.0),
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
             eval_strategy="steps",
@@ -514,6 +517,47 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_udpo_loss_value(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="udpo",
+            label_smoothing=0.2,
+            learning_rate=0.1,  # move the policy away from the reference model, so that the reward margin is non-zero
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"].select(range(1)),
+        )
+        trainer.train()
+        metrics = trainer.evaluate()
+
+        # With a single eval example, the eval loss is the normalized UDPO loss -α·log((e^z + a) / (e^z + 1)) at the
+        # logged reward margin z, with a = ε / (1 - ε) and α = (1 + √a) / (1 - √a). The log is written as
+        # log(1 - (1 - a) / (e^z + 1)) for precision.
+        z = metrics["eval_rewards/margins"]
+        a = 0.2 / (1 - 0.2)
+        alpha = (1 + math.sqrt(a)) / (1 - math.sqrt(a))
+        assert z != 0.0
+        assert metrics["eval_loss"] == pytest.approx(-alpha * math.log1p(-(1 - a) / (math.exp(z) + 1)), rel=1e-4)
+
+    def test_udpo_label_smoothing_out_of_range_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        # `label_smoothing` is the flip probability ε, not the paper's a = ε / (1 - ε), so a = 0.8 passed as is fails
+        training_args = DPOConfig(output_dir=self.tmp_dir, loss_type="udpo", label_smoothing=0.8, report_to="none")
+
+        with pytest.raises(ValueError, match=r"must lie in \[0.0, 0.5\) for the 'udpo' loss"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_train_multi_loss_types(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

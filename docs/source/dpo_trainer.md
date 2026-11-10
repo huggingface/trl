@@ -121,6 +121,7 @@ Several formulations of the objective have been proposed in the literature. Init
 | `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
 | `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
 | `"sigmoid_norm"` | The [SimPO](https://huggingface.co/papers/2405.14734) authors address the length-bias in the original sigmoid loss by normalizing by the number of non-mask tokens; TRL exposes this as `loss_type="sigmoid_norm"`. |
+| `"udpo"` | The [UDPO](https://huggingface.co/papers/2607.03248) authors propose an unbiased DPO loss under noisy preferences that, unlike `"robust"`, keeps an unbiased optimum when the label-flip probability is overestimated. TRL implements its normalized form (α-UDPO in the paper), which has the same maximum gradient magnitude as `"sigmoid"`. Use `label_smoothing` in [`DPOConfig`] to set the assumed flip probability ε in `[0.0, 0.5)`; the paper's parameter is a = ε / (1 - ε), its recommended value a = 0.8 corresponds to `label_smoothing=4/9`, and `label_smoothing=0.0` recovers `"sigmoid"`. |
 
 ## Logged metrics
 
