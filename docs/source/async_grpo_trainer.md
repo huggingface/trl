@@ -538,8 +538,8 @@ MFU is reported only when peak compute capacity is known for the local training 
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
-| `perf/forwarded_tokens_per_s_fwd_bwd`, `perf/forwarded_tokens_per_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
-| `perf/trained_tokens_per_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
+| `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s` | forwarded tokens per second on each basis                                                                                                             |
+| `perf/wall_clock_trained_tokens_per_s`                                   | the same, counting only tokens the loss saw                                                                                                           |
 | `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## AsyncGRPOConfig

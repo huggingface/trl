@@ -1812,7 +1812,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None:
                 metrics["perf/mfu_fwd_bwd"].append(
                     compute_mfu(
@@ -1820,8 +1820,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(

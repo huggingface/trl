@@ -442,14 +442,14 @@ class TestMetricReduction:
             ("perf/maximal_s", [2.0, 4.0], 3.0),
             # Rates reduce as Σnum / Σden. These two windows ran at 1 and 100 tok/s; meaning the ratios would report
             # 50.5, the defect that made `training_tok/s` unusable.
-            ("perf/forwarded_tokens_per_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
+            ("perf/wall_clock_forwarded_tokens_per_s", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
         ],
     )
     def test_reduces_by_shape_and_name(self, key, values, expected):
         assert _reduce_metric(key, values) == pytest.approx(expected)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_wall_clock", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/wall_clock_forwarded_tokens_per_s", [(0.0, 0.0)]))
 
 
 def _position(*entries):
