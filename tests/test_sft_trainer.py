@@ -58,7 +58,7 @@ if is_peft_available():
 
 
 _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
-    reason="The tiny checkpoint has attention heads Flash Attention 3 rejects (not a multiple of 8), see #6857",
+    reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
     strict=True,
 )
 
@@ -2349,7 +2349,7 @@ class TestSFTTrainer(TrlTestCase):
         # Flash Attention 3 runs on the vision tower too, and needs a head size that is a multiple of 8
         if torch.version.hip:
             attn_implementation = "kernels-community/aiter-flash-attn@v2"
-        elif torch.cuda.get_device_capability()[0] >= 10:
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
             attn_implementation = "kernels-community/flash-attn4"
         else:
             attn_implementation = "kernels-community/flash-attn3"
