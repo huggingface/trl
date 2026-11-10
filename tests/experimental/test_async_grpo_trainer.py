@@ -2301,7 +2301,6 @@ class TestCustomRolloutLoop(TrlTestCase):
         )
         loop.calls = 0
         samples = [item for item in self._run(loop, 4) if isinstance(item, RolloutSample)]
-        assert {sample.metrics["rewards/rollout/mean"] for sample in samples} == {0.0, 1.0}
         assert {round(sample.advantage, 4) for sample in samples} == {-1.0, 1.0}
 
     def test_setup_runs_before_generation_and_close_after(self):
@@ -2467,11 +2466,11 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
-        samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
+        loop = _rollout_loop(reward_funcs=[AsyncTwoReward()])
+        samples = asyncio.run(loop._score_group(group))
 
         # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
-        assert samples[0].metrics["rewards/AsyncTwoReward/mean"] == 1.0
-        assert samples[1].metrics["rewards/AsyncTwoReward/mean"] == 3.0
+        assert loop._rates["rewards/AsyncTwoReward/mean"] == [4.0, 2]  # rewards 1.0 and 3.0
         assert samples[0].advantage == pytest.approx(-1.0)
         assert samples[1].advantage == pytest.approx(1.0)
 
@@ -2481,12 +2480,14 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, [{}] * 4, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
 
-        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
+        loop = _rollout_loop(reward_funcs=[two_reward])
+        samples = asyncio.run(loop._score_group(group))
 
         assert samples[0].metrics["reward_kept"] == 1.0
         assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
         assert samples[0].metrics["reward_group_std"] == pytest.approx(1.0)
-        assert samples[1].metrics["rewards/two_reward/mean"] == 3.0
+        # Each reward function's mean counts the forked conversation once, as GRPO counts a completion once
+        assert loop._rates["rewards/two_reward/mean"] == [4.0, 2]  # rewards 1.0 and 3.0
         assert samples[1].metrics["rewards/two_reward/group_std"] == pytest.approx(1.0)
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
         assert samples[1].metrics is not samples[2].metrics
@@ -2558,6 +2559,8 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert [s.group_id for s in items[1:]] == [1, 1]
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
+        # So does each reward function's mean, except for a group the function didn't score
+        assert metrics["rewards/dummy_reward_func/mean"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
 
 
 @pytest.mark.skipif(

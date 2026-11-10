@@ -1423,6 +1423,13 @@ class AsyncRolloutLoop:
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        # Each reward function's mean over the rollouts it scored, dropped groups included, like `reward`. A function
+        # that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no reward) adds nothing.
+        for name, func_rewards in zip(self.reward_func_names, per_func_rewards, strict=True):
+            func_scored = func_rewards[~np.isnan(func_rewards)]
+            if len(func_scored):
+                self._rates[f"rewards/{name}/mean"][0] += float(func_scored.sum())
+                self._rates[f"rewards/{name}/mean"][1] += len(func_scored)
         zero_std = bool(np.all(scored == scored[:1]))
         self._rates["frac_reward_zero_std"][0] += zero_std
         self._rates["frac_reward_zero_std"][1] += 1
@@ -1450,27 +1457,18 @@ class AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
-            zip(
-                group.prompts,
-                group.completions,
-                group.completions_sequences,
-                advantages,
-                rewards,
-                tool_metrics,
-                strict=True,
-            )
+        for prompt, completion, sequences, advantage, reward, tm in zip(
+            group.prompts,
+            group.completions,
+            group.completions_sequences,
+            advantages,
+            rewards,
+            tool_metrics,
+            strict=True,
         ):
             metrics = {
                 "reward_kept": float(reward),
                 "reward_group_std": reward_std,
-                **{
-                    f"rewards/{name}/mean": float(func_reward)
-                    for name, func_reward, used in zip(
-                        self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
-                    )
-                    if used
-                },
                 **{
                     f"rewards/{name}/group_std": std
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
