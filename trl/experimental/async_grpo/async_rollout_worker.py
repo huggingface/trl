@@ -535,18 +535,22 @@ class AsyncRolloutLoop:
 
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        if self.tools:
-            has_template = getattr(processing_class, "response_template", None) is not None
-            has_schema = getattr(processing_class, "response_schema", None) is not None
-            if not has_template and not has_schema:
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            try:
                 processing_class = add_response_schema(processing_class)
-            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
-                warnings.warn(
-                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
-                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
-                    "support will eventually be removed. See the Transformers response-parsing docs.",
-                    FutureWarning,
-                )
+            except ValueError:
+                # Only tool calls need a parser: without tools, turns of an unknown template are decoded as plain text
+                if self.tools:
+                    raise
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
 
         # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
         # scores its own rollouts. The built-in `generate_one` leaves it at `None`.

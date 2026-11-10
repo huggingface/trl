@@ -2214,6 +2214,19 @@ class TestRolloutLoop(TrlTestCase):
         rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], []))
         assert rollout.completion == [{"role": "assistant", "content": "Hello!"}]
 
+    def test_known_chat_template_is_parsed_without_tools(self):
+        # TRL has a response parser for this chat template, so the turn is parsed even without tools: the thinking goes
+        # to `reasoning_content`, and `content` holds the answer
+        loop = _rollout_loop()
+        output_ids = loop.tokenizer.encode("<think>\nLet me add.\n</think>\n\n4<|im_end|>", add_special_tokens=False)
+
+        async def generate_one_turn(prompt_ids):
+            return TurnRecord(prompt_ids, output_ids, [-0.1] * len(output_ids))
+
+        loop.generate_one_turn = generate_one_turn
+        rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "2+2?"}], []))
+        assert rollout.completion == [{"role": "assistant", "reasoning_content": "Let me add.", "content": "4"}]
+
     def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
         rollout, rows = _run(turns=[_TOOL_CALL], max_iters=0)
