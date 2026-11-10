@@ -56,6 +56,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--model", default="Qwen/Qwen3.5-2B")
     p.add_argument("--dataset", required=True, help="Hub dataset written by build_dataset.py")
+    p.add_argument("--dataset-config", default=None, help="config of --dataset, e.g. 500 for the published traces")
     p.add_argument("--push-to", required=True, help="Hub model id for the trained student")
     p.add_argument("--private", action="store_true", help="push the model privately (and skip the Trackio Space)")
     p.add_argument("--max-rows", type=int, default=None, help="train on the first N rows only")
@@ -65,7 +66,7 @@ def main():
     p.add_argument("--grad-accum", type=int, default=8)
     args = p.parse_args()
 
-    dataset = load_dataset(args.dataset, split="train").select_columns(["messages", "tools"])
+    dataset = load_dataset(args.dataset, args.dataset_config, split="train").select_columns(["messages", "tools"])
     if args.max_rows:
         dataset = dataset.select(range(min(args.max_rows, len(dataset))))
 

@@ -3,26 +3,33 @@
 This example fine-tunes [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) with
 [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on conversations of
 [Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) working as an [OpenCode](https://opencode.ai) agent
-on data-analysis tasks, keeping only the conversations that ended with a correct answer. On held-out tasks, the base
-model solves 7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned
-model is meant as a starting point for RL.
+on data-analysis tasks, keeping only the conversations that ended with a correct answer. The student, the teacher and
+the tasks are flags of the scripts; the numbers in this README are for this setup. On held-out tasks, Qwen3.5-2B solves
+7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned model is meant
+as a starting point for RL.
 
-Why start with SFT: RL learns from the rollouts that score, and the base model scores on fewer than one task in ten.
-On two thirds of the tasks it never writes an answer at all. A teacher that solves most tasks shows the student how to
-use this agent's tools and when to answer, so RL starts from a model that answers most tasks and solves a third of
-them. The traces come from the agent itself, with its own system prompt and tool schemas, so the student
-trains on the same inputs it gets when it runs in OpenCode. The teacher runs on Inference Providers, so generating the
-traces needs no GPU.
+> [!NOTE]
+> **Why start with SFT.** RL learns from the rollouts that score, and here Qwen3.5-2B scores on fewer than one task in
+> ten: on two thirds of the tasks it never writes an answer at all. A teacher that solves most tasks shows the student
+> how to use this agent's tools and when to answer, so RL starts from a model that answers most tasks and solves a third
+> of them. The traces come from the agent itself, with its own system prompt and tool schemas, so the student trains on
+> the same inputs it gets when it runs in OpenCode.
+
+Only step 4 trains with TRL. Steps 2, 3 and 5 produce the data and measure the result with
+[OpenEnv](https://github.com/openenv/OpenEnv).
 
 | Step | Script | Where it runs |
 | --- | --- | --- |
-| 1. Run the teacher on training tasks, keep every rollout | [`rollouts.py`](rollouts.py) | CPU Job, the teacher on Inference Providers |
-| 2. Keep the solved rollouts as SFT rows | [`build_dataset.py`](build_dataset.py) | anywhere |
-| 3. Fine-tune the student | [`sft.py`](sft.py) | one GPU |
-| 4. Evaluate the student before and after | [`rollouts.py`](rollouts.py) `--serve` | one GPU, vLLM |
+| 2. Run the teacher on training tasks, keep every rollout | [`rollouts.py`](rollouts.py) | CPU Job, the teacher on Inference Providers |
+| 3. Keep the solved rollouts as SFT rows | [`build_dataset.py`](build_dataset.py) | anywhere |
+| 4. Fine-tune the student with `SFTTrainer` | [`sft.py`](sft.py) | one GPU |
+| 5. Evaluate the student before and after | [`rollouts.py`](rollouts.py) `--serve` | one GPU, vLLM |
 
 Every script takes the number of tasks or rows as a flag, so the same commands run a 10-task smoke test or the whole
 split.
+
+To go straight to fine-tuning, use the published traces and start at [step 4](#4-fine-tune-the-student) with
+`--dataset sergiopaniego/smoldataenvs-opencode-traces --dataset-config 500` (or `1k`, `full`).
 
 ## 1. The tasks
 
