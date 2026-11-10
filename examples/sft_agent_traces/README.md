@@ -7,6 +7,13 @@ on data-analysis tasks, keeping only the conversations that ended with a correct
 model solves 7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned
 model is meant as a starting point for RL.
 
+Why start with SFT: RL learns from the rollouts that score, and the base model scores on fewer than one task in ten.
+On two thirds of the tasks it never writes an answer at all. A teacher that solves most tasks shows the student how to
+use this agent's tools and when to answer, so RL starts from a model that answers most tasks and solves a third of
+them. The traces come from the agent itself, with its own system prompt and tool schemas, so the student
+trains on the same inputs it gets when it runs in OpenCode. The teacher runs on Inference Providers, so generating the
+traces needs no GPU.
+
 | Step | Script | Where it runs |
 | --- | --- | --- |
 | 1. Run the teacher on training tasks, keep every rollout | [`rollouts.py`](rollouts.py) | CPU Job, the teacher on Inference Providers |
