@@ -2513,7 +2513,6 @@ class TestGRPOTrainer(TrlTestCase):
                 # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_vllm
     @pytest.mark.skipif(
         not is_vllm_available(min_version="0.28.0"),
         reason="returning the candidate set of each sampled token requires vLLM >= 0.28",
