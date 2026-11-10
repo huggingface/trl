@@ -53,6 +53,22 @@ Then execute the script on GPU 1 using the following command:
 CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
 ```
 
+## Compatibility and constraints
+
+Some argument combinations are intentionally restricted in the current [`experimental.async_grpo.AsyncGRPOTrainer`] implementation:
+
+- Generation always runs on a separate vLLM server, started with `vllm serve`. There is no colocate mode.
+- Prompts from the dataset must be in [conversational](dataset_formats#conversational) format. With an `environment_factory`, the dataset may have no `prompt` column, and `reset()` provides it.
+- Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
+- The trainer needs `transformers>=5.2.0`.
+- Sharded training uses FSDP2. DeepSpeed is not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
+- `use_liger_kernel=True` is not supported.
+- PEFT adapters targeting `lm_head` are not supported.
+- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...), which need `transformers>=5.15.0`.
+- Images are not supported, see [Training Vision Language Models](#training-vision-language-models).
+
+Training loads its attention kernel from the Hub through the [`kernels`](https://github.com/huggingface/kernels) library: [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) on AMD GPUs (ROCm), [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
+
 ## Looking deeper into the Asynchronous GRPO method
 
 In [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update the weights, repeat. Even in [colocate mode](grpo_trainer#option-1-colocate-mode), one phase must finish before the other begins. In [`experimental.async_grpo.AsyncGRPOTrainer`], a rollout worker generates and scores completions in a background process while the training loop computes the loss and updates the model. To understand how it works, it can be broken down into three main steps: **Generating completions**, **computing the advantage**, and **computing the loss**. There is no reference model, so there is no KL divergence term (GRPO's default, `beta=0.0`).
@@ -226,22 +242,6 @@ Units:
 - `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known.
 
 ## Customization
-
-### Compatibility and constraints
-
-Some argument combinations are intentionally restricted in the current [`experimental.async_grpo.AsyncGRPOTrainer`] implementation:
-
-- Generation always runs on a separate vLLM server, started with `vllm serve`. There is no colocate mode.
-- Prompts from the dataset must be in [conversational](dataset_formats#conversational) format. With an `environment_factory`, the dataset may have no `prompt` column, and `reset()` provides it.
-- Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
-- The trainer needs `transformers>=5.2.0`.
-- For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not). Context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`) are not supported.
-- `use_liger_kernel=True` is not supported.
-- PEFT adapters targeting `lm_head` are not supported.
-- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...), which need `transformers>=5.15.0`.
-- Images are not supported, see [Training Vision Language Models](#training-vision-language-models).
-
-Training loads its attention kernel from the Hub through the [`kernels`](https://github.com/huggingface/kernels) library: [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) on AMD GPUs (ROCm), [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
 
 ### Configuring the vLLM server
 
@@ -682,8 +682,6 @@ Rewards are summed over `reward_funcs`, environments that define `get_reward`, a
 ### Resuming from a checkpoint
 
 The base [`~transformers.Trainer`] resumes by skipping and replaying the batches it already trained on, which does not apply to a live rollout queue, so `ignore_data_skip` is always `True`. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets ([`~datasets.IterableDataset`]) cannot be repositioned, so their worker restarts from the first prompt on resume.
-
-Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it. The fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP, the checkpoint is also the resume file, so it keeps the master dtype.
 
 ## Agent Training
 
