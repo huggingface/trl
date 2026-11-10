@@ -801,10 +801,9 @@ class AsyncRolloutLoop:
                         )
                     # Draw a reusable environment instance for this rollout (creating one only if the pool is
                     # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
-                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
-                    # previously discarded, so an environment_factory whose task lives in the observation (not the
-                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
-                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # prompt and capture its initial observation (e.g. a task instruction), since an environment can
+                    # hold the task in the observation rather than in the dataset prompt. Mirror GRPOTrainer: fold the
+                    # observation into the last prompt message. reset() may be stochastic, so this is done per generation (each
                     # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
                     # field in multi-environment mode, so it is not forwarded to `reset`.
                     environment = None
@@ -1099,10 +1098,9 @@ class AsyncRolloutLoop:
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
-            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
@@ -1602,7 +1600,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # NOTE(@aminediro) Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 

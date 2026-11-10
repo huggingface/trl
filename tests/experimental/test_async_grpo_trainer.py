@@ -1044,17 +1044,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.20.1"),
-                        reason="Beam was introduced in transformers-5.20.1",
-                    ),
-                    pytest.mark.xfail(
-                        raises=AttributeError,
-                        reason="`compute_flops_per_token` reads MoE config fields this config does not have",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
@@ -3007,14 +3000,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         [
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.xfail(
-                    raises=AttributeError,
-                    reason="`compute_flops_per_token` reads MoE config fields this config does not have",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
         ],
     )
     def test_train_vlm_text_only_data(self, model_id, vllm_server):
@@ -3331,8 +3317,8 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
 
     @pytest.mark.xfail(
-        raises=RuntimeError,
-        reason="`compute_flops_per_token` reads `head_dim`, which Gemma 4's config sets per layer",
+        raises=AssertionError,
+        reason="`tools/call_frequency` is averaged over training samples, not completions as in GRPO (#8188)",
         strict=True,
     )
     @pytest.mark.skipif(
@@ -3383,15 +3369,15 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         # Both completions end on one of Gemma 4's eos ids, so none is clipped
         assert trainer.state.log_history[-2]["completions/clipped_ratio"] == 0.0
 
+        # The vision tower is frozen, since the dataset carries no images
+        vision = _vision_parameter_names(trainer.model)
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            if n in vision:
+                assert torch.equal(param, new_param), f"Vision-tower parameter {n} has changed."
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        raises=AttributeError,
-        reason="`compute_flops_per_token` reads MoE config fields this config does not have",
-        strict=True,
-    )
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
