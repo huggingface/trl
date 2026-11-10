@@ -8,6 +8,11 @@ the tasks are flags of the scripts, and the numbers in this README are for this 
 7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned model is meant
 as a starting point for RL.
 
+SFT on a stronger model's outputs is sequence-level distillation: the student imitates the teacher's text, with no
+access to its logits. TRL's on-policy distillation trainers, such as
+[`AsyncDistillationTrainer`](https://huggingface.co/docs/trl/async_distillation_trainer), train instead on the
+teacher's per-token distribution over the student's own samples, and need the teacher served next to the student.
+
 > [!NOTE]
 > **Why start with SFT.** RL learns from the rollouts that score, and here Qwen3.5-2B scores on fewer than one task in
 > ten: on two thirds of the tasks it never writes an answer at all. A teacher that solves most tasks shows the student
