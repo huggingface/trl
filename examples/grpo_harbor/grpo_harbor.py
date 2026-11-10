@@ -34,9 +34,8 @@ CUDA_VISIBLE_DEVICES=2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B --tenso
     --max-logprobs -1
 
 # Terminal 2 — training
-CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero2.yaml --num_processes 2 \
-    examples/grpo_harbor/grpo_harbor.py \
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node 2 examples/grpo_harbor/grpo_harbor.py \
+    --deepspeed examples/deepspeed_configs/zero2.json \
     --vllm-mode server --vllm-server-base-url http://localhost:8000 --env e2b
 ```
 """
@@ -85,6 +84,9 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--report-to", type=str, default="none")
+    parser.add_argument(
+        "--deepspeed", type=str, default=None, help="DeepSpeed config, e.g. examples/deepspeed_configs/zero2.json."
+    )
 
     return parser.parse_args()
 
@@ -112,6 +114,7 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         report_to=[s.strip() for s in args.report_to.split(",") if s.strip() and s.strip() != "none"] or "none",
+        deepspeed=args.deepspeed,
     )
     if args.output_dir:
         config_kwargs["output_dir"] = args.output_dir

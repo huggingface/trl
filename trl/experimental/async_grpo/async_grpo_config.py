@@ -61,7 +61,7 @@ class AsyncGRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         max_completion_length (`int`, *optional*, defaults to `2048`):
-            Maximum length of the generated completion.
+            Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -76,16 +76,11 @@ class AsyncGRPOConfig(_BaseConfig):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range. Above `0.0`, `top_k` must be set too,
             with the server flags described under `top_p`.
-        repetition_penalty (`float`, *optional*, defaults to `1.0`):
-            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
-            Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
-            tokens.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_completion_length`.
+            stops when the model generates a response turn with no tool calls.
 
         > Parameters that control the vLLM server
 
@@ -130,17 +125,14 @@ class AsyncGRPOConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_concurrent_rollouts (`int`, *optional*):
-            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to
-            `max(max_staleness, 1)
-            * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
-            this is wasteful, since they are dropped as stale before the trainer can consume them. If using tool-use
-            environments, you may want to set this manually based on how many parallel environments you can run.
+        max_concurrent_rollouts (`int`, *optional*, defaults to `512`):
+            Maximum number of rollouts running at once. Each one holds an environment, may run synchronous tool calls,
+            and keeps a connection to the vLLM server, so set it to what those resources can take. Below it, the number
+            of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped.
-        queue_maxsize (`int`, *optional*, defaults to `1024`):
-            Maximum number of rollout samples to buffer in the rollout queue.
+            being dropped. Generation is held to it: a new group of rollouts starts only while the tokens queued and in
+            flight fit in what the trainer consumes in `max(max_staleness, 1)` steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -251,7 +243,7 @@ class AsyncGRPOConfig(_BaseConfig):
     )
     max_completion_length: int = field(
         default=2048,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={"help": "Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout."},
     )
     temperature: float = field(
         default=1.0,
@@ -278,14 +270,6 @@ class AsyncGRPOConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    repetition_penalty: float = field(
-        default=1.0,
-        metadata={
-            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
-            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
-            "to repeat tokens."
-        },
-    )
     chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
@@ -297,8 +281,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total response "
-            "length reaches `max_completion_length`."
+            "generation stops when the model generates a response turn with no tool calls."
         },
     )
 
@@ -366,26 +349,21 @@ class AsyncGRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_concurrent_rollouts: int | None = field(
-        default=None,
+    max_concurrent_rollouts: int = field(
+        default=512,
         metadata={
-            "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
-            "`max(max_staleness, 1) * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: "
-            "generating more samples than this is wasteful, since they are dropped as stale before the trainer can "
-            "consume them. If using tool-use environments, you may want to set this manually based on how many "
-            "parallel environments you can run."
+            "help": "Maximum number of rollouts running at once. Each one holds an environment, may run synchronous "
+            "tool calls, and keeps a connection to the vLLM server, so set it to what those resources can take. Below "
+            "it, the number of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being dropped."
+            "before being dropped. Generation is held to it: a new group of rollouts starts only while the tokens "
+            "queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
         },
-    )
-    queue_maxsize: int = field(
-        default=1024,
-        metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
     )
     weight_sync_steps: int = field(
         default=1,

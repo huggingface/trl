@@ -89,8 +89,7 @@ The converted dataset, with its 1,000 test puzzles split off, is on the Hub as [
 ## 3. Fine-tune
 
 ```sh
-accelerate launch --config_file examples/accelerate_configs/fsdp2.yaml --num_processes 4 \
-    examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
+torchrun --nproc_per_node 4 examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
 ```
 
 [`sft_gpt_oss_chess.py`](sft_gpt_oss_chess.py) fine-tunes all the weights on 500,000 puzzles for one epoch, about 2 hours on 4xH200. FSDP2 shards the weights, their gradients and the optimizer states across the GPUs.
