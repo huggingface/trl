@@ -450,7 +450,7 @@ The generation pipeline, from starting a rollout to putting its samples in the q
 | `rollout/generated_tokens_per_s` | generation throughput over the last interval (windowed), so a stall shows up |
 | `rollout/concurrency` | rollouts in flight to vLLM |
 | `rollout/concurrency_cap` | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency) |
-| `rollout/backpressure_s` | how long the score loop waited to put samples in a full rollout queue, averaged over the waits in the window. See [the rollout queue](#the-rollout-queue) |
+| `rollout/backpressure_s` | how long generation waited to start a rollout because it was `max_staleness` steps ahead, averaged over the waits in the window. See [concurrency](#concurrency) |
 | `rollout/score_queue_size` | completed groups waiting to be scored |
 | `rollout/queue_size` | scored samples waiting in the rollout queue, measured where the trainer pulls them. See [the rollout queue](#the-rollout-queue) |
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full |
