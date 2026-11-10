@@ -766,10 +766,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
 
     def test_train(self, model_id):
-        if "Moe" in model_id:
-            # `compute_flops_per_token` reads `num_local_experts`, `intermediate_size` and `decoder_sparse_step`,
-            # none of which exist on `Qwen3_5MoeTextConfig`. Text-only Qwen3.5-MoE hits this too.
-            pytest.skip("compute_flops_per_token does not support the Qwen3.5-MoE config shape")
         trainer = self._trainer(model_id)
         previous_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
