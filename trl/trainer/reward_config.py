@@ -67,6 +67,15 @@ class RewardConfig(_BaseConfig):
 
         > Parameters that control the training
 
+        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+            Type of loss to use. Possible values are: `'sigmoid'` (Bradley-Terry loss), `'urm'` (Unbiased Reward Model
+            loss from the [Unbiased Alignment](https://huggingface.co/papers/2607.03248) paper, which corrects for
+            flipped preference labels) and `'alpha_urm'` (α-URM from the same paper: the URM loss rescaled to keep its
+            maximum gradient magnitude at 1).
+        label_smoothing (`float`, *optional*, defaults to `0.0`):
+            Probability ε that a preference label is flipped, used by the `'urm'` and `'alpha_urm'` losses to set a = ε
+            / (1 - ε). Must lie in [0.0, 0.5); `0.0` recovers the Bradley-Terry loss. The paper recommends
+            `'alpha_urm'` with a = 0.8, that is ε = 4/9.
         center_rewards_coefficient (`float`, *optional*):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by [this
             paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
@@ -157,6 +166,23 @@ class RewardConfig(_BaseConfig):
     )
 
     # Parameters that control the training
+    loss_type: str = field(
+        default="sigmoid",
+        metadata={
+            "help": "Type of loss to use. Possible values are: `'sigmoid'` (Bradley-Terry loss), `'urm'` (Unbiased "
+            "Reward Model loss from the Unbiased Alignment paper, which corrects for flipped preference labels) and "
+            "`'alpha_urm'` (α-URM from the same paper: the URM loss rescaled to keep its maximum gradient magnitude "
+            "at 1)."
+        },
+    )
+    label_smoothing: float = field(
+        default=0.0,
+        metadata={
+            "help": "Probability ε that a preference label is flipped, used by the `'urm'` and `'alpha_urm'` losses to "
+            "set a = ε / (1 - ε). Must lie in [0.0, 0.5); `0.0` recovers the Bradley-Terry loss. The paper recommends "
+            "`'alpha_urm'` with a = 0.8, that is ε = 4/9."
+        },
+    )
     center_rewards_coefficient: float | None = field(
         default=None,
         metadata={

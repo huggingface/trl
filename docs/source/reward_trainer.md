@@ -130,6 +130,20 @@ $$
 > [!TIP]
 > The Bradley-Terry model is underdetermined, meaning that adding a constant to all rewards does not change the preference probabilities. To address this, [Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking](https://huggingface.co/papers/2312.09244) proposes adding an auxiliary loss term that encourages the rewards to be centered around zero. This is controlled by the `center_rewards_coefficient` parameter in the [`RewardConfig`]. The recommended value is `1e-2`.
 
+#### Loss types
+
+Real-world preference datasets often contain flipped labels, which bias the reward model trained with the loss above. [Unbiased Alignment for Large Language Models with Noisy Preferences](https://huggingface.co/papers/2607.03248) proposes the Unbiased Reward Model (URM) loss, which corrects for labels flipped with probability  \\( \varepsilon \\):
+
+$$
+\mathcal{L}_{\text{URM}}(\theta) = - \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \frac{e^{\Delta_\theta} + a}{e^{\Delta_\theta} + 1} \right], \quad \Delta_\theta = r_\theta(x, y^+) - r_\theta(x, y^-), \quad a = \frac{\varepsilon}{1 - \varepsilon}.
+$$
+
+| `loss_type=` | Description |
+| --- | --- |
+| `"sigmoid"` (default) | Negative log-likelihood of the Bradley-Terry model, as defined above. |
+| `"urm"` | URM loss from the [Unbiased Alignment](https://huggingface.co/papers/2607.03248) paper. Use `label_smoothing` in [`RewardConfig`] to set the assumed flip probability  \\( \varepsilon \\) in `[0.0, 0.5)`; `label_smoothing=0.0` recovers `"sigmoid"`. |
+| `"alpha_urm"` | α-URM, the normalized variant from the same paper: the URM loss multiplied by  \\( \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}} \\), which keeps its maximum gradient magnitude at 1, as for `"sigmoid"`. The paper recommends it with  \\( a = 0.8 \\), that is `label_smoothing=4/9`. |
+
 ## Logged metrics
 
 While training and evaluating, we record the following metrics:
