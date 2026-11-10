@@ -50,8 +50,9 @@ def is_aiohttp_available() -> bool:
     return _is_package_available("aiohttp")
 
 
-def is_deepspeed_available() -> bool:
-    return _is_package_available("deepspeed")
+def is_deepspeed_available(min_version: str | None = None) -> bool:
+    _deepspeed_available, _deepspeed_version = _is_package_available("deepspeed", return_version=True)
+    return _deepspeed_available and (min_version is None or Version(_deepspeed_version) >= Version(min_version))
 
 
 def is_harbor_available() -> bool:
