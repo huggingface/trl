@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
 import os
 import re
 import tempfile
@@ -52,10 +51,10 @@ generation_config.top_p = None
 
 text_config = Glm5NextTextConfig(
     vocab_size=154880,
-    # 128 for the dimensions that FP8 linears take as input: the FP8 activations are quantized in blocks of 128
-    hidden_size=128,
-    intermediate_size=128,
-    moe_intermediate_size=128,
+    hidden_size=32,
+    intermediate_size=32,
+    # Not 32: the FP8 experts kernels return wrong values for 32x32 expert weights
+    moe_intermediate_size=64,
     # 4 layers, so that each per-layer pattern of the reference appears at least once: 3 linear-attention layers then
     # a sparse-attention one, and 3 dense MLP layers then a sparse one.
     num_hidden_layers=4,
@@ -65,10 +64,10 @@ text_config = Glm5NextTextConfig(
     n_routed_experts=4,
     num_experts_per_tok=2,
     kv_lora_rank=32,
-    q_lora_rank=128,
+    q_lora_rank=32,
     qk_rope_head_dim=0,
-    qk_nope_head_dim=32,
-    v_head_dim=32,
+    qk_nope_head_dim=8,
+    v_head_dim=8,
     index_head_dim=4,
     index_n_heads=2,
     # Smaller than the test sequences, so the sparse attention path actually drops keys.
@@ -100,7 +99,7 @@ vision_config = Glm5NextVisionConfig(
     hidden_size=16,
     num_heads=4,
     intermediate_size=32,
-    out_hidden_size=128,
+    out_hidden_size=32,
     projection_intermediate_size=32,
     image_size=448,
 )
@@ -120,10 +119,11 @@ for layer in model.model.language_model.layers[:3]:
 for layer in model.model.language_model.layers[3:]:
     layer.mlp.gate.e_score_correction_bias.data = layer.mlp.gate.e_score_correction_bias.data.float()
 
-# FP8 weights, like the reference checkpoint: quantize the linears the reference stores in FP8 (the MLPs, the experts and
-# the sparse-attention projections) in 128x128 blocks, each block scaled to the e4m3 range, with the scale of each block
-# stored in `weight_scale_inv`. The modules the reference keeps unquantized are listed with its checkpoint names, scaled
-# down to the 4 layers (plus the MTP layer 4) and 2 vision blocks of the tiny model.
+# FP8 weights, like the reference checkpoint: quantize the linears the reference stores in FP8 (the MLPs, the experts
+# and the sparse-attention projections) in blocks scaled down from the reference's 128x128 to 32x32, each block scaled
+# to the e4m3 range, with the scale of each block stored in `weight_scale_inv`. The modules the reference keeps
+# unquantized are listed with its checkpoint names, scaled down to the 4 layers (plus the MTP layer 4) and 2 vision
+# blocks of the tiny model.
 linear_attention_modules = ["A_log", "b_proj", "dt_bias", "f_a_proj", "f_b_proj", "fused_qkvbfg_a_proj", "g_a_proj"]
 linear_attention_modules += ["g_b_proj", "k_conv1d", "k_proj", "o_norm", "o_proj", "q_conv1d", "q_proj", "qkv_proj"]
 linear_attention_modules += ["v_conv1d", "v_proj"]
@@ -165,22 +165,17 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     state_dict = load_file(os.path.join(tmp_dir, "model.safetensors"))
     for name, weight in list(state_dict.items()):
         if fp8_weights.fullmatch(name):
-            weight = weight.float()
             rows, cols = weight.shape
-            # The last blocks are partial where a dimension is not a multiple of 128 (kv_a_proj_with_mqa's 32 rows)
-            padded = torch.zeros(math.ceil(rows / 128) * 128, math.ceil(cols / 128) * 128)
-            padded[:rows, :cols] = weight
-            blocks = padded.view(padded.shape[0] // 128, 128, padded.shape[1] // 128, 128)
+            blocks = weight.float().view(rows // 32, 32, cols // 32, 32)
             scale = blocks.abs().amax(dim=(1, 3)) / torch.finfo(torch.float8_e4m3fn).max
-            quantized = (blocks / scale[:, None, :, None]).view(padded.shape)[:rows, :cols]
-            state_dict[name] = quantized.to(torch.float8_e4m3fn).contiguous()
+            state_dict[name] = (blocks / scale[:, None, :, None]).view(rows, cols).to(torch.float8_e4m3fn)
             state_dict[name.removesuffix("weight") + "weight_scale_inv"] = scale
     config.quantization_config = {
         "activation_scheme": "dynamic",
         "fmt": "e4m3",
         "modules_to_not_convert": sorted(modules_to_not_convert),
         "quant_method": "fp8",
-        "weight_block_size": [128, 128],
+        "weight_block_size": [32, 32],
     }
     check_dtype_pattern(MODEL_ID, state_dict)
     print_config_diff(MODEL_ID, model)
