@@ -175,19 +175,19 @@ Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assi
 
 ### `nemotron_3_nano_training.jinja`
 
-Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`: the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`: the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_super_training.jinja`
 
-Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_ultra_training.jinja`
 
-Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_5_lightning_training.jinja`
 
-Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `phi3_training.jinja`
 
