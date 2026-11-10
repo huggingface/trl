@@ -329,6 +329,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
             "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
@@ -737,9 +738,13 @@ class TestSFTTrainer(TrlTestCase):
             else:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
     @require_peft
     def test_train_moe_with_peft_config(self):
-        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -883,7 +888,14 @@ class TestSFTTrainer(TrlTestCase):
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.xfail(
+                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
@@ -1123,20 +1135,6 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
-    def test_padding_free_without_packing_and_max_length_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            max_length=16,
-            padding_free=True,
-            report_to="none",
-        )
-
-        with pytest.raises(ValueError, match="`max_length` is not enforced"):
-            SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
@@ -1167,7 +1165,6 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             padding_free=True,
-            max_length=None,  # padding-free without packing doesn't enforce max_length
             model_init_kwargs={
                 "attn_implementation": (
                     "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
@@ -1472,11 +1469,12 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.train_dataset[:]["labels"] == [[6, 7, 8]]
 
-    def test_dataset_truncated_to_max_length(self):
-        """Dataset preparation truncates every example to `max_length`."""
+    @pytest.mark.parametrize("padding_free", [False, True])
+    def test_dataset_truncated_to_max_length(self, padding_free):
+        """Dataset preparation truncates every example to `max_length`, with or without padding-free."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, padding_free=padding_free, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
