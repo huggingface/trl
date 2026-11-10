@@ -36,9 +36,7 @@ class AsyncGRPOConfig(_BaseConfig):
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
-            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked through for this
-            trainer in [Defeating the trainer-generator precision mismatch in
-            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788)) is sensitive to the
             trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
             dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
             `model_init_kwargs` takes precedence.
@@ -422,11 +420,5 @@ class AsyncGRPOConfig(_BaseConfig):
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
         # and batches are broadcast to other processes rather than each process pulling independently.
-        if not hasattr(self, "accelerator_config") or self.accelerator_config is None:
-            self.accelerator_config = {"split_batches": True, "dispatch_batches": True}
-        elif isinstance(self.accelerator_config, dict):
-            self.accelerator_config["split_batches"] = True
-            self.accelerator_config["dispatch_batches"] = True
-        else:
-            self.accelerator_config.split_batches = True
-            self.accelerator_config.dispatch_batches = True
+        self.accelerator_config.split_batches = True
+        self.accelerator_config.dispatch_batches = True
