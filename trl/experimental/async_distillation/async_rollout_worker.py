@@ -129,6 +129,7 @@ def _child_main(
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
+    token_allowance: MPValue,
     stop_event: MPEvent,
     child_ready_event: MPEvent,
     heartbeat_value: MPValue,
@@ -146,6 +147,7 @@ def _child_main(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
+        token_allowance=token_allowance,
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
@@ -216,12 +218,12 @@ class _AsyncRolloutLoop:
         eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
+        token_allowance: MPValue,
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         metrics_queue: MPQueue,
-        max_concurrent_rollouts: int = 128,
-        queue_maxsize: int = 0,
+        max_concurrent_rollouts: int = 512,
         vllm_server_url: str = "http://localhost:8000",
         lora_name: str | None = None,
         teacher_server_urls: dict[str, str] | None = None,
@@ -252,6 +254,10 @@ class _AsyncRolloutLoop:
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
+        self._token_allowance = token_allowance
+        self._produced_tokens = 0
+        self._rollouts_unqueued = 0
+        self._tokens_per_rollout = 0.0
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
@@ -263,7 +269,6 @@ class _AsyncRolloutLoop:
         self._pushed_at = time.monotonic()
 
         self.max_concurrent_rollouts = max_concurrent_rollouts
-        self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
@@ -357,19 +362,38 @@ class _AsyncRolloutLoop:
             self.teacher_max_model_lens[teacher_id] = models["data"][0].get("max_model_len")
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
+    def _fits_token_allowance(self) -> bool:
+        """Whether a new rollout fits in the token allowance the trainer sets.
+
+        Counts the tokens already queued, plus the rollouts in flight at the mean tokens per rollout. Until a rollout
+        has been scored there is no mean, so rollouts start one at a time.
+        """
+        if self._rollouts_unqueued and not self._tokens_per_rollout:
+            return False
+        expected_tokens = self._produced_tokens + self._rollouts_unqueued * self._tokens_per_rollout
+        return expected_tokens < self._token_allowance.value
+
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         rollout_tasks: dict[asyncio.Task, int] = {}
         free_slots = set(range(self.max_concurrent_rollouts))
         work_iter = self._repeat_iterator()
+        t_gated = None
 
         try:
             while True:
                 self._heartbeat_value.value = time.time()
-                while free_slots and not stop_event.is_set():
+                while free_slots and not stop_event.is_set() and self._fits_token_allowance():
                     prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
                     task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
                     rollout_tasks[task] = slot
+                    self._rollouts_unqueued += 1
+                    if t_gated is not None:
+                        self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_gated})
+                        t_gated = None
+                if t_gated is None and self._tokens_per_rollout and free_slots and not stop_event.is_set():
+                    t_gated = time.monotonic()
+                    logger.info("generation is max_staleness steps ahead, waiting for the trainer to consume...")
 
                 if not rollout_tasks:
                     if stop_event.is_set():
@@ -416,24 +440,14 @@ class _AsyncRolloutLoop:
                             num_samples=self.num_completions_to_print,
                         )
 
-                    t_blocked = None
-                    while True:
-                        try:
-                            sample.enqueued_at = time.time()
-                            self.rollout_buffer.put_nowait(sample)
-                            break
-                        except queue.Full:
-                            if stop_event.is_set():
-                                return
-                            if t_blocked is None:
-                                t_blocked = time.monotonic()
-                                logger.info(
-                                    f"rollout buffer full (maxsize={self.queue_maxsize}), "
-                                    "waiting for trainer to consume..."
-                                )
-                            await asyncio.sleep(0.1)
-                    if t_blocked is not None:
-                        self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
+                    sample.enqueued_at = time.time()
+                    self.rollout_buffer.put_nowait(sample)
+                    tokens = len(sample.input_ids)
+                    self._produced_tokens += tokens
+                    self._rollouts_unqueued -= 1
+                    self._tokens_per_rollout = (
+                        tokens if not self._tokens_per_rollout else 0.9 * self._tokens_per_rollout + 0.1 * tokens
+                    )
         finally:
             for task in rollout_tasks:
                 task.cancel()
@@ -711,7 +725,6 @@ class AsyncRolloutWorker:
     def __init__(
         self,
         *,
-        queue_maxsize: int = 0,
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
@@ -721,8 +734,9 @@ class AsyncRolloutWorker:
             raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
-        self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
+        self.rollout_buffer = ctx.Queue()
         self._model_version_value = ctx.Value("i", 0)
+        self.token_allowance = ctx.Value("q", 2**62)
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
@@ -732,9 +746,7 @@ class AsyncRolloutWorker:
         # Metrics the child measures, drained by the trainer in `log()`. Bounded and dropped-on-full in the child, so a
         # trainer that stops draining can never block generation.
         self.metrics_queue = ctx.Queue(maxsize=4096)
-        # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
-        # forwarded, the child reads it for "rollout buffer full" log lines.
-        loop_kwargs["queue_maxsize"] = queue_maxsize
+        # Forwarded verbatim to _AsyncRolloutLoop in the child.
         loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
@@ -773,6 +785,7 @@ class AsyncRolloutWorker:
                 self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,
+                self.token_allowance,
                 self._stop_event_mp,
                 self._child_ready_event,
                 self._heartbeat_value,

@@ -100,6 +100,7 @@ class _StubRolloutWorker:
 
     def __init__(self, *, dataset, processing_class, samples_per_weight_sync: int = 10, **kwargs):
         self.rollout_buffer = queue.Queue()
+        self.token_allowance = mp.Value("q", 0)
         self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
@@ -492,6 +493,7 @@ def _rollout_loop(**kwargs):
         "eos_token_ids": [tokenizer.eos_token_id],
         "rollout_buffer": mp.Queue(),
         "model_version_value": mp.Value("i", 0),
+        "token_allowance": mp.Value("q", 10**12),
         "heartbeat_value": mp.Value("d", 0.0),
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
@@ -499,6 +501,73 @@ def _rollout_loop(**kwargs):
         **kwargs,
     }
     return _AsyncRolloutLoop(**kwargs)
+
+
+@pytest.fixture
+def fake_vllm_server():
+    """A vLLM server that serves both the student and the teacher: the student always answers with the same two tokens."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    async def completions(request):
+        payload = await request.json()
+        if "prompt_logprobs" in payload:  # the teacher scoring the sequence
+            return web.json_response(
+                {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+            )
+        return web.json_response({"choices": [{"token_ids": [7, 8]}]})
+
+    async def models(request):
+        return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+
+    app = web.Application()
+    app.router.add_post("/v1/completions", completions)
+    app.router.add_get("/v1/models", models)
+    return TestServer(app)
+
+
+class TestTokenAllowance:
+    def test_generation_stops_at_the_allowance(self, fake_vllm_server):
+        # Every sample has the same length, so the number of rollouts the allowance admits is exact
+        PartialState()
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hi"}]]})
+        loop = _rollout_loop(dataset=dataset, token_allowance=mp.Value("q", 1))
+
+        def drain():
+            return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
+
+        async def settled(worker, expected):
+            deadline = time.monotonic() + 10
+            while loop.rollout_buffer.qsize() < expected:
+                if worker.done():
+                    worker.result()  # raises the worker's error instead of timing out
+                assert time.monotonic() < deadline, (
+                    f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
+                )
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.3)  # nothing more is generated
+            assert loop.rollout_buffer.qsize() == expected
+
+        async def run():
+            async with fake_vllm_server as server:
+                url = str(server.make_url("")).rstrip("/")
+                loop.vllm_server_url = url
+                loop.teacher_server_urls = {"default": url}
+                stop_event = asyncio.Event()
+                worker = asyncio.create_task(loop._run_loops(stop_event))
+                # Any allowance above 0 admits the first rollout
+                await settled(worker, 1)
+                sample_tokens = len(drain()[0].input_ids)
+                # The allowance now has room for 2.5 more rollouts: the worker starts 3 and stops there
+                loop._token_allowance.value = sample_tokens + sample_tokens * 5 // 2
+                await settled(worker, 3)
+                stop_event.set()
+                await worker
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
 
 
 def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
@@ -1035,6 +1104,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.rollout_worker.token_allowance.value > trainer._rollout_dataset.consumed_tokens > 0
         if "Moe" in model_id:
             # The MoE config declares a `router_aux_loss_coef`, so the load-balancing loss is on by default
             aux_losses = [log["aux_loss"] for log in trainer.state.log_history if "aux_loss" in log]
