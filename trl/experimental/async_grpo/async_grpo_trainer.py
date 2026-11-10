@@ -242,11 +242,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         metrics,
         dropped_groups,
+        token_allowance,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
     ):
         self.queue = rollout_queue
+        self.token_allowance = token_allowance
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
         self.stale_after_s = stale_after_s
@@ -258,6 +260,9 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
         # place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
+        self.consumed_tokens = 0
+        self.step_tokens = 0
+        self.lookahead_tokens = 0
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
         self.report_to = report_to or []
@@ -302,6 +307,9 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if isinstance(sample, int):
                 self.dropped_groups.add(sample)
                 continue
+            self.consumed_tokens += len(sample.input_ids)
+            self.step_tokens += len(sample.input_ids)
+            self.token_allowance.value = self.consumed_tokens + self.lookahead_tokens
 
             version = self.model_version_fn()
             staleness = version - sample.model_version
@@ -316,8 +324,8 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
-            # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
-            # (and then `rollout/backpressure_s` is what generation lost to it).
+            # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
+            # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
             self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
@@ -1180,17 +1188,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
-        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_concurrent_rollouts is None:
-            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
-            logger.info(
-                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
-                f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
-            )
-
         # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
         # force it off regardless of what the user passed.
         if not self.args.ignore_data_skip:
@@ -1319,6 +1316,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
+                token_allowance=self.rollout_worker.token_allowance,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1332,6 +1330,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
+            self._rollout_dataset.lookahead_tokens = (
+                max(self.args.max_staleness, 1)
+                * self.args.gradient_accumulation_steps
+                * num_processes
+                * self.args.token_budget
+            )
+            self.rollout_worker.token_allowance.value = self._rollout_dataset.lookahead_tokens
             dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
@@ -1599,6 +1604,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.accelerator.is_main_process:
             metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
             self._rollout_dataset.wait_s = 0.0
+            if self._rollout_dataset.step_tokens:
+                self._rollout_dataset.lookahead_tokens = (
+                    max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
+                )
+            self._rollout_dataset.step_tokens = 0
             metrics["batch/groups_per_step"].append(float(len(self._trained_groups) - self._last_groups_trained))
             self._last_groups_trained = len(self._trained_groups)
 
