@@ -1776,13 +1776,29 @@ def add_fused_lm_head(
     model.forward = types.MethodType(_fused_forward, model)
 
 
-def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+# Model types whose layers `compute_flops_per_token` describes: full attention in every layer, and a gate/up/down MLP
+# or routed experts of that shape. For each, the estimate matches 6 FLOPs per active weight on real checkpoints.
+_FLOPS_PER_TOKEN_MODEL_TYPES = (
+    "gemma",
+    "granite",
+    "llama",
+    "olmo2",
+    "qwen2",
+    "qwen3",
+    "qwen3_moe",
+    "qwen3_vl_moe_text",
+    "qwen3_vl_text",
+    "smollm3",
+)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int | None:
     """
     Estimate training FLOPs per token for a causal language model (forward + backward).
 
-    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
-    × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT).
+    Supports the dense and MoE model types in `_FLOPS_PER_TOKEN_MODEL_TYPES`. Backward is assumed to cost 2× the
+    forward pass, so total training FLOPs = 3 × forward FLOPs. The attention-score term uses the non-causal convention
+    (every token attends to the full `seq_len`, matching PaLM / Megatron / nanoGPT).
 
     Args:
         config ([`~transformers.PretrainedConfig`]):
@@ -1791,8 +1807,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             The sequence length used for training.
 
     Returns:
-        `int`: Estimated training FLOPs per token.
+        `int` or `None`: Estimated training FLOPs per token, or `None` if the model type is unsupported.
     """
+    if config.model_type not in _FLOPS_PER_TOKEN_MODEL_TYPES:
+        return None
+
     h = config.hidden_size
     L = config.num_hidden_layers
     V = config.vocab_size
