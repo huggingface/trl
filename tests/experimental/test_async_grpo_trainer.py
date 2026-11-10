@@ -2204,6 +2204,20 @@ class TestRolloutLoop(TrlTestCase):
         assert rollout.completion[1]["content"] == "ok"
         assert rollout.tool_call_count == 1 and rollout.tool_failure_count == 0
 
+    def test_chat_template_without_response_parser(self):
+        # TRL has no response parser for this chat template. Only tool calls need one, so without tools the turn is
+        # decoded as plain text, as in GRPO
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        loop = _rollout_loop(processing_class=tokenizer, eos_token_ids=[tokenizer.eos_token_id])
+        output_ids = tokenizer.encode("Hello!", add_special_tokens=False) + [tokenizer.eos_token_id]
+
+        async def generate_one_turn(prompt_ids):
+            return TurnRecord(prompt_ids, output_ids, [-0.1] * len(output_ids))
+
+        loop.generate_one_turn = generate_one_turn
+        rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], []))
+        assert rollout.completion == [{"role": "assistant", "content": "Hello!"}]
+
     def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
         rollout, rows = _run(turns=[_TOOL_CALL], max_iters=0)
