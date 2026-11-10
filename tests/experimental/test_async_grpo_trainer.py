@@ -2323,7 +2323,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_train_with_environment_factory(self, vllm_server):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
-        # succeed and the other will fail (because of a wrong tool name).
+        # succeed and the other will fail (because `reset` is not exposed as a tool).
         server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -2348,8 +2348,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             trainer.processing_class,
             first_turns=[
                 '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
-                # an invalid tool call with wrong tool name
-                '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                # a call to `reset`, which is not exposed as a tool
+                '<tool_call>\n{"name": "reset", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
                 "I won't increment<|im_end|>",
             ],
         )
@@ -2361,9 +2361,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 3)
         assert trainer.state.log_history[-2]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
-
-        # The environments live in the rollout worker's process: their states are checked through the reward they own
-        # in `test_train_with_environment_owned_reward`
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2403,14 +2400,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # The rollout worker lists a rollout's tools right after resetting its environment, so a listing that evaluated
-        # `reward` would have raised
 
     @pytest.mark.xfail(
-        raises=AssertionError,
-        reason="`rewards/<func>/mean` averages over training samples, so a rollout that forks counts once per sample, "
-        "and since #8159 every tool-calling rollout of this model forks",
-        strict=False,  # a window can average to 1/3 by chance
+        reason="`rewards/<func>/mean` averages over training samples (#7835), and `tools/failure_frequency` per "
+        "completion where GRPO divides the failures by the calls (#7838)",
+        strict=False,  # a window can average to the expected values by chance
     )
     @require_response_parsing
     def test_train_with_environment_owned_reward(self, vllm_server):
@@ -2441,16 +2435,20 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             trainer.processing_class,
             first_turns=[
                 '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
-                # an invalid tool call with wrong tool name
-                '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                # a call to `get_reward`, which is not exposed as a tool
+                '<tool_call>\n{"name": "get_reward", "arguments": {}}\n</tool_call><|im_end|>',
                 "I won't increment<|im_end|>",
             ],
         )
         trainer.train()
 
         # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
-        # -> rewards 1.0, 0.0, 0.0. Metrics are logged at every step: the last entry is the run's summary
+        # -> rewards 1.0, 0.0, 0.0. It is the sole reward source, with weight 1. Metrics are logged at every step: the
+        # last entry is the run's summary
         assert trainer.state.log_history[-2]["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+        assert trainer.state.log_history[-2]["reward"] == pytest.approx(1 / 3)
+        # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2488,7 +2486,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert "get_reward" not in tool_names
 
     @require_response_parsing
-    def test_environment_owned_reward_mixed_environments(self):
+    def test_environment_owned_reward_mixed_environments(self, vllm_server):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
         # env *class* contributes one reward column (named after its class); a rollout is scored only when its
         # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
@@ -2496,21 +2494,44 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # double-counting).
 
         # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
-        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [[{"role": "user", "content": "Play."}]] * 3,
+                "environment": ["scored", "scored2", "plain"],
+            }
+        )
 
-        # The reward columns are set up by the rollout worker, built here on its own.
-        loop = _rollout_loop(
-            dataset=dataset,
-            num_generations=3,
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=9,  # one generation batch holds the 3 environments
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
             environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
         )
-        try:
-            # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated)
-            # env-reward column is appended after the trainer-owned reward func.
-            assert loop.reward_func_names == ["str_length_reward", "ScoredEnvironment", "rollout"]
-        finally:
-            loop._loop.close()
+
+        # No tool call. Distinct-length completions within the group give reward variance, so advantages are non-zero.
+        server.script = ScriptedTurns(
+            trainer.processing_class, first_turns=["I won't increment<|im_end|>", "I won't increment it<|im_end|>"]
+        )
+        trainer.train()
+
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
+        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising. Metrics are logged at every
+        # step: the last entry is the run's summary
+        logged = trainer.state.log_history[-2]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
+        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
 
     @pytest.mark.xfail(
         reason="The reward sources are checked in the rollout worker at train start, not at init", strict=True
@@ -3613,16 +3634,6 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             # The probe instances seed the reuse pool, so they are not wasted.
             assert len(loop._environment_pool["counter"]) == 1
             assert len(loop._environment_pool["echo"]) == 1
-        finally:
-            loop._loop.close()
-
-    def test_environment_owned_reward_is_a_reward_column_not_a_tool(self):
-        # The env-owned reward is registered as a reward source (logged under the env class name), and neither
-        # `get_reward` nor `reset` is exposed as a tool
-        loop = self._make_loop(IncrementRewardEnvironment)
-        try:
-            assert loop.reward_func_names == ["str_length_reward", "IncrementRewardEnvironment", "rollout"]
-            assert [tool.__name__ for tool in loop.tools] == ["increment"]
         finally:
             loop._loop.close()
 
