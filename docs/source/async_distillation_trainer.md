@@ -298,7 +298,7 @@ Throughput and MFU are reported on two time bases:
 
 The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
 
-MFU is reported only when peak compute capacity is known for the local training device at the selected precision. Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL). Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
