@@ -846,6 +846,17 @@ class RLOOTrainer(_BaseTrainer):
             if isinstance(processing_class, ProcessorMixin):
                 # A sampled image token would mismatch the image features
                 generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
+                # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+                if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                    "qwen2_vl",
+                    "qwen2_5_vl",
+                    "qwen3_vl",
+                    "qwen3_vl_moe",
+                    "qwen3_5",
+                    "qwen3_5_moe",
+                    "paddleocr_vl",
+                ):
+                    generation_kwargs["suppress_tokens"].append(model.config.vision_start_token_id)
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
@@ -1351,7 +1362,7 @@ class RLOOTrainer(_BaseTrainer):
 
             # Generate using vLLM (note: RLOO doesn't use logprobs from generation, so we ignore them)
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-            _, completion_ids, _, _ = self.vllm_generation.generate(
+            _, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=num_generations,

@@ -877,7 +877,7 @@ class IWOPDTrainer(_BaseTrainer):
 
         # Generate completions — pass token IDs directly, no text decoding
         prompt_ids_list = [p.tolist() for p in local_prompts]
-        _, completion_ids, logprobs, logprob_token_ids = self.vllm_generation.generate(
+        _, completion_ids, logprobs, logprob_token_ids, _ = self.vllm_generation.generate(
             prompts=prompt_ids_list, images=None, num_generations=self.num_generations
         )
 

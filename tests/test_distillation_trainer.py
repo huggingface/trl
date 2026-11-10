@@ -1558,6 +1558,22 @@ class TestDistillationTrainerVLM(TrlTestCase):
 
         assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
+    def test_generation_suppresses_vision_start_token(self):
+        # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            teacher_model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        expected = [trainer.model.config.image_token_id]
+        if Version(transformers.__version__) < Version("5.3.0"):
+            expected.append(trainer.model.config.vision_start_token_id)
+        assert trainer.generation_config.suppress_tokens == expected
+
     @pytest.mark.parametrize(
         "model_id",
         [
