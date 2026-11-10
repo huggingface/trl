@@ -137,6 +137,8 @@ hf jobs uv run --flavor a10g-large --timeout 3h --secrets HF_TOKEN \
     --push-to <you>/smoldataenvs-rollouts --private --run-name test-sft
 ```
 
+![Tasks solved by the base model, the SFT model and the teacher](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_agent_traces/results.png)
+
 | Model | Eval (144) | Test (163) |
 | --- | --- | --- |
 | [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) | 7.6% | 5.5% |
