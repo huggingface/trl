@@ -1493,10 +1493,11 @@ class TestSFTTrainer(TrlTestCase):
             assert example["input_ids"][-1] == eos_token_id
             assert example["labels"][-1] == eos_token_id  # EOS is trained on
 
-    def test_dataset_preparation_builds_labels_for_completion_only(self):
+    @pytest.mark.parametrize("config_name", ["standard_prompt_completion", "conversational_prompt_completion"])
+    def test_dataset_preparation_builds_labels_for_completion_only(self, config_name):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
         resolves to True (the default for prompt-completion datasets)."""
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(

@@ -879,8 +879,9 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_with_reward_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+    @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
+    def test_train_with_reward_model(self, config_name):
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
         reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
         reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id)
         reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_id)
