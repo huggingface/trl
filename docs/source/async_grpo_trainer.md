@@ -471,8 +471,8 @@ Logged when the trainer has tools. `tools/<name>/*` repeats per tool name, the s
 
 | metric | meaning |
 | --- | --- |
-| `tools/call_frequency` | tool calls per rollout, averaged over the training samples of kept groups where at least one rollout called a tool. GRPO's `tools/call_frequency` averages over every completion in the batch |
-| `tools/failure_frequency` | fraction of a rollout's tool calls that failed (0 for a rollout with no calls), averaged over the same samples. A call fails when the tool raises or when the model names a tool that doesn't exist. GRPO's `tools/failure_frequency` is failed calls over all calls in the batch |
+| `tools/call_frequency` | tool calls per rollout, over every rollout, including the groups dropped for zero reward std |
+| `tools/failure_frequency` | failed tool calls over all tool calls, including the dropped groups. A call fails when the tool raises or when the model names a tool that doesn't exist. In a window with no tool calls it's NaN, where GRPO logs 0 |
 | `tools/latency_s`, `tools/<name>/latency_s` | time spent running the tool |
 | `tools/<name>/call_count`, `tools/<name>/failure_count` | calls and failures of each tool |
 | `tools/unknown_name_count` | calls to a tool that doesn't exist. This is a policy error, unlike a tool that ran and raised |
