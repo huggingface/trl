@@ -59,7 +59,7 @@ In [`GRPOTrainer`], generation and training are sequential: generate a batch, co
 
 ### Generating completions
 
-The rollout worker keeps up to `max_concurrent_rollouts` requests in flight to the vLLM server. For each prompt, it generates a group of  \\( G \\) completions (`num_generations`) and, once the whole group is done, scores it and computes its advantages. The resulting training samples go into a queue, which the training loop pulls from. Generation never waits for a training step, and a training step only waits when the queue is empty.
+The rollout worker keeps up to `max_concurrent_rollouts` requests in flight to the vLLM server. For each prompt, it generates a group of  \\( G \\) completions (`num_generations`) and, once the whole group is done, scores it and computes its advantages. The resulting training samples go into a queue, which the training loop pulls from. Generation waits only when it is `max_staleness` steps ahead of training (see [Concurrency](#concurrency)), and a training step only waits when the queue is empty.
 
 Every `weight_sync_steps` training steps, the trainer sends its updated weights to the vLLM server over NCCL, so the next completions come from the latest policy. A completion can therefore come from a policy a few steps older than the one being trained: a sample more than `max_staleness` weight updates behind when the trainer pulls it is dropped.
 
@@ -142,12 +142,26 @@ While training, we record the following metrics:
 - `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `clip_ratio/high_max`: The largest per-completion fraction of tokens clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
-The other metrics describe the asynchronous pipeline. Metrics ending in `_total` count events during the logging window.
+The other metrics describe the asynchronous pipeline.
+
+Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
+
+- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
+- Any other metric is the mean of the values recorded in the window.
+
+Units:
+
+- `_s`: seconds.
+- `tokens_per_s`: tokens per second.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: amount in one optimizer step, averaged over the steps in the window.
 
 ### Rollout metrics
 
 - `rollout/duration_s`: The wall time of one rollout, from dispatch until the rollout loop collects it.
-- `rollout/generated_tok_s`: The generation throughput, in generated tokens per second, since the previous report.
+- `rollout/generated_tokens_per_s`: The generation throughput, in generated tokens per second, since the previous report.
 - `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
 - `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
 - `rollout/turns_mean`, `rollout/turns_max`: The average and maximum number of turns per rollout.
@@ -158,18 +172,18 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `rollout/score_s`: The time to score a group.
 - `rollout/score_wait_s`: The time a completed group waited before being scored.
 - `rollout/score_block_s`: The time generation was blocked because the scoring queue was full.
-- `rollout/backpressure_s`: The time generation was blocked because the rollout queue was full. See [The rollout queue](#the-rollout-queue).
-- `rollout/vllm_retry_total`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
+- `rollout/backpressure_s`: The time generation waited because it was `max_staleness` steps ahead of training. See [Concurrency](#concurrency).
+- `rollout/vllm_retry_count`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
 - `rollout/kv_cache_usage`: The vLLM KV cache usage (maximum over engines) at the last poll.
 - `rollout/vllm_running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
 - `rollout/vllm_queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
-- `rollout/vllm_preemptions_total`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
+- `rollout/vllm_preemption_count`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
 
 ### Tool metrics
 
 - `tools/latency_s`, `tools/{tool_name}/latency_s`: The time spent executing a tool call, over all tools and per tool.
-- `tools/{tool_name}/call_total`, `tools/{tool_name}/failure_total`: The number of calls and failed calls per tool.
-- `tools/unknown_name_total`: The number of calls to a tool that does not exist. Unlike a tool that ran and raised, this is a policy error.
+- `tools/{tool_name}/call_count`, `tools/{tool_name}/failure_count`: The number of calls and failed calls per tool.
+- `tools/unknown_name_count`: The number of calls to a tool that does not exist. Unlike a tool that ran and raised, this is a policy error.
 - `tools/parallel_calls_mean`: The average number of tool calls in an assistant message that calls tools.
 - `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools. Logged only when tools are provided.
 
@@ -185,7 +199,7 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `sample/rollout_queue_size`: The number of samples waiting in the rollout queue.
 - `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
 - `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. The `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` metrics combine this staleness with the training-inference mismatch: a ratio away from `1.0` or a log-probability difference away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
-- `sample/dropped_stale_total`: The number of samples dropped for exceeding `max_staleness`.
+- `sample/dropped_stale_count`: The number of samples dropped for exceeding `max_staleness`.
 
 ### Batch metrics
 
@@ -198,7 +212,7 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `batch/row_imbalance`: The ratio of the most expensive row's attention cost to the average one. The process with the most expensive row stalls the others at the gradient all-reduce; `1.0` is perfect balance.
 - `batch/packing_ratio`: The number of tokens before packing per forwarded token: the factor by which packing shrinks the forward, `1.0` when nothing is shared.
 - `batch/pad_frac`: The fraction of padding added to make the rows the same length. It only costs transfer, it is removed before the forward.
-- `batch/dropped_oversize_total`: The number of samples dropped for exceeding `token_budget`.
+- `batch/dropped_oversize_count`: The number of samples dropped for exceeding `token_budget`.
 
 ### Performance metrics
 
@@ -207,8 +221,8 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `perf/optimizer_s`: The time spent in the optimizer step.
 - `perf/rollout_wait_s`: The time training waited because the rollout queue was empty. See [The rollout queue](#the-rollout-queue).
 - `perf/weight_sync_s`: The time of a weight sync, split into `perf/weight_sync_pause_s` (waiting for vLLM to pause), `perf/weight_sync_barrier_s` (waiting for the other processes) and `perf/weight_sync_transfer_s` (sending the weights).
-- `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
-- `perf/trained_tok_s_wall_clock`: The number of trained tokens per second, over the whole step.
+- `perf/forwarded_tokens_per_s_fwd_bwd`, `perf/forwarded_tokens_per_s_wall_clock`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
+- `perf/trained_tokens_per_s_wall_clock`: The number of trained tokens per second, over the whole step.
 - `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known.
 
 ## Customization
@@ -254,9 +268,31 @@ VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
 
 ### Concurrency
 
-The number of concurrent requests sent to the vLLM server is capped by `max_concurrent_rollouts`. By default it is set automatically to `max(max_staleness, 1) × per_device_train_batch_size × gradient_accumulation_steps × num_processes`: the maximum number of samples the trainer can consume before they become stale. Generating more than this is wasteful, since the excess samples are dropped.
+Three limits decide how many rollouts run at once. The first two adapt on their own; the third is yours to set.
 
-`max_concurrent_rollouts` is a ceiling, not the number actually in flight. The worker polls the server's `/metrics` endpoint every few seconds and keeps a live cap underneath it (`rollout/concurrency_cap`): past a certain concurrency, more requests make vLLM *slower*, because the KV cache fills, sequences are preempted and recomputed, and cached prefixes are evicted and re-prefilled. The cap starts at `KV cache tokens / max_model_len`, read from the server at startup: as many requests as fit at full length, so the first step cannot thrash. While usage stays under 0.6 with nothing queued, the cap grows by 25% each time a cap's worth of rollouts has completed, up to the ceiling. When KV cache usage passes 0.8, the cap is cut by 30%. No running request is cancelled: admissions stop until the pool has drained below the new cap, and no further cut is taken until then. If the server does not expose `/metrics`, the cap stays at the ceiling.
+**Staleness.** `max_staleness` sets how many training steps generation may run ahead of the trainer. The worker tracks this in tokens, because the number of samples in a step changes as completions get longer or shorter. After each step, the trainer counts the tokens it used, and lets the worker keep up to `max(max_staleness, 1)` times that many tokens queued or in progress. Before the first step, it assumes every row is full. The worker starts a new group of rollouts only while it is under that limit. At the very start it doesn't know yet how many tokens a rollout produces, so it starts one group at a time until the first group finishes. A sample that still ends up more than `max_staleness` steps old is dropped.
+
+**vLLM load.** Sending vLLM too many requests at once makes it slower: the KV cache fills up, and vLLM has to pause and redo some requests. So the worker also keeps a live limit on how many rollouts run at once, logged as `rollout/concurrency_cap`, and checks the server's `/metrics` every 5 seconds to adjust it. The limit starts at the number of requests that fit in the KV cache at full length (`KV cache tokens / max_model_len`), so the server isn't overloaded at the start. While KV-cache usage stays below 60% and no requests are waiting, the limit goes up by 25%, at most once per cap's worth of finished rollouts. When usage goes above 80%, it goes down by 30%: running requests keep going, and new ones wait. If the server has no `/metrics` endpoint, the limit is `max_concurrent_rollouts`.
+
+**Resources.** `max_concurrent_rollouts` (`512` by default) is the upper limit on rollouts running at once. It's the one limit you set yourself, because the trainer can't see what your environments and tools can handle. Each running rollout uses an environment, can run synchronous tool calls on a thread pool of this size, and keeps a connection open to the vLLM server. Set it to what those can handle, for example the number of sessions your environment server accepts:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    max_concurrent_rollouts=64,
+)
+```
+
+If it's too low, generation slows down. A rollout keeps its slot while it runs tools or waits between turns, not only while vLLM generates, so rollouts that call many tools need more slots to keep vLLM busy. If it's much higher than the default, the vLLM server can start dropping connections.
+
+> [!TIP]
+> The logged metrics show which limit is holding generation back:
+>
+> - `rollout/backpressure_s` above zero: the staleness limit. Generation is ahead of training, which is expected when inference is faster than training.
+> - `rollout/concurrency` at `rollout/concurrency_cap`, below `max_concurrent_rollouts`: the vLLM server's load.
+> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/kv_cache_usage` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
 
 ### The rollout queue
 
@@ -265,12 +301,13 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 - `sample/rollout_queue_size`: how many samples are waiting.
 - `sample/time_in_queue_s`: how long a single sample waited before being trained on, the time part of its staleness.
 - `perf/rollout_wait_s`: how long training waited because the queue was empty.
-- `rollout/backpressure_s`: how long generation waited because the queue was full.
+- `rollout/backpressure_s`: how long generation waited because it was `max_staleness` steps ahead of training.
 
-The last two are never both large. Read together with the queue size, they tell you which side is the bottleneck:
+The last two are mirror images. Read together with the queue size, they tell you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high: **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/concurrency` and `rollout/score_queue_size`.
-- queue near full, `rollout/backpressure_s` high: **trainer-bound**. Generation is throttled and its output ages in the queue, so `sample/staleness_mean` climbs.
+- queue near empty, `perf/rollout_wait_s` high: **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_queue_size`.
+- queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high: **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
+- both high: the `max_staleness` limit itself is too tight. The rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero: balanced.
 
 ### Tree packing
