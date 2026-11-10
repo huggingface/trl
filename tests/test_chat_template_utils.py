@@ -1766,7 +1766,6 @@ class TestGetTrainingChatTemplate:
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
             ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-NemotronHForCausalLM-nano", [None, False, True]),
@@ -1838,7 +1837,6 @@ class TestGetTrainingChatTemplate:
             )
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
-            ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
             ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-NemotronHForCausalLM-nano", [False]),
