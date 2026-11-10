@@ -93,7 +93,6 @@ def main():
         warmup_steps=0.05,  # below 1, a fraction of the total steps
         per_device_train_batch_size=1,
         gradient_accumulation_steps=args.grad_accum,
-        gradient_checkpointing=True,
         logging_steps=1,
         save_strategy="no",
         # Trackio's dashboard is a Space that can be public, so a private run logs to the job output only.
