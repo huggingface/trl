@@ -1782,8 +1782,7 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
 
     Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
     × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU through [`adjusted_mfu`] for the Llama /
-    DeepSpeed Ulysses causal-corrected convention.
+    `seq_len`, matching PaLM / Megatron / nanoGPT).
 
     Args:
         config ([`~transformers.PretrainedConfig`]):
@@ -1936,30 +1935,3 @@ def compute_mfu(
         `float`: MFU as a percentage (0-100).
     """
     return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
-
-
-def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
-    """
-    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
-
-    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as attending to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only half of the attention-score FLOPs (`Q·Kᵀ`
-    and `attn·V`) are actually performed. This function subtracts that half from the per-token total and rescales `mfu`
-    accordingly. Use it to compare against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
-
-    Args:
-        mfu (`float`):
-            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal [`compute_flops_per_token`]).
-        config ([`~transformers.PretrainedConfig`]):
-            The model configuration.
-        seq_len (`int`):
-            The sequence length used for training.
-
-    Returns:
-        `float`: Causal-corrected MFU as a percentage.
-    """
-    flops_full = compute_flops_per_token(config, seq_len)
-    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
-    return mfu * (flops_full - half_attn_score) / flops_full
