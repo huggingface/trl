@@ -1018,7 +1018,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
-                marks=pytest.mark.xfail(raises=ValueError, reason="Attention sinks are not supported", strict=True),
+                marks=pytest.mark.xfail(
+                    raises=ValueError, reason="Attention sinks are not supported (#8231)", strict=True
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeForCausalLM",
@@ -1030,7 +1032,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-                marks=pytest.mark.xfail(raises=ValueError, reason="Mamba layers are not supported", strict=True),
+                marks=pytest.mark.xfail(
+                    raises=ValueError, reason="Mamba layers are not supported (#8232)", strict=True
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-PhimoeForCausalLM",
@@ -1051,7 +1055,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
-                marks=pytest.mark.xfail(raises=ValueError, reason="Mamba layers are not supported", strict=True),
+                marks=pytest.mark.xfail(
+                    raises=ValueError, reason="Mamba layers are not supported (#8233)", strict=True
+                ),
             ),
         ],
     )
@@ -2162,7 +2168,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     @pytest.mark.xfail(
         raises=AssertionError,
         reason="The metrics average over samples, so a rollout that forks counts once per sample, and since #8159 every "
-        "tool-calling rollout of this model forks",
+        "tool-calling rollout of this model forks (#7838)",
         strict=True,
     )
     @require_response_parsing
@@ -2601,7 +2607,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(
         raises=RuntimeError,
-        reason="The rollout worker parses every completion with a response schema, and this chat template has none",
+        reason="The rollout worker parses every completion with a response schema, and this chat template has none (#5742)",
         strict=True,
     )
     @require_response_parsing
@@ -3055,7 +3061,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
                 marks=pytest.mark.xfail(
                     raises=RuntimeError,
                     reason="The rollout worker parses every completion with a response schema, and transformers has "
-                    "none for this chat template",
+                    "none for this chat template (#5742)",
                     strict=True,
                 ),
             ),
@@ -3318,7 +3324,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
     @pytest.mark.xfail(
         raises=AssertionError,
-        reason="`tools/call_frequency` is averaged over training samples, not completions as in GRPO (#8188)",
+        reason="`tools/call_frequency` is averaged over training samples, not completions as in GRPO (#7838)",
         strict=True,
     )
     @pytest.mark.skipif(
