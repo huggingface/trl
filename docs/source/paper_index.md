@@ -1269,7 +1269,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2607.03248
 
-This ICML 2026 paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the policy trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased DPO (UDPO) loss, called α-UDPO in the paper:
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the policy trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased DPO (UDPO) loss, called α-UDPO in the paper:
 
 $$
 \mathcal{L}_{\text{UDPO}} = -\alpha \log \frac{e^{z} + a}{e^{z} + 1}, \quad z = \beta \left( \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
