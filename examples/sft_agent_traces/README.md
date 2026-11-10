@@ -51,8 +51,8 @@ share no question, but they were drawn task by task, not dataset by dataset: 122
 250 test tasks use a Kaggle dataset that some training task uses too, and a student trained on those has already seen
 their files and columns. The filter keeps 2,879 of the 5,000 training tasks.
 
-The URL names one provider, since the router's default provider for this model rejects a parameter OpenEnv sends. In
-our runs the teacher solved 78% of the clean training tasks, in a median of 6 turns and about 2 minutes per task. Every result
+The URL names one provider, since the router's default provider for this model rejects a parameter OpenEnv sends.
+The teacher solves 78% of the clean training tasks, in a median of 6 turns and about 2 minutes per task. Every result
 JSON is uploaded as soon as its task ends, and `--start` and `--num-tasks` pick the next slice, so several Jobs can
 split a larger run.
 
@@ -108,27 +108,41 @@ and 163 of the 250 tasks of the [test split](https://huggingface.co/datasets/Fin
 ones whose Kaggle dataset backs no training task outside the eval split's datasets. `--reward-key correctness,reward`
 reads whichever reward a task's grader wrote.
 
-| Model | Traces | Eval (144) | Test (163) |
-| --- | --- | --- | --- |
-| [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) | 0 | 7.6% | 5.5% |
-| + SFT ([model](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-500)) | 473 | 33.3% | 34.4% |
-| + SFT ([model](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-1k)) | 963 | 32.6% | 38.7% |
-| + SFT ([model](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-full)) | 2,238 | 36.8% | 38.7% |
-| Qwen3.5-397B-A17B (teacher) | | 71.5% | 74.2% |
+| Model | Eval (144) | Test (163) |
+| --- | --- | --- |
+| [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) | 7.6% | 5.5% |
+| [Qwen3.5-2B-SmolDataEnvs-SFT-500](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-500) (the commands above) | 33.3% | 34.4% |
+| [Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) (teacher) | 71.5% | 74.2% |
 
 With about 500 traces the student goes from about 6% to about 34% on tasks built on data it never saw, close to half
 of the teacher. It also learns the shape of the work: a median of 8 to 9 turns instead of 18 to 20, and, on the tasks
-whose grader records it, an answer on two thirds of them instead of one third. More traces help less: four times as
-many add 3 to 4 points. What the student still gets wrong is mostly looping: a quarter of the tasks hit the task's
-10-minute agent timeout (a tenth for the base model, which gives up sooner, and none for the teacher).
-
-Splitting by dataset matters. A first run trained on traces from any training task, without `--exclude-datasets-of`.
-On the eval tasks whose Kaggle dataset no trace used it scored 17.3%, and on those that shared a dataset with some
-trace, 42.4%: most of its apparent gain was familiarity with the files.
+whose grader records it, an answer on two thirds of them instead of one third. What the student still gets wrong is
+mostly looping: a quarter of the tasks hit the task's 10-minute agent timeout (a tenth for the base model, which gives
+up sooner, and none for the teacher).
 
 The eval takes longer than the training. Each turn waits for a tool to run in a remote sandbox, and each task starts
 and stops its own sandbox, so the GPU idles most of the time. More `--workers` make it faster, up to what your
 sandbox quota allows.
+
+### How many traces?
+
+Most of the gain comes from the first few hundred traces. Generating from the whole clean train split
+(`--num-tasks 2879`) gives four times as many and adds 3 to 4 points:
+
+| Model | Traces | Eval (144) | Test (163) |
+| --- | --- | --- | --- |
+| [Qwen3.5-2B-SmolDataEnvs-SFT-500](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-500) | 473 | 33.3% | 34.4% |
+| [Qwen3.5-2B-SmolDataEnvs-SFT-1k](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-1k) | 963 | 32.6% | 38.7% |
+| [Qwen3.5-2B-SmolDataEnvs-SFT-full](https://huggingface.co/sergiopaniego/Qwen3.5-2B-SmolDataEnvs-SFT-full) | 2,238 | 36.8% | 38.7% |
+
+With 144 and 163 tasks, a difference of a few points is within noise. The traces, every raw rollout and the training
+curves are in [this collection](https://huggingface.co/collections/sergiopaniego/sft-on-agent-traces-with-trl).
+
+### Why the dataset filter matters
+
+Trained on traces from any training task, without `--exclude-datasets-of`, the student scores 17.3% on the eval tasks
+whose Kaggle dataset no trace used and 42.4% on those that share a dataset with some trace: most of the apparent gain
+is familiarity with the files.
 
 ## Notes
 
