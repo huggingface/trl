@@ -407,7 +407,7 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 | metric                      | question                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sample/rollout_queue_size` | how many samples are waiting right now                                                                  |
+| `rollout/queue_size`        | how many samples are waiting right now                                                                  |
 | `sample/time_in_queue_s`    | how long **a single sample** sat there before being trained on — the seconds half of its off-policyness |
 | `perf/rollout_wait_s`       | how long training sat blocked because the queue was **empty**                                           |
 | `rollout/backpressure_s`    | how long generation (the worker) waited because it was `max_staleness` steps ahead of training          |
@@ -452,6 +452,7 @@ The generation pipeline, from starting a rollout to putting its samples in the q
 | `rollout/concurrency_cap` | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency) |
 | `rollout/backpressure_s` | how long the score loop waited to put samples in a full rollout queue, averaged over the waits in the window. See [the rollout queue](#the-rollout-queue) |
 | `rollout/score_queue_size` | completed groups waiting to be scored |
+| `rollout/queue_size` | scored samples waiting in the rollout queue, measured where the trainer pulls them. See [the rollout queue](#the-rollout-queue) |
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full |
 
 The vLLM server. All but the retry count are read from the server's `/metrics` endpoint every 5 seconds:
@@ -497,7 +498,6 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max` | tokens in one **sample**: prompt + tool context + generated. Packing is a row-level concern, see `batch/row_*`                                      |
 | `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
-| `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
 | `sample/dropped_stale_count`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |

@@ -607,14 +607,14 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
-            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
             #                                them rather than where the worker filled it
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
             # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
             # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
-            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            self.metrics["rollout/queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
