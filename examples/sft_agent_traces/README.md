@@ -1,11 +1,11 @@
-# Teach a small model to work as an agent with SFT on agent traces
+# SFT of Qwen3.5-2B on coding agent traces
 
-A 2B model dropped into a coding agent usually loops: it calls tools for twenty turns, runs out of time, and often
-never writes an answer. A much larger model in the same agent solves most tasks in about six turns. This example
-records the large model working through real tasks, keeps the conversations that ended with a correct answer, and
-fine-tunes the small model on them with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer). It is the first
-stage of an agentic post-training recipe: SFT on traces gives the student a working agent loop, which RL then
-improves.
+This example fine-tunes [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) with
+[`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on conversations of
+[Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) working as an [OpenCode](https://opencode.ai) agent
+on data-analysis tasks, keeping only the conversations that ended with a correct answer. On held-out tasks, the base
+model solves 7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned
+model is meant as a starting point for RL.
 
 | Step | Script | Where it runs |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ and the [eval split](https://huggingface.co/datasets/FineEnvs/SmolDataEnvs-harbo
 The agent is [OpenCode](https://opencode.ai), an open-source coding agent with `bash`, `read` and other file tools.
 [OpenEnv](https://github.com/openenv/OpenEnv) runs it on a task in a
 [Hugging Face Sandbox](https://huggingface.co/docs/huggingface_hub/guides/sandboxes) and records every call it makes
-to the model: the messages sent, the tools offered and the reply. This record is what we train on.
+to the model: the messages sent, the tools offered and the reply. These records are the training data.
 
 ## 2. Generate traces with a teacher
 
@@ -65,7 +65,7 @@ uv run examples/sft_agent_traces/build_dataset.py \
 
 One row per solved task: the whole conversation of the agent's last call to the model (system prompt, task, every
 assistant turn with its tool calls, every tool output) plus the final reply, in the conversational format with a
-`tools` column. Two details matter here:
+`tools` column. Two details of the conversion:
 
 - Tool-call arguments arrive as JSON strings, and the Qwen3.5 chat template iterates over them as a dict, so they
   are parsed.
@@ -115,7 +115,7 @@ reads whichever reward a task's grader wrote.
 | [Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) (teacher) | 71.5% | 74.2% |
 
 With about 500 traces the student goes from about 6% to about 34% on tasks built on data it never saw, close to half
-of the teacher. It also learns the shape of the work: a median of 8 to 9 turns instead of 18 to 20, and, on the tasks
+of the teacher. It also takes a median of 8 to 9 turns instead of 18 to 20, and, on the tasks
 whose grader records it, an answer on two thirds of them instead of one third. What the student still gets wrong is
 mostly looping: a quarter of the tasks hit the task's 10-minute agent timeout (a tenth for the base model, which gives
 up sooner, and none for the teacher).
@@ -138,7 +138,7 @@ Most of the gain comes from the first few hundred traces. Generating from the wh
 With 144 and 163 tasks, a difference of a few points is within noise. The traces, every raw rollout and the training
 curves are in [this collection](https://huggingface.co/collections/sergiopaniego/sft-on-agent-traces-with-trl).
 
-### Why the dataset filter matters
+### Without the dataset filter
 
 Trained on traces from any training task, without `--exclude-datasets-of`, the student scores 17.3% on the eval tasks
 whose Kaggle dataset no trace used and 42.4% on those that share a dataset with some trace: most of the apparent gain
