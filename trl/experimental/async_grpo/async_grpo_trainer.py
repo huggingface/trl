@@ -87,7 +87,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
-    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `count` word in the name is a count of events in the window, summed (producers push deltas).
     - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
       (`completions/max_length`, `clip_ratio/high_max`) working alongside this trainer's own (`row_tokens_max`).
     - anything else is a gauge, and its window mean is meaningful.
@@ -98,7 +98,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
         numerator, denominator = (sum(v) for v in zip(*values, strict=True))
         return numerator / denominator if denominator else float("nan")
     words = key.split("/")[-1].split("_")
-    if "total" in words:
+    if "count" in words:
         return sum(values)
     if "max" in words:
         return max(values)
@@ -242,11 +242,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         stale_after_s,
         metrics,
         dropped_groups,
+        token_allowance,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
     ):
         self.queue = rollout_queue
+        self.token_allowance = token_allowance
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
         self.stale_after_s = stale_after_s
@@ -258,6 +260,9 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
         # place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
+        self.consumed_tokens = 0
+        self.step_tokens = 0
+        self.lookahead_tokens = 0
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
         self.report_to = report_to or []
@@ -302,12 +307,15 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if isinstance(sample, int):
                 self.dropped_groups.add(sample)
                 continue
+            self.consumed_tokens += len(sample.input_ids)
+            self.step_tokens += len(sample.input_ids)
+            self.token_allowance.value = self.consumed_tokens + self.lookahead_tokens
 
             version = self.model_version_fn()
             staleness = version - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
-                self.metrics["sample/dropped_stale_total"].append(1.0)
+                self.metrics["sample/dropped_stale_count"].append(1.0)
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
@@ -316,8 +324,8 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
-            # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
-            # (and then `rollout/backpressure_s` is what generation lost to it).
+            # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
+            # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
             self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
@@ -398,7 +406,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
-                self.metrics["batch/dropped_oversize_total"].append(1.0)
+                self.metrics["batch/dropped_oversize_count"].append(1.0)
                 continue
             while True:
                 placed_row = self._place(rows, sample)
@@ -1183,17 +1191,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
-        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_concurrent_rollouts is None:
-            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
-            logger.info(
-                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
-                f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
-            )
-
         # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
         # force it off regardless of what the user passed.
         if not self.args.ignore_data_skip:
@@ -1322,6 +1319,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
+                token_allowance=self.rollout_worker.token_allowance,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1335,6 +1333,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
+            self._rollout_dataset.lookahead_tokens = (
+                max(self.args.max_staleness, 1)
+                * self.args.gradient_accumulation_steps
+                * num_processes
+                * self.args.token_budget
+            )
+            self.rollout_worker.token_allowance.value = self._rollout_dataset.lookahead_tokens
             dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
@@ -1602,6 +1607,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.accelerator.is_main_process:
             metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
             self._rollout_dataset.wait_s = 0.0
+            if self._rollout_dataset.step_tokens:
+                self._rollout_dataset.lookahead_tokens = (
+                    max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
+                )
+            self._rollout_dataset.step_tokens = 0
             metrics["batch/groups_per_step"].append(float(len(self._trained_groups) - self._last_groups_trained))
             self._last_groups_trained = len(self._trained_groups)
 
@@ -1612,7 +1622,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None:
                 metrics["perf/mfu_fwd_bwd"].append(
                     compute_mfu(
@@ -1620,8 +1630,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
+                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(
