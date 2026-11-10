@@ -294,8 +294,8 @@ Throughput measures how many tokens the trainer processes per second. **Model FL
 
 Throughput and MFU are reported on two time bases:
 
-- **`_fwd_bwd`** measures performance during the forward and backward passes.
-- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+- **`fwd_bwd_`** measures performance during the forward and backward passes.
+- **`wall_clock_`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
 
 The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
 
@@ -304,14 +304,14 @@ MFU is reported only when peak compute capacity is known for the local training 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
-| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
+| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `fwd_bwd_` metric below                                    |
 | `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
 | `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s` | forwarded tokens per second on each basis                                                                                                             |
 | `perf/wall_clock_trained_tokens_per_s`                                   | the same, counting only tokens the loss saw                                                                                                            |
-| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+| `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## Design philosophy
 

@@ -1638,15 +1638,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._last_groups_trained = len(self._trained_groups)
 
         # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None and flops_per_token is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
@@ -1655,7 +1655,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
                 metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None and flops_per_token is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,

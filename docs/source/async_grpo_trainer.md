@@ -67,7 +67,7 @@ If it's too low, generation slows down. A rollout keeps its slot while it runs t
 >
 > - `rollout/backpressure_s` above zero: the staleness limit. Generation is ahead of training, which is expected when inference is faster than training.
 > - `rollout/concurrency` at `rollout/concurrency_cap`, below `max_concurrent_rollouts`: the vLLM server's load.
-> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/kv_cache_usage` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
+> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/vllm_kv_cache_usage_frac` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
 
 **Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
 
@@ -551,8 +551,8 @@ Throughput measures how many tokens the trainer processes per second. **Model FL
 
 Throughput and MFU are reported on two time bases:
 
-- **`_fwd_bwd`** measures performance during the forward and backward passes.
-- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+- **`fwd_bwd_`** measures performance during the forward and backward passes.
+- **`wall_clock_`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
 
 The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
 
@@ -561,14 +561,14 @@ MFU is reported only when peak compute capacity is known for the local training 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
-| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
+| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `fwd_bwd_` metric below                                    |
 | `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
 | `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s` | forwarded tokens per second on each basis                                                                                                             |
 | `perf/wall_clock_trained_tokens_per_s`                                   | the same, counting only tokens the loss saw                                                                                                           |
-| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+| `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## AsyncGRPOConfig
 
