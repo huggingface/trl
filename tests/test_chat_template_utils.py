@@ -1932,50 +1932,14 @@ class TestDeepseekTrainingChatTemplates:
     @pytest.mark.parametrize(
         "tokenizer_name",
         [
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
-                id="r1_distill",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template), id="deepseekv3-v3"
             ),
             pytest.param(
-                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-                id="deepseekv3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-                id="deepseekv3-0528",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template),
-                id="deepseekv3-v3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
-                id="deepseekv3-v4",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
             ),
         ],
     )
