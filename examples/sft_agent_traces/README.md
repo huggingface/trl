@@ -4,7 +4,7 @@ This example fine-tunes [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) wit
 [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on conversations of
 [Qwen3.5-397B-A17B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) working as an [OpenCode](https://opencode.ai) agent
 on data-analysis tasks, keeping only the conversations that ended with a correct answer. The student, the teacher and
-the tasks are flags of the scripts; the numbers in this README are for this setup. On held-out tasks, Qwen3.5-2B solves
+the tasks are flags of the scripts, and the numbers in this README are for this setup. On held-out tasks, Qwen3.5-2B solves
 7.6%, the teacher 71.5%, and the student 33.3% after training on about 500 conversations. The fine-tuned model is meant
 as a starting point for RL.
 
