@@ -43,6 +43,8 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
+from ...chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE, supports_tool_calling
+from ...import_utils import is_jmespath_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     add_fused_lm_head,
@@ -480,11 +482,10 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
-    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    # Distinct prompt-group ids: exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
     # The trainer's metric sink, shared by reference (like `groups_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
-    # Per-row token cap of the planner,
     token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -574,7 +575,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         # weights that move once the adapter has been merged into them.
         if not is_peft and not param.requires_grad:
             continue
-        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        # Strip the prefixes DDP/FSDP1 and gradient checkpointing add, so the names match vLLM's
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -1110,9 +1111,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # NOTE: See https://github.com/huggingface/transformers/issues/42489
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
+        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
+
+        if tools or environment_factory:
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with AsyncGRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
 
         # Reward functions
         if reward_funcs is None:
@@ -1140,6 +1157,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
+
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        if "image" in dataset_sample or "images" in dataset_sample:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but `AsyncGRPOTrainer` "
+                "trains on text only, vision-language models included. Please remove the images from your dataset."
+            )
 
         # Initialize the Trainer
         super().__init__(
@@ -1150,6 +1179,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         precision = self.accelerator.mixed_precision
         self.compute_dtype = {
@@ -1278,7 +1310,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 environment_factory=environment_factory,
                 **self._rollout_loop_kwargs,
             )
-            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
@@ -1356,9 +1387,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
-                # NOTE(@aminediro):
-                # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
-                # dataloader prepared by the Accelerator is only iterated through on the main process a
             )
         )
 
@@ -1455,16 +1483,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
+        # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
+        # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
         loss = per_token_loss.sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
         loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
@@ -1618,7 +1643,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            if self._peak_flops_per_device is not None:
+            if self._peak_flops_per_device is not None and flops_per_token is not None:
                 metrics["perf/mfu_fwd_bwd"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
@@ -1627,7 +1652,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if step_s is not None:
                 metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
                 metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                if self._peak_flops_per_device is not None:
+                if self._peak_flops_per_device is not None and flops_per_token is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(
                             flops_per_token,
@@ -1653,7 +1678,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        # The worker only generates training rollouts, so its metrics always go to the train metrics
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
@@ -1693,7 +1718,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
+        # Total time and its three phases
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)

@@ -239,7 +239,7 @@ Units:
 - `perf/weight_sync_s`: The time of a weight sync, split into `perf/weight_sync_pause_s` (waiting for vLLM to pause), `perf/weight_sync_barrier_s` (waiting for the other processes) and `perf/weight_sync_transfer_s` (sending the weights).
 - `perf/forwarded_tokens_per_s_fwd_bwd`, `perf/forwarded_tokens_per_s_wall_clock`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
 - `perf/trained_tokens_per_s_wall_clock`: The number of trained tokens per second, over the whole step.
-- `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known.
+- `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL).
 
 ## Customization
 
