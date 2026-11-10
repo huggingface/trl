@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+
 import torch
 from datasets import load_dataset
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
@@ -75,7 +77,7 @@ dataset = load_dataset("HuggingFaceH4/Multilingual-Thinking", split="train")
 dataset = dataset.map(
     lambda example: {
         "prompt": [{"role": "user", "content": example["user"]}],
-        "completion": [{"role": "assistant", "reasoning_content": example["analysis"], "content": example["final"]}],
+        "completion": [{"role": "assistant", "thinking": example["analysis"], "content": example["final"]}],
     },
     remove_columns=dataset.column_names,
 )
@@ -84,12 +86,13 @@ training_args = SFTConfig(
     learning_rate=1e-2,
     per_device_train_batch_size=32,
     max_length=512,
-    gradient_checkpointing=False,
     save_strategy="no",
     report_to="none",
 )
-trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
+# Train a copy, so that what the trainer sets on the config (`use_cache`, `pad_token_id`) stays out of the pushed model
+trainer = SFTTrainer(model=copy.deepcopy(model), args=training_args, train_dataset=dataset, processing_class=tokenizer)
 trainer.train()
+model.load_state_dict(trainer.model.state_dict())
 
 smoke_test(model, tokenizer)
 check_dtype_pattern(MODEL_ID, model)
