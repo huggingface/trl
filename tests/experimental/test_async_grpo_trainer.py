@@ -1359,7 +1359,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             model_init_kwargs={"dtype": torch.float16},
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            # Keeps the fp16 model's completions diverse: once they all match, every group is dropped and no step completes
+            learning_rate=1e-3,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
