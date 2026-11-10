@@ -138,6 +138,7 @@ class ServerDistillationTrainer(DistillationTrainer):
 
     _tag_names = ["trl", "server-distillation"]
     _name = "Server Distillation"
+    _requires_local_teacher = False
 
     def __init__(
         self,

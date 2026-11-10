@@ -305,6 +305,7 @@ class DistillationTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "distillation"]
     _name = "Distillation"
+    _requires_local_teacher = True
     _paper = {
         "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
         "id": "2306.13649",
@@ -338,6 +339,17 @@ class DistillationTrainer(_BaseTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DistillationConfig(f"{model_name}-Distillation")
+
+        if (
+            teacher_model is None
+            and args.teacher_model_name_or_path is not None
+            and self._requires_local_teacher
+        ):
+            raise ValueError(
+                "`teacher_model_name_or_path` is set in the configuration, but `teacher_model` is None. "
+                "Pass `teacher_model` directly to `DistillationTrainer`; the config field is used by the CLI, "
+                "not by the Python API."
+            )
 
         # Student model loading
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure

@@ -1478,6 +1478,21 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_teacher_model_name_or_path_requires_teacher_model(self):
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            teacher_model_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            report_to="none",
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"`teacher_model_name_or_path` is set in the configuration, but `teacher_model` is None",
+        ):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+            )
+
 
 @require_vision
 class TestDistillationTrainerVLM(TrlTestCase):
