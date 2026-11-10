@@ -78,7 +78,6 @@ class WeightTransferClient:
         self.vllm.wait_for_server_ready()
         # Trainer and server precisions should agree: the precision gap between the two biases the importance ratio
         # https://huggingface.co/papers/2510.26788
-        # https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch
         train_dtype = self.compute_dtype or Counter(self._weight_update_info["dtype_names"]).most_common(1)[0][0]
         vllm_dtype = self.vllm.get_dtype().removeprefix("torch.")
         if vllm_dtype != train_dtype:
