@@ -747,7 +747,7 @@ class AsyncRolloutLoop:
                     "rollout/kv_cache_usage": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
-                    "rollout/vllm_preemptions_total": preemptions - preemptions_seen,
+                    "rollout/vllm_preemption_count": preemptions - preemptions_seen,
                 }
             )
             preemptions_seen = preemptions
@@ -973,7 +973,7 @@ class AsyncRolloutLoop:
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
                     "rollout/concurrency": float(self._concurrency),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
-                    "rollout/generated_tok_s": (
+                    "rollout/generated_tokens_per_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),
                         now - self._pushed_at,
                     ),
@@ -1038,7 +1038,7 @@ class AsyncRolloutLoop:
                     isinstance(e, aiohttp.ClientResponseError) and 400 <= e.status < 500
                 ):
                     raise
-                self._counters["rollout/vllm_retry_total"] += 1
+                self._counters["rollout/vllm_retry_count"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
                 logger.warning(
                     f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
@@ -1221,14 +1221,14 @@ class AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
-            self._counters[f"tools/{name}/call_total"] += 1
+            self._counters[f"tools/{name}/call_count"] += 1
             tool = tool_dict.get(name)
             if tool is None:
                 # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
                 # and raised — which is an environment problem. Counted apart so the two are not one number.
                 n_failures += 1
-                self._counters["tools/unknown_name_total"] += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters["tools/unknown_name_count"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             t0 = time.monotonic()
@@ -1240,7 +1240,7 @@ class AsyncRolloutLoop:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 result = {"error": str(error)}
             elapsed = time.monotonic() - t0
             self._rates["tools/latency_s"][0] += elapsed

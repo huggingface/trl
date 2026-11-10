@@ -432,7 +432,7 @@ class TestMetricReduction:
         ("key", "values", "expected"),
         [
             ("perf/fwd_bwd_s", [1.0, 2.0, 6.0], 3.0),  # gauge -> window mean
-            ("sample/dropped_stale_total", [1.0, 1.0, 1.0], 3.0),  # counter -> sum of the pushed deltas
+            ("sample/dropped_stale_count", [1.0, 1.0, 1.0], 3.0),  # counter -> sum of the pushed deltas
             ("sample/forwarded_tokens_max", [3.0, 9.0, 5.0], 9.0),
             # A `max`/`min` WORD, not a suffix, so the upstream spellings reduce correctly too...
             ("completions/max_length", [3.0, 9.0, 5.0], 9.0),
@@ -441,14 +441,14 @@ class TestMetricReduction:
             ("perf/maximal_s", [2.0, 4.0], 3.0),
             # Rates reduce as Σnum / Σden. These two windows ran at 1 and 100 tok/s; meaning the ratios would report
             # 50.5, the defect that made `training_tok/s` unusable.
-            ("perf/forwarded_tok_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
+            ("perf/forwarded_tokens_per_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
         ],
     )
     def test_reduces_by_shape_and_name(self, key, values, expected):
         assert _reduce_metric(key, values) == pytest.approx(expected)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_wall_clock", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_wall_clock", [(0.0, 0.0)]))
 
 
 def _position(*entries):
@@ -526,14 +526,14 @@ class TestWorkerMetrics:
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = self._loop()
-        loop._counters["rollout/vllm_retry_total"] += 2
+        loop._counters["rollout/vllm_retry_count"] += 2
         loop._rates["rollout/score_s"][0] += 3.0
         loop._rates["rollout/score_s"][1] += 2
         loop._push_metrics({"rollout/concurrency": 4.0})
 
         assert loop._metrics_queue.get(timeout=5) == {
             "rollout/concurrency": 4.0,
-            "rollout/vllm_retry_total": 2.0,
+            "rollout/vllm_retry_count": 2.0,
             "rollout/score_s": (3.0, 2.0),
         }
         # Counters and rates carry deltas, so what one push reported must not ride along on the next.

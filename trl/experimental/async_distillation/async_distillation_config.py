@@ -146,7 +146,7 @@ class AsyncDistillationConfig(_BaseConfig):
             independently of the sample count (the number of samples per row becomes dynamic). If `None` (default), it
             is set to the student vLLM server's `max_model_len` (queried at train start) — the cap on prompt +
             completion length — so no rollout sample can ever exceed the budget. A sample longer than `token_budget`
-            fits in no row and is dropped with a warning, counted as `batch/dropped_oversize_total`.
+            fits in no row and is dropped with a warning, counted as `batch/dropped_oversize_count`.
 
         > Parameters that control the async rollout pipeline
 

@@ -275,6 +275,22 @@ Let's also define some terms to make token metrics unambiguous:
 - **forwarded** tokens are every token the _forward_ pass processes: the prompt, any tool results, and the generated tokens.
 - **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. They're the generated tokens, minus any that a harness capture masks.
 
+Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
+
+- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
+- Any other metric is the mean of the values recorded in the window.
+
+Units:
+
+- `_s`: seconds.
+- `tokens_per_s`: tokens per second.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: amount in one optimizer step, averaged over the steps in the window.
+
+Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`, `tools/call_frequency`). Some of them are computed differently; their rows below say how.
+
 ### How the batch numbers compose
 
 A **row** is what **one** DP rank forwards in one micro-batch: several samples packed into a single prefix forest, so tokens they share are forwarded once — see [Tree packing](#tree-packing). The planner decides which samples land in which row (balancing attention cost so no rank straggles), and a data collator does the packing.
@@ -376,7 +392,7 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/concurrency` and `rollout/score_queue_size`.
+- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_queue_size`.
 - queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
 - both near zero → balanced !
 
@@ -397,7 +413,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | metric                                                             | meaning                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rollout/duration_s`                                               | wall time for one rollout, from dispatch until the loop collects the finished rollout.                                                                                                                                                                              |
-| `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
+| `rollout/generated_tokens_per_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
 | `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
 | `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
 | `rollout/samples_per_rollout`                                      | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all)                                                                                            |
@@ -405,13 +421,13 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a fork re-rendered, averaged over turn boundaries (a clean boundary counts as 0). It's what each fork adds to the trainer's forward, since the new sample shares the tokens before the divergence                       |
 | `rollout/score_queue_size`                                         | completed groups waiting to be scored.                                                                                                                                                                                                       |
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
-| `rollout/vllm_retry_total`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
+| `rollout/vllm_retry_count`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
 | `rollout/backpressure_s`                                           | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
 | `rollout/concurrency_cap`                                          | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency)                                                                                                           |
 | `rollout/kv_cache_usage`                                           | vLLM KV cache usage (max over engines) at the last poll. The cap is cut when it passes 0.8 and grows while it stays under 0.6                                                                                                                |
 | `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses                                                   |
 | `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
-| `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
+| `rollout/vllm_preemption_count`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
 | `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
 
 A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
@@ -424,8 +440,8 @@ Logged only when the model executes tools. `tools/<name>/*` repeats per tool nam
 | ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tools/call_frequency`, `tools/failure_frequency`       | built-in, harness          | calls per rollout, and the fraction that failed. On the loop-owning harness path a failure is a tool result whose text looks like an error                                                                                                                                                  |
 | `tools/latency_s`, `tools/<name>/latency_s`             | built-in, white-box harness | time spent executing the tool. On the white-box harness path it is the wall time between one model turn's reply and the next turn's request, which includes harness overhead. The loop-owning path has no latency: OpenEnv's trace does not timestamp its entries, so there is nothing to derive it from |
-| `tools/<name>/call_total`, `tools/<name>/failure_total` | built-in, harness          | per-tool call and failure counts                                                                                                                                                                                                                                                             |
-| `tools/unknown_name_total`                              | built-in                   | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised                                                                                                                                                                                     |
+| `tools/<name>/call_count`, `tools/<name>/failure_count` | built-in, harness          | per-tool call and failure counts                                                                                                                                                                                                                                                             |
+| `tools/unknown_name_count`                              | built-in                   | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised                                                                                                                                                                                     |
 | `tools/parallel_calls_mean`                             | built-in                   | tool calls requested in a single assistant message                                                                                                                                                                                                                                           |
 | `tools/loop_exhausted_frac`                             | built-in                   | conversations cut off at `max_tool_calling_iterations` while still asking for tools                                                                                                                                                                                                          |
 
@@ -449,7 +465,7 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
-| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
+| `sample/dropped_stale_count`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
 
 ### Rewards and off-policyness
 
@@ -476,7 +492,7 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 | `batch/row_imbalance`                                                    | `max cost / mean cost` across rows, where the cost is the row's attention work. This predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
 | `batch/packing_ratio`                                                    | raw tokens per forwarded token: the factor by which the decoder's work shrinks, 1.0 when nothing is shared                              |
 | `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                    |
-| `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                         |
+| `batch/dropped_oversize_count`                                           | samples dropped for exceeding `token_budget`                                                                                         |
 
 ### Performance
 
@@ -499,8 +515,8 @@ MFU is reported only when peak compute capacity is known for the local training 
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
-| `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
-| `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
+| `perf/forwarded_tokens_per_s_fwd_bwd`, `perf/forwarded_tokens_per_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
+| `perf/trained_tokens_per_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
 | `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## AsyncGRPOConfig
