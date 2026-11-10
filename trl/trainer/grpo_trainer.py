@@ -1159,6 +1159,16 @@ class GRPOTrainer(_BaseTrainer):
                 and self.temperature > 0
                 and is_vllm_available(min_version="0.28.0")
             )
+            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+                args.generation_kwargs or {}
+            )
+            if self.vllm_importance_sampling_correction and structured_outputs and not return_sampling_mask:
+                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
+                raise ValueError(
+                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
+                    "sampled token, which takes `vllm_mode='colocate'` and vLLM >= 0.28. Alternatively, set "
+                    "`vllm_importance_sampling_correction=False`."
+                )
             if self.vllm_importance_sampling_correction and filtered_sampling and not return_sampling_mask:
                 logger.warning(
                     "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
@@ -1231,6 +1241,17 @@ class GRPOTrainer(_BaseTrainer):
             if isinstance(processing_class, ProcessorMixin):
                 # A sampled image token would mismatch the image features
                 generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
+                # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+                if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                    "qwen2_vl",
+                    "qwen2_5_vl",
+                    "qwen3_vl",
+                    "qwen3_vl_moe",
+                    "qwen3_5",
+                    "qwen3_5_moe",
+                    "paddleocr_vl",
+                ):
+                    generation_kwargs["suppress_tokens"].append(model.config.vision_start_token_id)
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
