@@ -2299,6 +2299,23 @@ class TestComputeFlopsPerToken(TrlTestCase):
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
 
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",  # linear attention, shared experts
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_unsupported_model_type(self, model_id):
+        cfg = AutoConfig.from_pretrained(model_id).get_text_config()
+        assert compute_flops_per_token(cfg, 16384) is None
+
 
 class TestGetPeakFlops:
     @pytest.mark.parametrize(
