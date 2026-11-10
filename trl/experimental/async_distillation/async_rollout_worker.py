@@ -516,10 +516,11 @@ class _AsyncRolloutLoop:
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            terminated = completion_ids[-1] in eos_and_pad
-            self._rates["completions/clipped_ratio"][0] += not terminated
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
-            if terminated:
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
                 self._rates["completions/mean_terminated_length"][0] += completion_tokens
                 self._rates["completions/mean_terminated_length"][1] += 1
                 terminated_lengths = {
