@@ -48,7 +48,6 @@ from transformers.utils import is_peft_available
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
-    has_generation_markers,
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
@@ -984,10 +983,9 @@ class SFTTrainer(_BaseTrainer):
                 "supported for conversational datasets."
             )
 
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers if needed
+        if args.assistant_only_loss:
+            self.chat_template = get_training_chat_template(processing_class, require_prefix_preservation=False)
         else:
             self.chat_template = None
 

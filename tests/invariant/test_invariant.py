@@ -107,7 +107,8 @@ def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         cmd = ["trl", config.method]
-        cmd += ["--num_processes", str(config.num_processes)]
+        if config.num_processes > 1:
+            cmd += ["--nproc_per_node", str(config.num_processes)]
         cmd += ["--output_dir", tmpdir, *config.cli_args()]
         env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(config.num_processes))}
         subprocess.run(cmd, check=True, env=env)
@@ -215,17 +216,17 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     },
     "sft_fa2": {
         # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
-        # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
-        # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
-        # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running
-        # the class and confirming the new gap; see https://github.com/huggingface/trl/pull/5842#issuecomment-4539190615
-        "tol": {"loss": 1.5e-2, "grad_norm": 5.0},
-        "residual_tol": {"loss": 1e-3, "grad_norm": 2.5e-1},
+        # Step 5 is chaotic under bf16: a relative 1e-6 change to the gradients moves its grad_norm anywhere between 12.5
+        # and 25.2. So the class stops at step 4 (`max_steps=4`, so the LR decays to 0 there), where the same change moves
+        # loss by up to 3.3e-3 and grad_norm by up to 0.22. Tolerances are ~2x that.
+        "tol": {"loss": 7e-3, "grad_norm": 5e-1},
+        "residual_tol": {"loss": 1.5e-3, "grad_norm": 1.5e-1},
         "members": [
             _build(
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
+                max_steps=4,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,
@@ -235,6 +236,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2_padfree",
                 "sft",
                 SFT_DATASET,
+                max_steps=4,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,
