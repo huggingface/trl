@@ -59,11 +59,13 @@ Hugging Face Jobs either way, billed to the account of `HF_TOKEN`.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
 import queue
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -279,19 +281,24 @@ def main():
         ]  # fmt: skip
         if args.reward_key:
             cmd += ["--reward-key", args.reward_key]
-        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
-            output, _ = proc.communicate(timeout=args.task_timeout)
-        except subprocess.TimeoutExpired:
-            # SIGTERM first, so `openenv` closes its tunnel and sandbox before the port is reused
-            proc.terminate()
+            # its own process group, so a timeout stops `openenv` and everything it started (the tunnel holds the
+            # output pipe open too)
+            proc = subprocess.Popen(
+                cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+            )
             try:
-                proc.communicate(timeout=30)
+                output, _ = proc.communicate(timeout=args.task_timeout)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-            print(f"[{name}] stopped after {args.task_timeout} s", flush=True)
-            return
+                # SIGTERM first, so `openenv` closes its tunnel and sandbox before the port is reused
+                for sig, grace in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(proc.pid, sig)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.communicate(timeout=grace)
+                        break
+                print(f"[{name}] stopped after {args.task_timeout} s", flush=True)
+                return
         finally:
             ports.put(port)
         if not result.exists():
