@@ -1111,13 +1111,10 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["urm", "alpha_urm"])
-    def test_train_with_urm_loss(self, loss_type):
+    def test_train_with_urm_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir, loss_type=loss_type, label_smoothing=0.2, report_to="none"
-        )
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.2, report_to="none")
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -1135,13 +1132,10 @@ class TestRewardTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("loss_type", ["urm", "alpha_urm"])
-    def test_urm_loss_value(self, loss_type):
+    def test_urm_loss_value(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir, loss_type=loss_type, label_smoothing=0.2, report_to="none"
-        )
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.2, report_to="none")
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -1150,25 +1144,22 @@ class TestRewardTrainer(TrlTestCase):
         )
         metrics = trainer.evaluate()
 
-        # With a single eval example, the eval loss is the URM loss -log((e^Δ + a) / (e^Δ + 1)) (Eq. 10 of the paper)
-        # at the logged reward margin Δ, with a = ε / (1 - ε). Written as -log(1 - (1 - a) / (e^Δ + 1)) for precision.
-        # α-URM multiplies it by α = (1 + √a) / (1 - √a).
+        # With a single eval example, the eval loss is the normalized URM loss -α·log((e^Δ + a) / (e^Δ + 1)) at the
+        # logged reward margin Δ, with a = ε / (1 - ε) and α = (1 + √a) / (1 - √a). The log is written as
+        # log(1 - (1 - a) / (e^Δ + 1)) for precision.
         delta = metrics["eval_margin"]
         a = 0.2 / (1 - 0.2)
-        alpha = (1 + math.sqrt(a)) / (1 - math.sqrt(a)) if loss_type == "alpha_urm" else 1.0
+        alpha = (1 + math.sqrt(a)) / (1 - math.sqrt(a))
         assert delta != 0.0
         assert metrics["eval_loss"] == pytest.approx(-alpha * math.log1p(-(1 - a) / (math.exp(delta) + 1)), rel=1e-4)
 
-    @pytest.mark.parametrize("loss_type", ["urm", "alpha_urm"])
-    def test_urm_label_smoothing_out_of_range_raises(self, loss_type):
+    def test_urm_label_smoothing_out_of_range_raises(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
 
         # `label_smoothing` is the flip probability ε, not the paper's a = ε / (1 - ε), so a = 0.8 passed as is fails
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir, loss_type=loss_type, label_smoothing=0.8, report_to="none"
-        )
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.8, report_to="none")
 
-        with pytest.raises(ValueError, match=r"must lie in \[0.0, 0.5\) for the 'urm' and 'alpha_urm' losses"):
+        with pytest.raises(ValueError, match=r"must lie in \[0.0, 0.5\) for the 'urm' loss"):
             RewardTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,

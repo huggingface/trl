@@ -377,12 +377,12 @@ class RewardTrainer(_BaseTrainer):
                 f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
 
-        if args.loss_type in ["urm", "alpha_urm"] and not (0.0 <= args.label_smoothing < 0.5):
+        if args.loss_type == "urm" and not (0.0 <= args.label_smoothing < 0.5):
             # With ε >= 0.5, a = ε / (1 - ε) >= 1 and the URM loss no longer prefers the chosen completions
             raise ValueError(
-                "The `label_smoothing` parameter must lie in [0.0, 0.5) for the 'urm' and 'alpha_urm' losses, as it is "
-                f"the probability ε that a preference label is flipped. You provided {args.label_smoothing}. To use "
-                "the parameter a of the URM paper, set `label_smoothing=a / (1 + a)`."
+                "The `label_smoothing` parameter must lie in [0.0, 0.5) for the 'urm' loss, as it is the probability ε "
+                f"that a preference label is flipped. You provided {args.label_smoothing}. To use the parameter a of "
+                "the URM paper, set `label_smoothing=a / (1 + a)`."
             )
 
         # Model
@@ -845,22 +845,20 @@ class RewardTrainer(_BaseTrainer):
 
         if self.args.loss_type == "sigmoid":
             loss = -nn.functional.logsigmoid(delta_rewards).mean()
-        elif self.args.loss_type in ["urm", "alpha_urm"]:
-            # Eq. (10) of the URM paper (https://huggingface.co/papers/2607.03248): -log((e^Δ + a) / (e^Δ + 1)), where
-            # a = ε / (1 - ε) and ε = label_smoothing is the assumed probability that a label is flipped. Computed in
-            # log space as -log(σ(Δ) + a·σ(-Δ)) for numerical stability; ε = 0 recovers the "sigmoid" loss.
+        elif self.args.loss_type == "urm":
+            # Normalized URM loss, α-URM in the paper (https://huggingface.co/papers/2607.03248, Eq. 10 scaled by α):
+            # -α·log((e^Δ + a) / (e^Δ + 1)), where a = ε / (1 - ε), ε = label_smoothing is the assumed probability
+            # that a label is flipped, and α = (1 + √a) / (1 - √a) keeps the maximum gradient magnitude at 1, as for
+            # the "sigmoid" loss. The log is computed in log space as log(σ(Δ) + a·σ(-Δ)) for numerical stability;
+            # ε = 0 recovers the "sigmoid" loss.
             a = torch.tensor(self.args.label_smoothing / (1 - self.args.label_smoothing), device=delta_rewards.device)
-            loss = -torch.logaddexp(
+            alpha = (1 + torch.sqrt(a)) / (1 - torch.sqrt(a))
+            log_prob = torch.logaddexp(
                 nn.functional.logsigmoid(delta_rewards), torch.log(a) + nn.functional.logsigmoid(-delta_rewards)
-            ).mean()
-            if self.args.loss_type == "alpha_urm":
-                # α-URM rescales the loss by α = (1 + √a) / (1 - √a), which keeps its maximum gradient magnitude at 1,
-                # as for the "sigmoid" loss
-                loss = loss * (1 + torch.sqrt(a)) / (1 - torch.sqrt(a))
-        else:
-            raise ValueError(
-                f"Unknown loss type: {self.args.loss_type}. Should be one of ['sigmoid', 'urm', 'alpha_urm']"
             )
+            loss = -alpha * log_prob.mean()
+        else:
+            raise ValueError(f"Unknown loss type: {self.args.loss_type}. Should be one of ['sigmoid', 'urm']")
 
         if self.args.center_rewards_coefficient is not None:
             loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
