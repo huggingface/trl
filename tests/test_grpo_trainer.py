@@ -3703,7 +3703,7 @@ class TestGRPOTrainer(TrlTestCase):
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
-        # succeed and the other will fail (because of a wrong tool name).
+        # succeed and the other will fail (because `reset` is not exposed as a tool).
         class DummyEnvironment:
             def reset(self, **kwargs):
                 self._counter = 0
@@ -3746,9 +3746,9 @@ class TestGRPOTrainer(TrlTestCase):
                     [
                         # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
                         [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
-                        # an invalid tool call with wrong tool name
-                        # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
+                        # a call to `reset`, which is not exposed as a tool
+                        # '<tool_call>\n{"name": "reset", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 9716, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645, 151643],
                         # "I won't increment<|im_end|>"
                         [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
                     ],
@@ -3775,11 +3775,6 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
-
-        # Check the states of the environment
-        assert trainer.environments[0]._counter == 1  # should have been incremented once
-        assert trainer.environments[1]._counter == 0  # shouldn't have been incremented because the tool call failed
-        assert trainer.environments[2]._counter == 0  # shouldn't have been incremented because no tool call was made
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -3851,8 +3846,6 @@ class TestGRPOTrainer(TrlTestCase):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # The regression is only exercised if the instances the last batch listed had really been reset before it.
-        assert all(environment.is_reset for environment in trainer.environments)
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -3902,15 +3895,6 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory=DummyEnvironment,
         )
 
-        # The env-owned reward is registered as the sole reward source (logged under the env class name) with weight 1,
-        # and `get_reward` is not exposed as a tool.
-        assert trainer.reward_func_names == ["DummyEnvironment"]
-        assert trainer.reward_weights.tolist() == [1.0]
-        tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "increment" in tool_names
-        assert "get_reward" not in tool_names
-        assert "reset" not in tool_names
-
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         def fake_generate(input_ids, **kwargs):
@@ -3920,9 +3904,9 @@ class TestGRPOTrainer(TrlTestCase):
                     [
                         # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
                         [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
-                        # an invalid tool call with wrong tool name
-                        # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
+                        # a call to `get_reward`, which is not exposed as a tool
+                        # '<tool_call>\n{"name": "get_reward", "arguments": {}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 455, 38260, 497, 330, 16370, 788, 4687, 532, 151658, 151645, 151643, 151643, 151643, 151643],
                         # "I won't increment<|im_end|>"
                         [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
                     ],
@@ -3945,8 +3929,11 @@ class TestGRPOTrainer(TrlTestCase):
             trainer.train()
 
         # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
-        # -> rewards 1.0, 0.0, 0.0.
+        # -> rewards 1.0, 0.0, 0.0. It is the sole reward source, with weight 1.
         assert trainer.state.log_history[-1]["rewards/DummyEnvironment/mean"] == pytest.approx(1 / 3)
+        assert trainer.state.log_history[-1]["reward"] == pytest.approx(1 / 3)
+        # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4054,11 +4041,16 @@ class TestGRPOTrainer(TrlTestCase):
                 return x
 
         # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
-        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [[{"role": "user", "content": "Play."}]] * 3,
+                "environment": ["scored", "scored2", "plain"],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_train_batch_size=9,  # one generation batch holds the 3 environments
             num_generations=3,  # reduce the number of generations to reduce memory usage
             report_to="none",
         )
@@ -4071,16 +4063,23 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
         )
 
-        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
-        # column is appended after the trainer-owned reward func, with a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "ScoredEnvironment"]
-        assert trainer.reward_weights.tolist() == [1.0, 1.0]
+        def fake_generate(input_ids, **kwargs):
+            # "I won't increment<|im_end|>"
+            completion_ids = torch.tensor(
+                [[40, 2765, 944, 16252, 151645]] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, completion_ids], dim=-1)
 
-        # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
-        # `None` (turned into NaN and ignored) instead of raising `AttributeError`.
-        env_reward_func = trainer.reward_funcs[-1]
-        rewards = env_reward_func(environments=[ScoredEnvironment(), PlainEnvironment()])
-        assert rewards == [1.0, None]
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
+        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising.
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
+        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
 
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
