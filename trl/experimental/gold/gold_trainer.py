@@ -764,7 +764,7 @@ class ULDLoss(nn.Module):
             JSD loss for matched tokens
         """
         # Reshape to [batch_size * seq_len, vocab_size] format expected by generalized_jsd_loss
-        batch_seq_len, num_matched = student_logits.shape
+        num_matched = student_logits.shape[1]
 
         student_logits_reshaped = student_logits.view(-1, num_matched)
         teacher_logits_reshaped = teacher_logits.view(-1, num_matched)
@@ -1542,6 +1542,17 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(processing_class, ProcessorMixin):
             # A sampled image token would mismatch the image features
             generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and self.model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                generation_kwargs["suppress_tokens"].append(self.model.config.vision_start_token_id)
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
