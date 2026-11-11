@@ -134,9 +134,12 @@ While training, we record the following metrics:
 - `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
 - `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
 - `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions, whose last turn does not end with an EOS token.
-- `tools/call_frequency`: The average number of tool calls per completion. Logged only when the model calls tools.
-- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception). It is `0.0` for a completion with no tool call. Logged only when the model calls tools.
+- `tools/call_frequency`: The average number of tool calls per completion, over every rollout, including the groups that are then dropped. Logged only when the trainer has tools.
+- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
 - `rewards/{reward_func_name}/group_std`: The standard deviation of the reward from a specific reward function, computed within each group and averaged over the trained samples.
 - `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
@@ -185,12 +188,13 @@ Units:
 - `rollout/fork_frac`: The fraction of turn transitions whose prompt does not start with the held tokens, so the turn started a new sample.
 - `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`: The number of held tokens a fork re-rendered, averaged over turn transitions (one that does not fork counts as `0`). The new sample shares the tokens before the divergence, so this is what each fork adds to the forward.
 - `rollout/score_queue_size`: The number of completed groups waiting to be scored.
+- `rollout/queue_size`: The number of scored samples waiting in the rollout queue, measured where the trainer pulls them. See [The rollout queue](#the-rollout-queue).
 - `rollout/score_s`: The time to score a group.
 - `rollout/score_wait_s`: The time a completed group waited before being scored.
 - `rollout/score_block_s`: The time generation was blocked because the scoring queue was full.
-- `rollout/backpressure_s`: The time generation waited because it was `max_staleness` steps ahead of training. See [Concurrency](#concurrency).
+- `rollout/backpressure_s`: The time generation waited to start a rollout because it was `max_staleness` steps ahead of training, averaged over the waits in the logging window. See [Concurrency](#concurrency).
 - `rollout/vllm_retry_count`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
-- `rollout/kv_cache_usage`: The vLLM KV cache usage (maximum over engines) at the last poll.
+- `rollout/vllm_kv_cache_usage_frac`: The vLLM KV cache usage (maximum over engines), averaged over the polls in the logging window.
 - `rollout/vllm_running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
 - `rollout/vllm_queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
 - `rollout/vllm_preemption_count`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
@@ -201,7 +205,9 @@ Units:
 - `tools/{tool_name}/call_count`, `tools/{tool_name}/failure_count`: The number of calls and failed calls per tool.
 - `tools/unknown_name_count`: The number of calls to a tool that does not exist. Unlike a tool that ran and raised, this is a policy error.
 - `tools/parallel_calls_mean`: The average number of tool calls in an assistant message that calls tools.
-- `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools. Logged only when tools are provided.
+- `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools, over every rollout, including rollouts with no call and the groups that are then dropped. Logged only when the trainer has tools.
+
+`HarnessAsyncGRPOTrainer` logs most of these under the same names. See [Training on harnesses](openenv#metrics) for the differences.
 
 ### Environment metrics
 
@@ -212,7 +218,6 @@ Units:
 
 - `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max`: The average and maximum number of forwarded tokens per sample.
 - `sample/trained_tokens_mean`: The average number of trained tokens per sample.
-- `sample/rollout_queue_size`: The number of samples waiting in the rollout queue.
 - `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
 - `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. The `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` metrics combine this staleness with the training-inference mismatch: a ratio away from `1.0` or a log-probability difference away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
 - `sample/dropped_stale_count`: The number of samples dropped for exceeding `max_staleness`.
@@ -237,9 +242,9 @@ Units:
 - `perf/optimizer_s`: The time spent in the optimizer step.
 - `perf/rollout_wait_s`: The time training waited because the rollout queue was empty. See [The rollout queue](#the-rollout-queue).
 - `perf/weight_sync_s`: The time of a weight sync, split into `perf/weight_sync_pause_s` (waiting for vLLM to pause), `perf/weight_sync_barrier_s` (waiting for the other processes) and `perf/weight_sync_transfer_s` (sending the weights).
-- `perf/forwarded_tokens_per_s_fwd_bwd`, `perf/forwarded_tokens_per_s_wall_clock`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
-- `perf/trained_tokens_per_s_wall_clock`: The number of trained tokens per second, over the whole step.
-- `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL).
+- `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
+- `perf/wall_clock_trained_tokens_per_s`: The number of trained tokens per second, over the whole step.
+- `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL).
 
 ## Customization
 
@@ -292,13 +297,13 @@ If it's too low, generation slows down. A rollout keeps its slot while it runs t
 >
 > - `rollout/backpressure_s` above zero: the staleness limit. Generation is ahead of training, which is expected when inference is faster than training.
 > - `rollout/concurrency` at `rollout/concurrency_cap`, below `max_concurrent_rollouts`: the vLLM server's load.
-> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/kv_cache_usage` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
+> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/vllm_kv_cache_usage_frac` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
 
 ### The rollout queue
 
 The worker pushes scored samples into a queue and the trainer pulls from it. Four metrics describe that queue:
 
-- `sample/rollout_queue_size`: how many samples are waiting.
+- `rollout/queue_size`: how many samples are waiting.
 - `sample/time_in_queue_s`: how long a single sample waited before being trained on, the time part of its staleness.
 - `perf/rollout_wait_s`: how long training waited because the queue was empty.
 - `rollout/backpressure_s`: how long generation waited because it was `max_staleness` steps ahead of training.
@@ -346,7 +351,7 @@ A few consequences:
 
 `token_budget` bounds the tokens of a row, counting a shared token once. By default, it is the server's `max_model_len`, so no sample can exceed it. With nothing shared, tree packing runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8 to 3x at a ratio of 3.4 on Qwen3-0.6B and 1.7B, on H100). The ratio is shared prefix times samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`. `batch/row_fill_frac` matters when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the planner often gets two and the row runs about 77% full), while 1k-token samples tile it almost perfectly.
 
-Judge tree packing on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls: neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
+Judge tree packing on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/fwd_bwd_mfu`, which divides by forwarded tokens, falls: neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
 
 The batch metrics compose: one step holds `gradient_accumulation_steps × num_processes` rows, so `batch/samples_per_step` is about that many times `batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between the micro-batches of a step, since the per-step metrics are sums and the per-row ones are means.
 

@@ -734,13 +734,15 @@ The producer excludes auxiliary calls and discarded retries. There are no `train
 
 Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
-### Logged metrics
+### Metrics
 
-The `tools/` metrics keep the names they have with the built-in tool loop (see [Logged metrics](async_grpo_trainer#logged-metrics)), but some are measured differently:
+The harness trainer logs the [tool metrics](async_grpo_trainer#tool-metrics) of [`experimental.async_grpo.AsyncGRPOTrainer`] under the same names, with these differences:
 
-- `tools/failure_frequency` and `tools/{tool_name}/failure_total`: in loop-owning mode, a failure is a tool result whose text contains "error", "failed", "traceback" or "exception".
-- `tools/latency_s` and `tools/{tool_name}/latency_s`: in white-box mode (with a `harness_adapter`), the time between a turn's reply and the next turn's request, harness overhead included. Loop-owning mode logs no latency, since the OpenEnv trace does not timestamp its entries.
-- `tools/unknown_name_total` and `tools/parallel_calls_mean` come from the built-in tool loop and are not logged.
+- When the agent owns its loop (no `harness_adapter`), failures are estimated from the tool results in the last request: a result counts as failed when its text contains `error`, `failed`, `traceback` or `exception` (case-insensitive), and results with the same tool and the same first 200 characters count once. `tools/latency_s` and `tools/<name>/latency_s` aren't logged, because OpenEnv's trace has no timestamps.
+- With a `harness_adapter`, a tool call counts as failed when the harness reports an error for it. The time between one model reply and the next request is split evenly across that turn's tool calls and logged as their `tools/latency_s`, so it includes the harness's own overhead. The last turn isn't timed.
+- `tools/unknown_name_count`, `tools/parallel_calls_mean` and `tools/loop_exhausted_frac` come from the built-in tool loop and aren't logged.
+- The trainer itself has no tools, so `tools/call_frequency` and `tools/failure_frequency` only count the groups where at least one rollout called a tool.
+- `rollout/correctness_mean` is logged only with a `rollout_reward_fn`: the verifier's `env_reward`, averaged over the rollouts that have one.
 
 ### Requirements
 
