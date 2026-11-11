@@ -1419,12 +1419,11 @@ class AsyncRolloutLoop:
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
-            self._counters["group/unscorable_count"] += 1
-        # Completions that repeat an earlier one of the group token for token; about 0 when generations are independent
+        # Completions that repeat an earlier one of the group token for token; about 0 when sampling is random
         num_completions = len(group.completions_ids)
         num_distinct = len({tuple(ids) for ids in group.completions_ids})
-        self._rates["group/duplicate_frac"][0] += num_completions - num_distinct
-        self._rates["group/duplicate_frac"][1] += num_completions
+        self._rates["completions/duplicate_frac"][0] += num_completions - num_distinct
+        self._rates["completions/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         self._rates["reward"][0] += float(scored.sum())
@@ -1436,8 +1435,8 @@ class AsyncRolloutLoop:
             if len(scored):
                 # The reward a dropped group is stuck at: near the top of its range, the prompts are too easy; near the
                 # bottom, too hard. With 0/1 rewards, this is the share of dropped groups whose completions all pass.
-                self._rates["group/dropped_reward_mean"][0] += reward_mean
-                self._rates["group/dropped_reward_mean"][1] += 1
+                self._rates["reward_dropped"][0] += reward_mean
+                self._rates["reward_dropped"][1] += 1
             return []
 
         total_calls = sum(group.tool_call_counts)

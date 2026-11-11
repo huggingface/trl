@@ -2559,7 +2559,7 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
 
-    def test_group_metrics_classify_each_group(self):
+    def test_reward_dropped_and_duplicate_frac(self):
         # The first token of each completion is its reward, and 0 means the reward func cannot score it.
         def first_token_reward(completion_ids, **kwargs):
             return [float(ids[0]) if ids[0] else None for ids in completion_ids]
@@ -2572,11 +2572,10 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # dropped, unscorable
 
         assert loop._rates["frac_reward_zero_std"] == [3, 4]
-        assert loop._counters["group/unscorable_count"] == 1
         # Only the dropped groups with a scored completion contribute the reward they are stuck at.
-        assert loop._rates["group/dropped_reward_mean"] == [3.0 + 4.0, 2]
+        assert loop._rates["reward_dropped"] == [3.0 + 4.0, 2]
         # One of the eight completions repeats an earlier one of its group.
-        assert loop._rates["group/duplicate_frac"] == [1, 8]
+        assert loop._rates["completions/duplicate_frac"] == [1, 8]
 
 
 @pytest.mark.skipif(

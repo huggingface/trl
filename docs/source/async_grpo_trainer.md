@@ -283,7 +283,6 @@ So we split our metrics based on which stage (or _entity_) they are about:
 
 | namespace      | entity it counts                                                                       |
 | -------------- | -------------------------------------------------------------------------------------- |
-| `group/`       | one prompt's `num_generations` rollouts, scored together against one baseline          |
 | `rollout/`     | represents one _full_ conversation: its turns, its forks, how long it took to generate |
 | `completions/` | what the model (vLLM) generated for one prompt                                         |
 | `tools/`       | tool calls metrics                                                                     |
@@ -420,26 +419,28 @@ The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mi
 - both high → the `max_staleness` limit itself is too tight: the rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero → balanced !
 
-### Groups
+### Saturation and duplicates
 
-A **group** is one prompt generated `num_generations` times. Its completions are scored together and each advantage is taken against the group's mean reward, so when every completion of a group gets the same reward, all of them get a zero advantage and the group is dropped (counted by `frac_reward_zero_std`, see [Rollouts](#rollouts)). Groups are counted when the worker scores them, not when their samples are trained on, so these metrics run slightly ahead of training and include groups later dropped for exceeding `max_staleness` (counted by `sample/dropped_stale_count`).
+The policy learns from the differences between the rollouts of a group: each advantage is taken against the group's mean reward. When every rollout of a group gets the same reward, they all get a zero advantage, so the group is dropped (see [Rollouts](#rollouts)) and teaches the policy nothing. As a run saturates, more and more groups end up like this, either because every rollout solves the prompt or because none does. Four metrics tell these cases apart, and each one answers its own question, so you can read them straight off their plots:
 
-| metric                      | meaning                                                                                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group/unscorable_count`    | groups where the reward functions returned `None` for every completion. They are dropped and counted in `frac_reward_zero_std`, but have no reward for the metrics below      |
-| `group/dropped_reward_mean` | the reward the dropped groups are stuck at, averaged over the dropped groups with at least one scored completion                                                              |
-| `group/duplicate_frac`      | completions that repeat an earlier completion of their group token for token. About 0 when generations are independent; it climbs as the policy collapses                     |
+| metric                       | question                                                                                                                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frac_reward_zero_std`       | what share of groups carry no signal                                                                                                                                                                                             |
+| `reward_dropped`             | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
+| `reward`                     | how well the policy does over every scored group, dropped ones included                                                                                                                                                         |
+| `completions/duplicate_frac` | whether sampling still gives different rollouts for the same prompt                                                                                                                                                              |
 
-A rising `frac_reward_zero_std` means the run is running out of signal, and `group/dropped_reward_mean`, read against the range of the reward, says why:
+Reading the first three together, against the range of your reward:
 
-| `frac_reward_zero_std` | `group/dropped_reward_mean`  | meaning                                                                                                                                   | what to do                                                                         |
-| ---------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| low                    | anything                     | most groups produce a gradient. Few groups are dropped, so their mean reward is noisy and can be ignored                                  | nothing                                                                            |
-| high                   | near the top of the range    | the prompts are too easy: every completion solves them, which is how a run usually saturates                                              | drop the prompts that always pass, add harder ones, or stop the run                |
-| high                   | near the bottom of the range | the prompts are too hard, or something scores every completion the same, such as an answer format the reward function cannot parse        | check that the reward function parses the completions, then move to easier prompts |
-| high                   | in the middle                | with 0/1 rewards, a mix of too-easy and too-hard prompts. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts                                                                  |
+- `frac_reward_zero_std` low → **healthy**. Most groups produce a gradient. `reward_dropped` then averages over few groups, so it is noisy and can be ignored.
+- `frac_reward_zero_std` climbing, `reward_dropped` near the top of the range, `reward` climbing → **saturating at the top**. The prompts have become too easy for the policy, which is how a successful run usually ends. Stop the run, or move to harder prompts.
+- `frac_reward_zero_std` high, `reward_dropped` near the bottom of the range, `reward` low and flat → **stuck at the bottom**. The prompts are too hard, or the reward function never gives credit. Check `completions/clipped_ratio` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them.
+- `frac_reward_zero_std` climbing, `reward_dropped` falling → **regression**. Groups that used to pass now fail together. Check `completions/duplicate_frac` and `entropy` for a collapse.
+- `frac_reward_zero_std` high, `reward_dropped` in the middle → **a mix**. With 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score. Read the rollouts.
 
-With 0/1 rewards, `group/dropped_reward_mean` is exactly the share of dropped groups whose scored completions all pass, and one minus it the share whose scored completions all fail. In a healthy run `frac_reward_zero_std` drifts up while `group/dropped_reward_mean` rises. If `group/dropped_reward_mean` falls instead, completions that used to pass now fail together. A high `group/unscorable_count` points at the reward functions rather than the prompts: check what they return `None` for.
+`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. The rollouts of a group are sampled independently, so it stays near 0, with a small baseline on tasks whose completions are short enough to repeat by chance. A jump towards `(num_generations - 1) / num_generations` means that every group comes back as copies of one rollout, so sampling is no longer random: for example, a temperature of 0, or data-parallel vLLM engines decoding the same text because they share a sampling seed (the worker sends a unique seed with every request to prevent this). A slow climb with `entropy` falling is the policy collapsing onto one answer. Identical rollouts get identical rewards, so duplicates also push `frac_reward_zero_std` up.
+
+These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_reward_zero_std`, but it has no reward, so `reward_dropped` leaves it out.
 
 ### Completions
 
@@ -450,6 +451,7 @@ A **completion** is what vLLM generated for one prompt, counted across _every tu
 | `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
 | `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
 | `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
+| `completions/duplicate_frac`                       | fraction of rollouts that repeat an earlier rollout of their group token for token. See [saturation and duplicates](#saturation-and-duplicates) |
 
 ### Rollouts
 
@@ -473,7 +475,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses                                                   |
 | `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
 | `rollout/vllm_preemption_count`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
-| `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
+| `frac_reward_zero_std`, `reward_kept`, `reward_dropped`            | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on and of the groups that were dropped. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track. See [saturation and duplicates](#saturation-and-duplicates) for reading them together |
 
 A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
