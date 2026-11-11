@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import glob
 import json
 import os
 import subprocess
@@ -19,9 +20,20 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+import torch
+from datasets import load_dataset
+from safetensors.torch import load_file
+from transformers import (
+    AutoModelForCausalLM,
+    AutoProcessor,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    is_bitsandbytes_available,
+)
 from transformers.testing_utils import backend_device_count, torch_device
+from transformers.utils import is_peft_available
 
+from trl import GRPOConfig, GRPOTrainer
 from trl.generation.vllm_client import (
     _DEFAULT_GENERATION_CONCURRENCY,
     VLLMClient,
@@ -35,12 +47,21 @@ from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_bitsandbytes,
+    require_peft,
     require_requests,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
 )
 
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
+
+if is_peft_available():
+    from peft import LoraConfig
+    from peft.tuners.lora import LoraLayer
 
 if is_requests_available():
     import requests
@@ -905,6 +926,80 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         assert len(outputs) == len(prompts)
 
         client.close_communicator()
+
+    @classmethod
+    def teardown_class(cls):
+        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
+        # kill the server process and its children explicitly.
+        kill_process(cls.server_process)
+
+
+@require_peft
+@require_torch_multi_accelerator
+@require_vllm
+@pytest.mark.xdist_group("vllm_server")
+class TestVLLMClientServerPEFT(TrlTestCase):
+    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+
+    @classmethod
+    def setup_class(cls):
+        # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
+
+        # Start the server process
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
+
+    @pytest.mark.parametrize("load_in_4bit", [False, pytest.param(True, marks=require_bitsandbytes)])
+    def test_train_syncs_merged_lora_weights(self, load_in_4bit):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,  # a single weight sync, before the optimizer step
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_vllm=True,
+            vllm_mode="server",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=self.model_id,
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=BitsAndBytesConfig(load_in_4bit=True) if load_in_4bit else None,
+            # Non-zero adapters, so that the merged weights differ from the base ones from the first sync
+            peft_config=LoraConfig(target_modules=["o_proj", "down_proj"], init_lora_weights=False),
+        )
+
+        # The weights the server must hold after the sync: the base weights, dequantized if 4-bit, with the LoRA
+        # deltas merged in, in the server's dtype
+        expected = {}
+        with torch.no_grad():
+            for name, module in trainer.model.named_modules():
+                if isinstance(module, LoraLayer):
+                    weight = module.get_base_layer().weight
+                    if load_in_4bit:
+                        weight = bnb.functional.dequantize_4bit(weight.data, weight.quant_state)
+                    merged = weight + module.get_delta_weight("default")
+                    expected[name.removeprefix("base_model.model.") + ".weight"] = merged.to(torch.bfloat16).cpu()
+
+        trainer.train()
+        trainer.vllm_generation.vllm_client.close_communicator()
+
+        # Read the weights back from the server
+        response = requests.post(
+            "http://localhost:8000/collective_rpc", json={"method": "save_sharded_state", "args": [self.tmp_dir]}
+        )
+        response.raise_for_status()
+        received = {}
+        for path in glob.glob(os.path.join(self.tmp_dir, "*.safetensors")):
+            received.update(load_file(path))
+        for name, weight in expected.items():
+            assert torch.equal(received[name], weight), f"The server holds a {name} that is not the merged weight."
 
     @classmethod
     def teardown_class(cls):

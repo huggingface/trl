@@ -70,6 +70,7 @@ logger = get_logger(__name__)
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.lora import LoraLayer, ParamWrapper
 
 if is_trackio_available():
     import trackio
@@ -810,6 +811,33 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
 
 
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
+
+
 def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch.nn.Parameter]]:
     """Yield `(name, param)` for every parameter the vLLM server receives, under its base-checkpoint name.
 
@@ -829,7 +857,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+        # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
@@ -1380,6 +1408,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if isinstance(lora_sync, Exception):
                 raise lora_sync
             self._lora_sync = lora_sync
+            # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if not lora_sync and any(
+                not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()
+            ):
+                raise ValueError(
+                    "Syncing merged weights to vLLM supports LoRA adapters without `lora_bias` only: vLLM receives the "
+                    "base weights with the LoRA deltas merged in."
+                )
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             if self.train_dataset is None:
@@ -1879,7 +1916,18 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
-        for name, param in _iter_vllm_named_params(self.accelerator.unwrap_model(self.model)):
+        model = self.accelerator.unwrap_model(self.model)
+        lora_layers = {}
+        if is_peft_model(model):
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in model.modules()
+                if isinstance(module, LoraLayer)
+            }
+        for name, param in _iter_vllm_named_params(model):
+            if param in lora_layers:
+                param = _merge_lora(lora_layers[param], param)
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
@@ -1904,7 +1952,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
     def _sync_weight_merged(self, t0: float) -> tuple[float, float, float]:
-        """Fold the adapter, if any, into the base weights and stream every parameter to vLLM over NCCL.
+        """Stream every parameter to vLLM over NCCL, with the adapter, if any, merged into the base weights.
 
         Args:
             t0 (`float`):
@@ -1914,9 +1962,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             `tuple[float, float, float]`:
                 The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
         """
-        # Under DDP `self.model` is the wrapper, which exposes none of the PEFT API used below.
-        model = self.accelerator.unwrap_model(self.model)
-
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
@@ -1927,20 +1972,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
-        # `finally` is not optional: leaving it merged would train merged weights from the next step on.
-        if is_peft_model(model):
-            model.merge_adapter()
-        try:
-            if self.accelerator.is_main_process:
-                self.weight_transfer.send_weights(self._streaming_iter())
-            else:
-                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-                for _ in self._streaming_iter():
-                    pass
-        finally:
-            if is_peft_model(model):
-                model.unmerge_adapter()
+        if self.accelerator.is_main_process:
+            self.weight_transfer.send_weights(self._streaming_iter())
+        else:
+            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+            for _ in self._streaming_iter():
+                pass
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()

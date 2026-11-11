@@ -2992,12 +2992,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
             if "lora_" in name:
                 assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
             else:
-                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
-                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
-                # learning rate would move them by orders of magnitude more.
-                torch.testing.assert_close(
-                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
-                )
+                assert torch.equal(param, new_param), f"Base parameter {name} has changed."
 
     @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
     def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
