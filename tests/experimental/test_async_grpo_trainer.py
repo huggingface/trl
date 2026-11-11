@@ -1767,23 +1767,6 @@ class TestWorkerMetricPush(TrlTestCase):
         loop._push_metrics({})
         assert loop._metrics_queue.get(timeout=5) == {}
 
-    def test_terminated_lengths_skip_clipped_rollouts(self):
-        loop = _rollout_loop()
-        rollout = {"turns": 1, "sequences": 1, "drifts": [], "duration_s": 1.0}
-        loop._push_rollout_metrics(completion_ids=[5, 6, loop.tokenizer.eos_token_id], **rollout)
-        terminated = loop._metrics_queue.get(timeout=5)
-        loop._push_rollout_metrics(completion_ids=[5, 6, 7, 8, 9], **rollout)
-        clipped = loop._metrics_queue.get(timeout=5)
-
-        assert terminated["completions/clipped_ratio"] == (0.0, 1.0)
-        assert terminated["completions/mean_terminated_length"] == (3.0, 1.0)
-        assert terminated["completions/min_terminated_length"] == 3.0
-        assert terminated["completions/max_terminated_length"] == 3.0
-        # A rollout cut off at `max_tokens` counts toward `clipped_ratio` and the overall lengths, but not these.
-        assert clipped["completions/clipped_ratio"] == (1.0, 1.0)
-        assert clipped["completions/max_length"] == 5.0
-        assert not any("terminated" in key for key in clipped)
-
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = _rollout_loop(metrics_queue=mp.Queue(maxsize=1))
         for _ in range(50):

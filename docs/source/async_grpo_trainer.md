@@ -445,13 +445,11 @@ With 0/1 rewards, `group/dropped_reward_mean` is exactly the share of dropped gr
 
 A **completion** is what vLLM generated for one prompt, counted across _every turn_ of the rollout.
 
-| metric                                                                   | meaning                                                                                                                      |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `completions/mean_length`                                                | generated tokens per rollout, averaged over all of its turns                                                                 |
-| `completions/min_length`, `completions/max_length`                       | shortest and longest rollout in the window                                                                                   |
-| `completions/clipped_ratio`                                              | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`.                        |
-| `completions/mean_terminated_length`                                     | like `completions/mean_length`, over the rollouts that ended on EOS only, so a tail of clipped rollouts cannot hide a change |
-| `completions/min_terminated_length`, `completions/max_terminated_length` | shortest and longest of those rollouts in the window                                                                         |
+| metric                                             | meaning                                                                                               |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
+| `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
+| `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
 
 ### Rollouts
 
