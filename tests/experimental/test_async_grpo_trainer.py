@@ -15,6 +15,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import itertools
 import json
 import math
@@ -396,9 +397,8 @@ class TransformersVLLMServer:
     shares the trainer's accelerator. It listens on a local port from a thread of the test process, so the rollout
     worker, which runs in a spawned child process, reaches it over HTTP like the real server.
 
-    The trainer's [`WeightTransferClient`] streams the weights to vLLM over NCCL, which needs vLLM installed and one
-    device per rank. The `vllm_server` fixture hands the trainer this server in its place, so the trainer sends the
-    weights to it directly.
+    The trainer's weight syncs reach it through [`InProcessWeightTransferClient`], which the `make_vllm_server` fixture
+    hands the trainer in place of [`WeightTransferClient`].
 
     Args:
         model_id (`str`):
@@ -545,24 +545,6 @@ class TransformersVLLMServer:
             )
         return output.sequences[0, prompt_ids.shape[1] :], torch.cat(output.scores).float().log_softmax(-1)
 
-    # The interface of `WeightTransferClient`, which the trainer calls on each weight sync
-    def init_weight_transfer(self):
-        pass
-
-    def pause(self):
-        pass  # `send_weights` holds the generation lock instead
-
-    def send_weights(self, iterator):
-        with self.generate_lock, torch.no_grad():
-            for name, tensor in iterator:
-                self.model.get_parameter(name).copy_(tensor)
-
-    def resume(self):
-        pass
-
-    def destroy(self):
-        pass
-
     def _handler(self):
         server = self
 
@@ -592,24 +574,58 @@ class TransformersVLLMServer:
         return Handler
 
 
+class InProcessWeightTransferClient:
+    """Copies the trainer's weight syncs into a [`TransformersVLLMServer`]'s model, in place of [`WeightTransferClient`],
+    which streams them to vLLM over NCCL and so needs vLLM installed and one device per rank.
+
+    It takes the arguments of [`WeightTransferClient`], so the trainer builds it the same way, and checks each weight
+    it receives against the manifest the trainer declared.
+    """
+
+    def __init__(self, server: TransformersVLLMServer, *, vllm_client, weight_update_info, compute_dtype=None):
+        assert vllm_client.server_url == server.url
+        self.server = server
+        self.shapes = dict(zip(weight_update_info["names"], weight_update_info["shapes"], strict=True))
+
+    def init_weight_transfer(self):
+        pass
+
+    def pause(self):
+        pass  # `send_weights` holds the generation lock instead
+
+    def send_weights(self, iterator):
+        with self.server.generate_lock, torch.no_grad():
+            for name, tensor in iterator:
+                assert list(tensor.shape) == self.shapes[name], f"{name} does not match the manifest"
+                self.server.model.get_parameter(name).copy_(tensor)
+
+    def resume(self):
+        pass
+
+    def destroy(self):
+        pass
+
+
 @pytest.fixture
-def vllm_server(monkeypatch):
+def make_vllm_server(monkeypatch):
     """Starts a [`TransformersVLLMServer`], as `vllm serve <model_id>` would. The trainer's rollout worker generates
-    from it, and the trainer's weight syncs go to it.
+    from it, and the trainer's weight syncs go to it through an [`InProcessWeightTransferClient`].
 
     Call it with the model id. The server shuts down when the test ends.
     """
     servers = []
 
-    def serve(model_id: str) -> TransformersVLLMServer:
+    def make(model_id: str) -> TransformersVLLMServer:
         server = TransformersVLLMServer(model_id)
         servers.append(server)
         # Overrides `stub_rollout_worker` and `stub_weight_transfer`, which pytest runs first as autouse fixtures
         monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker)
-        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
+        monkeypatch.setattr(
+            async_grpo_trainer_module, "WeightTransferClient", functools.partial(InProcessWeightTransferClient, server)
+        )
         return server
 
-    yield serve
+    yield make
     for server in servers:
         server.close()
 
@@ -633,8 +649,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    def test_train(self, vllm_server):
+    def test_train(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        server = make_vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
 
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -642,7 +659,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=server.url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -653,6 +670,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_served_params = {n: param.clone() for n, param in server.model.named_parameters()}
 
         trainer.train()
 
@@ -673,6 +691,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        # Check that the weight syncs reached the server
+        for n, param in previous_served_params.items():
+            assert not torch.equal(param, server.model.get_parameter(n)), (
+                f"Parameter {n} was not synced to the server."
+            )
 
     def _train_one_step_and_save(self, peft_config=None, fsdp=False):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
