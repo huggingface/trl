@@ -53,6 +53,7 @@ REPOS = [
     "google/gemma-4-E2B-it",
     "google/gemma-4-E4B-it",
     "google/gemma-7b-it",
+    "HuggingFaceM4/idefics2-8b",
     "HuggingFaceM4/Idefics3-8B-Llama3",
     "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
     "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
@@ -112,11 +113,11 @@ REPOS = [
 
 def get_chat_template(api, repo):
     # Same precedence as transformers: `chat_template.jinja`, then `chat_template.json` (processors), then the
-    # `chat_template` field of `tokenizer_config.json`
+    # `chat_template` field of `processor_config.json` (older processors), then that of `tokenizer_config.json`
     files = api.list_repo_files(repo)
     if "chat_template.jinja" in files:
         return Path(hf_hub_download(repo, "chat_template.jinja")).read_text(encoding="utf-8")
-    for filename in ("chat_template.json", "tokenizer_config.json"):
+    for filename in ("chat_template.json", "processor_config.json", "tokenizer_config.json"):
         if filename in files:
             chat_template = json.loads(Path(hf_hub_download(repo, filename)).read_text(encoding="utf-8")).get(
                 "chat_template"

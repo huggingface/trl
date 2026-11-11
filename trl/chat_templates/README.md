@@ -131,7 +131,7 @@ Original GPT-OSS chat template.
 
 ### `idefics2.jinja`
 
-Original Idefics2 chat template (as shipped by `HuggingFaceM4/idefics2-*` checkpoints). Does not support tool calling.
+Original Idefics2 chat template (as shipped by `HuggingFaceM4/idefics2-8b`). Does not support tool calling.
 
 ### `idefics3.jinja`
 
