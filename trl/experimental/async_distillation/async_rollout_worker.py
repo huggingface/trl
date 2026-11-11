@@ -507,9 +507,9 @@ class _AsyncRolloutLoop:
         self._rates["rollout/score_s"][1] += 1
         if len(self.teacher_server_urls) > 1:
             # MOPD: one slow teacher throttles only the rollouts routed to it, which the blended mean above hides.
-            # Keyed the way the trainer names `teacher_jsd/{teacher_id}`, so the per-teacher series group together.
-            self._rates[f"teacher_score_s/{teacher_id}"][0] += score_s
-            self._rates[f"teacher_score_s/{teacher_id}"][1] += 1
+            # Keyed the way the trainer names `teacher/{teacher_id}/jsd`, so the per-teacher series group together.
+            self._rates[f"teacher/{teacher_id}/score_s"][0] += score_s
+            self._rates[f"teacher/{teacher_id}/score_s"][1] += 1
         terminated_lengths = {}
         if completion_ids:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define

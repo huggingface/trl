@@ -1033,7 +1033,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 text=f'vllm:cache_config_info{{block_size="16",engine="0",kv_cache_size_tokens="4000"}} 1.0\n'
                 f'vllm:kv_cache_usage_perc{{engine="0"}} {usage}\n'
                 f'vllm:num_requests_waiting{{engine="0"}} 0.0\n'
-                f'vllm:num_preemptions_total{{engine="0"}} 0.0\n'
+                f'vllm:num_preemptions_total{{engine="0"}} {100 + load["polls"]}\n'  # counts since server start
             )
 
         async def models(request):
@@ -1099,6 +1099,12 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 if group is not None:  # the loop ends on a `None` sentinel for the score loop
                     groups.append(group)
             assert groups and all(len(group.completions) == 2 for group in groups)
+            payloads = [loop._metrics_queue.get(timeout=5) for _ in range(loop._metrics_queue.qsize())]
+            preemptions = [
+                p["rollout/vllm_preemption_count"] for p in payloads if "rollout/vllm_preemption_count" in p
+            ]
+            # The first poll only records the server's running total; each later poll reports what was added since
+            assert preemptions[0] == 0 and set(preemptions[1:]) == {1}
         finally:
             loop._loop.close()
 
@@ -1337,18 +1343,18 @@ class TestPackingAwareBatching(TrlTestCase):
         assert collator.metrics["batch/pad_frac"] == [(0, 10)]  # rows pack equal -> no inter-rank padding
 
     def test_collator_handles_a_ragged_metric_key_set(self):
-        # A micro-batch mixes samples that carry `tools/*` with samples that do not. Both orderings matter: a first
-        # sample without the keys must not drop them, one with them must not KeyError on the rest.
+        # A micro-batch mixes samples that carry `rewards/<func>/*` with samples that do not. Both orderings matter: a
+        # first sample without the keys must not drop them, one with them must not KeyError on the rest.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
-        tooled = _rollout_sample(2, reward=1.0)
-        tooled["metrics"] = {"reward": 1.0, "tools/call_frequency": 4.0}
+        with_func = _rollout_sample(2, reward=1.0)
+        with_func["metrics"] = {"reward": 1.0, "rewards/env/mean": 4.0}
         plain = _rollout_sample(2, reward=0.0)
 
-        for groups in ([[plain], [tooled]], [[tooled], [plain]]):
+        for groups in ([[plain], [with_func]], [[with_func], [plain]]):
             collator.metrics.clear()
             collator([[_tree_row(group) for group in groups]])
             assert collator.metrics["reward"] == [0.5]  # (1.0 + 0.0) / 2, over both samples
-            assert collator.metrics["tools/call_frequency"] == [4.0]  # only the sample that carries it
+            assert collator.metrics["rewards/env/mean"] == [4.0]  # only the sample that carries it
 
 
 def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group_id: int = 0):
@@ -1740,11 +1746,11 @@ class TestMetricReduction(TrlTestCase):
         # The two windows have rates 1 tok/s and 100 tok/s. Meaning the ratios would give 50.5; the honest rate is
         # total tokens over total seconds. This is the defect that made `training_tok/s` unusable.
         assert _reduce_metric(
-            "perf/forwarded_tokens_per_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)]
+            "perf/wall_clock_forwarded_tokens_per_s", [(100.0, 100.0), (100.0, 1.0)]
         ) == pytest.approx(200 / 101)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_wall_clock", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/wall_clock_forwarded_tokens_per_s", [(0.0, 0.0)]))
 
 
 class TestWorkerMetricPush(TrlTestCase):
@@ -2556,6 +2562,9 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
             group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
             group.group_id = group_id
             group.queued_at = time.monotonic()
+            # Every tool call of the dropped group fails: it must still count in the tool metrics.
+            group.tool_call_counts = [2, 2] if group_id == 0 else [1, 0]
+            group.tool_failure_counts = [2, 2] if group_id == 0 else [0, 0]
             loop.reward_funcs = [reward_func]
             loop._groups_to_score.put_nowait(group)
             loop._groups_to_score.put_nowait(None)
@@ -2580,6 +2589,8 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert [s.group_id for s in items[1:]] == [1, 1]
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
+        assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
+        assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
 
 
 @pytest.mark.skipif(

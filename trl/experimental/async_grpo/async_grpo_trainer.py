@@ -220,7 +220,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -321,14 +321,14 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
-            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
             #                                them rather than where the worker filled it
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
             # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
             # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
-            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            self.metrics["rollout/queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
@@ -1667,24 +1667,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._last_groups_trained = len(self._trained_groups)
 
         # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None and flops_per_token is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None and flops_per_token is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,
