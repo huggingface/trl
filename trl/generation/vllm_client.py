@@ -876,12 +876,18 @@ class VLLMClient:
                 One `(name, dtype, shape)` triplet per tensor, in the order they are streamed. Dtypes are vLLM style,
                 i.e. `"bfloat16"` rather than `"torch.bfloat16"`.
             named_params (`Iterator[tuple[str, torch.Tensor]]`):
-                Iterator yielding the `(name, tensor)` pairs described by `metadata`.
+                Iterator yielding the `(name, tensor)` pairs described by `metadata`. Each tensor is sent in the dtype
+                `metadata` declares.
         """
         names, dtype_names, shapes = (list(field) for field in zip(*metadata, strict=True))
         update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes}
         if not _HAS_STATEFUL_TRAINER_ENGINE:
             update_info["packed"] = True
+        # The server sizes its receive buffers from the metadata, so each tensor is sent in the dtype it declares: a
+        # tensor's dtype can change after its metadata is collected (bitsandbytes casts the biases of a 4-bit layer to
+        # the compute dtype in the first forward pass)
+        dtypes = [getattr(torch, dtype_name) for dtype_name in dtype_names]
+        named_params = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(named_params, dtypes, strict=True))
 
         if not self._updating_weights:
             self._start_weight_update()

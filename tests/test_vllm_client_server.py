@@ -957,7 +957,10 @@ class TestVLLMClientServerPEFT(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            max_steps=1,  # a single weight sync, before the optimizer step
+            # Two weight syncs of the same weights: the learning rate is zero, and the second sync comes after a
+            # forward pass, in which bitsandbytes casts the biases of a 4-bit layer in place
+            learning_rate=0.0,
+            max_steps=2,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -975,7 +978,7 @@ class TestVLLMClientServerPEFT(TrlTestCase):
             peft_config=LoraConfig(target_modules=["o_proj", "down_proj"], init_lora_weights=False),
         )
 
-        # The weights the server must hold after the sync: the base weights, dequantized if 4-bit, with the LoRA
+        # The weights the server must hold after each sync: the base weights, dequantized if 4-bit, with the LoRA
         # deltas merged in, in the server's dtype
         expected = {}
         with torch.no_grad():
