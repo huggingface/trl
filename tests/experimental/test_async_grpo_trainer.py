@@ -213,7 +213,7 @@ class _StubRolloutWorker:
         pass
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def stub_rollout_worker(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
 
@@ -618,8 +618,6 @@ def make_vllm_server(monkeypatch):
     def make(model_id: str) -> TransformersVLLMServer:
         server = TransformersVLLMServer(model_id)
         servers.append(server)
-        # Overrides `stub_rollout_worker` and `stub_weight_transfer`, which pytest runs first as autouse fixtures
-        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker)
         monkeypatch.setattr(
             async_grpo_trainer_module, "WeightTransferClient", functools.partial(InProcessWeightTransferClient, server)
         )
@@ -630,7 +628,7 @@ def make_vllm_server(monkeypatch):
         server.close()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def stub_weight_transfer(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
@@ -726,6 +724,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         return trainer
 
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_checkpoint_keeps_master_dtype_without_fsdp(self):
         trainer = self._train_one_step_and_save()
 
@@ -741,6 +740,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @require_peft
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self, fake_vllm):
         from peft import LoraConfig
 
@@ -751,11 +751,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
 
     @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_fsdp_checkpoint_body(self):
         self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
         trainer = self._train_one_step_and_save(fsdp=True)
         assert trainer.is_fsdp_enabled
 
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(
@@ -800,6 +802,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         "correction",
         [{}, {"top_k": 3}, {"score_centering": False}],
     )
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_off_policy_correction(self, correction, peft_config=None):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -839,11 +842,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_score_centering_with_lora(self, fake_vllm):
         from peft import LoraConfig
 
         self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
 
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
@@ -968,6 +973,7 @@ def _vision_parameter_names(model) -> set[str]:
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
     ],
 )
+@pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
 class TestAsyncGRPOTrainerVLM(TrlTestCase):
     """Text-only training on vision-language checkpoints. The vision tower is loaded (so parameter names match the
     vLLM server) but frozen, since the dataset carries no images."""
@@ -1070,6 +1076,7 @@ class TestRolloutStartIndex(TrlTestCase):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
+@pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic, on a real trainer with the stub rollout worker."""
 
@@ -2625,19 +2632,18 @@ class TestCustomRolloutLoop(TrlTestCase):
             loop_cls = _FixedRolloutLoop
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker):
-            trainer = FixedTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-                reward_funcs=two_reward,
-                args=AsyncGRPOConfig(
-                    output_dir=self.tmp_dir,
-                    num_generations=2,
-                    max_steps=1,
-                    vllm_server_base_url="http://127.0.0.1:9",
-                    report_to="none",
-                ),
-                train_dataset=dataset,
-            )
+        trainer = FixedTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=two_reward,
+            args=AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                num_generations=2,
+                max_steps=1,
+                vllm_server_base_url="http://127.0.0.1:9",
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
         trainer.rollout_worker.start()
         try:
             sample = trainer.rollout_queue.get(timeout=120)
@@ -2817,6 +2823,7 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
+@pytest.mark.usefixtures("stub_weight_transfer")
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct group_ids.
 
