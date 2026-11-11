@@ -143,7 +143,7 @@ where the constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as
 | `loss_type=` | Description |
 | --- | --- |
 | `"sigmoid"` (default) | Negative log-likelihood of the Bradley-Terry model, as defined above. |
-| `"urm"` | Normalized URM loss from the [Unbiased Alignment](https://huggingface.co/papers/2607.03248) paper. Use `label_smoothing` in [`RewardConfig`] to set the assumed flip probability  \\( \varepsilon \\) in `[0.0, 0.5)`; `label_smoothing=0.0` recovers `"sigmoid"`. The paper recommends  \\( a = 0.8 \\), that is `label_smoothing=4/9`. |
+| `"urm"` | Normalized URM loss from the [Unbiased Alignment](https://huggingface.co/papers/2607.03248) paper. Use `label_smoothing` in [`RewardConfig`] to set the flip probability  \\( \varepsilon \\); valid values are in the range `[0.0, 0.5)`. |
 
 ## Logged metrics
 

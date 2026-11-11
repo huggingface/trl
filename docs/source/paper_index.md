@@ -1647,7 +1647,7 @@ dataset = dataset.map(add_margin)
 
 **📜 Paper**: https://huggingface.co/papers/2607.03248
 
-This ICML 2026 paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the reward model trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased Reward Model (URM) loss, called α-URM in the paper:
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the reward model trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased Reward Model (URM) loss, called α-URM in the paper:
 
 $$
 \mathcal{L}(\theta) = - \textcolor{red}{\alpha} \, \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \frac{e^{\Delta_\theta} \textcolor{red}{+ a}}{e^{\Delta_\theta} + 1} \right], \quad \Delta_\theta = r_\theta(x, y^+) - r_\theta(x, y^-), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
