@@ -1732,7 +1732,7 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1782,7 +1782,7 @@ class TestGetTrainingChatTemplate:
             request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1828,7 +1828,7 @@ class TestGetTrainingChatTemplate:
     ):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1889,7 +1889,7 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "

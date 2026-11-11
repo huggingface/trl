@@ -791,7 +791,7 @@ class SFTTrainer(_BaseTrainer):
         if (
             self._is_vision_dataset
             and args.assistant_only_loss
-            and Version(transformers.__version__) < Version("5.18.0.dev0")
+            and Version(transformers.__version__) < Version("5.18.0")
         ):
             raise ValueError(
                 "Assistant-only loss for vision datasets requires transformers>=5.18.0. Please upgrade transformers "
@@ -895,7 +895,7 @@ class SFTTrainer(_BaseTrainer):
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3")
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and any(
                     isinstance(module, torch.nn.Linear)
