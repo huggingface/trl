@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from datasets import load_dataset
+from accelerate import Accelerator
 from safetensors.torch import load_file
 from transformers import (
     AutoModelForCausalLM,
@@ -33,14 +33,13 @@ from transformers import (
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import is_peft_available
 
-from trl import GRPOConfig, GRPOTrainer
 from trl.generation.vllm_client import (
     _DEFAULT_GENERATION_CONCURRENCY,
     VLLMClient,
     parse_generate_logprobs,
     parse_logprobs,
 )
-from trl.generation.vllm_generation import extract_logprobs
+from trl.generation.vllm_generation import VLLMGeneration, extract_logprobs
 from trl.import_utils import is_requests_available, is_vllm_available
 
 from .testing_utils import (
@@ -60,7 +59,7 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, get_peft_model
     from peft.tuners.lora import LoraLayer
 
 if is_requests_available():
@@ -953,36 +952,23 @@ class TestVLLMClientServerPEFT(TrlTestCase):
         cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
     @pytest.mark.parametrize("load_in_4bit", [False, pytest.param(True, marks=require_bitsandbytes)])
-    def test_train_syncs_merged_lora_weights(self, load_in_4bit):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            # Two weight syncs of the same weights: the learning rate is zero, and the second sync comes after a
-            # forward pass, in which bitsandbytes casts the biases of a 4-bit layer in place
-            learning_rate=0.0,
-            max_steps=2,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_vllm=True,
-            vllm_mode="server",
-            report_to="none",
+    def test_sync_weights_sends_merged_lora_weights(self, load_in_4bit):
+        quantization_config = (
+            BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16) if load_in_4bit else None
         )
-        trainer = GRPOTrainer(
-            model=self.model_id,
-            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
-            args=training_args,
-            train_dataset=dataset,
-            quantization_config=BitsAndBytesConfig(load_in_4bit=True) if load_in_4bit else None,
-            # Non-zero adapters, so that the merged weights differ from the base ones from the first sync
-            peft_config=LoraConfig(target_modules=["o_proj", "down_proj"], init_lora_weights=False),
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_id, dtype=torch.float32, quantization_config=quantization_config, device_map=torch_device
         )
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        model = get_peft_model(model, LoraConfig(target_modules=["o_proj", "down_proj"], init_lora_weights=False))
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        vllm_generation = VLLMGeneration(model, Accelerator(), tokenizer, mode="server", server_host="localhost")
 
-        # The weights the server must hold after each sync: the base weights, dequantized if 4-bit, with the LoRA
-        # deltas merged in, in the server's dtype
+        # The weights the server must hold: the base weights, dequantized if 4-bit, with the LoRA deltas merged in, in
+        # the server's dtype
         expected = {}
         with torch.no_grad():
-            for name, module in trainer.model.named_modules():
+            for name, module in model.named_modules():
                 if isinstance(module, LoraLayer):
                     weight = module.get_base_layer().weight
                     if load_in_4bit:
@@ -990,8 +976,13 @@ class TestVLLMClientServerPEFT(TrlTestCase):
                     merged = weight + module.get_delta_weight("default")
                     expected[name.removeprefix("base_model.model.") + ".weight"] = merged.to(torch.bfloat16).cpu()
 
-        trainer.train()
-        trainer.vllm_generation.vllm_client.close_communicator()
+        vllm_generation.sync_weights()
+        # A mixed-precision forward pass between two syncs, as in training: bitsandbytes casts the biases of a 4-bit
+        # layer to the input dtype in place in it
+        with torch.no_grad(), torch.autocast(torch_device, dtype=torch.bfloat16):
+            model(**tokenizer("Hello, AI!", return_tensors="pt").to(torch_device))
+        vllm_generation.sync_weights()
+        vllm_generation.vllm_client.close_communicator()
 
         # Read the weights back from the server
         response = requests.post(
