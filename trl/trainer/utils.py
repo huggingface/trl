@@ -1842,9 +1842,18 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int | Non
         moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
         moe_mlp_flops += 2 * h * num_experts
         dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
+        # Same rule as transformers' decoder layers: layer i is sparse when (i + 1) % decoder_sparse_step == 0 and i is
+        # not in `mlp_only_layers`.
         sparse_step = config.decoder_sparse_step
+        mlp_only_layers = getattr(config, "mlp_only_layers", None) or ()
         total_layer_flops = sum(
-            attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
+            attn_flops
+            + (
+                moe_mlp_flops
+                if layer_idx not in mlp_only_layers and (layer_idx + 1) % sparse_step == 0
+                else dense_mlp_flops
+            )
+            for layer_idx in range(L)
         )
 
     # Embedding is a lookup (no FLOPs); lm_head is a 2*V*h matmul, tied or not.
