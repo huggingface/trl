@@ -21,7 +21,7 @@
 
 MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training]( https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's default `beta=0.0` (forward KL).
 
-`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_math/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
+`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_mopd/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_mopd/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
 
 > [!WARNING]
 > Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from the same model family as the student (as in the MOPD example, where a SmolLM3 student is fused from SmolLM3 experts trained from the same checkpoint) satisfy this; a teacher with a different vocabulary trains the student against the wrong tokens, silently unless its vocabulary is larger than the student's.
@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instr
 
 ```bash
 # Terminal 3: training on GPU 2
-CUDA_VISIBLE_DEVICES=2 accelerate launch train_async_distillation.py
+CUDA_VISIBLE_DEVICES=2 python train_async_distillation.py
 ```
 
 ## LoRA
@@ -151,13 +151,29 @@ So we split our metrics based on which stage (or _entity_) they are about:
 | `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)  |
 | `perf/`        | measured seconds and FLOPs                                                  |
 
-Everything the loss itself measures is logged unprefixed (`jsd`, `entropy`, `teacher_entropy`), with a `teacher_*/<teacher_id>` breakdown under MOPD — see [the divergence](#the-divergence) below.
+Everything the loss itself measures is logged unprefixed (`jsd`, `entropy`, `teacher_entropy`), with a `teacher/<teacher_id>/*` breakdown under MOPD — see [the divergence](#the-divergence) below.
 
 Let's also define some terms to make token metrics unambiguous:
 
 - **generated** tokens are what the student produced (`completions/*`).
 - **forwarded** tokens are every token the _forward_ pass processes: the prompt and the generated tokens.
 - **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. Trained ≠ generated: a completion position the teacher scored no candidate for is masked out of the divergence but still forwarded.
+
+Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
+
+- A mean measured per rollout, sample or call, like `rollout/duration_s` and `rollout/score_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
+- Any other metric is the mean of the values recorded in the window.
+
+Units:
+
+- `_s`: seconds.
+- `tokens_per_s`: tokens per second.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: amount in one optimizer step, averaged over the steps in the window.
+
+Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`).
 
 ### How the batch numbers compose
 
@@ -191,15 +207,16 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 | metric                      | question                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sample/rollout_queue_size` | how many samples are waiting right now                                                                  |
+| `rollout/queue_size`        | how many samples are waiting right now                                                                  |
 | `sample/time_in_queue_s`    | how long **a single sample** sat there before being trained on — the seconds half of its off-policyness |
 | `perf/rollout_wait_s`       | how long training sat blocked because the queue was **empty**                                            |
-| `rollout/backpressure_s`    | how long generation (the worker) sat blocked because the queue was **full**                              |
+| `rollout/backpressure_s`    | how long generation (the worker) waited because it was `max_staleness` steps ahead of training           |
 
-The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
+The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images. Reading them together with the queue size tells you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/concurrency` and `rollout/score_s`.
-- queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
+- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_s`.
+- queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high → **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
+- both high → the `max_staleness` limit itself is too tight: the rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero → balanced !
 
 ### Completions
@@ -211,6 +228,7 @@ A **completion** is what the student's vLLM server generated for one prompt.
 | `completions/mean_length`                          | generated tokens per rollout                                                                        |
 | `completions/min_length`, `completions/max_length` | shortest and longest completion in the window                                                       |
 | `completions/clipped_ratio`                        | fraction of completions that did not end on EOS, i.e. were cut off by `max_completion_length`        |
+| `completions/mean_terminated_length`, `completions/min_terminated_length`, `completions/max_terminated_length` | the same lengths, over the completions that ended on EOS |
 
 ### Rollouts
 
@@ -220,11 +238,12 @@ A **rollout** is one prompt taken all the way through: generated by the student,
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rollout/duration_s`       | wall time for one rollout, from dispatch to a scored sample: generation **and** the teacher call                                                                                                                                              |
 | `rollout/score_s`          | of that, the time the teacher's `/v1/completions` call took                                                                                                                                                                                  |
-| `teacher_score_s/<id>`     | MOPD only: the same, per teacher. One slow expert throttles only the rollouts routed to it, which the blended mean hides                                                                                                                     |
-| `rollout/generated_tok_s`  | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
+| `teacher/<id>/score_s`     | MOPD only: the same, per teacher. One slow expert throttles only the rollouts routed to it, which the blended mean hides                                                                                                                     |
+| `rollout/generated_tokens_per_s`  | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
 | `rollout/concurrency`      | rollouts in flight, i.e. generating or being scored                                                                                                                                                                                          |
-| `rollout/vllm_retry_total` | retried vLLM requests, to either the student's server or a teacher's. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to a server, not generated text     |
-| `rollout/backpressure_s`   | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
+| `rollout/vllm_retry_count` | retried vLLM requests, to either the student's server or a teacher's. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to a server, not generated text     |
+| `rollout/backpressure_s`   | how long generation waited because it was `max_staleness` steps ahead. See [the rollout queue](#the-rollout-queue)                                                                                                                           |
+| `rollout/queue_size`       | scored samples waiting in the rollout queue, measured where the trainer pulls them. See [the rollout queue](#the-rollout-queue)                                                                                                              |
 
 ### Samples arriving from the queue
 
@@ -234,10 +253,9 @@ Each sample is one `RolloutSample`: a prompt, the student's completion, and the 
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max` | tokens in one **sample**: prompt + generated. Packing is a row-level concern, see `batch/row_*`                                                      |
 | `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
-| `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `jsd` shows the _effect_ of off-policyness on the loss; this shows the cause                            |
-| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
+| `sample/dropped_stale_count`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
 
 ### Batches
 
@@ -253,7 +271,7 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 | `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                             |
 | `batch/row_imbalance`                                                    | `max Σ Lᵢ² / mean Σ Lᵢ²` across rows. Attention is O(L²), so this predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
 | `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                     |
-| `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                          |
+| `batch/dropped_oversize_count`                                           | samples dropped for exceeding `token_budget`                                                                                          |
 
 ### The divergence
 
@@ -264,9 +282,10 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `jsd`                           | the generalized JSD the loss minimizes, at the configured `beta`. Falling means the student's distribution is converging on the teacher's                             |
 | `entropy`                       | the student's own predictive entropy. A collapse here with a falling `jsd` is the student narrowing rather than learning                                             |
 | `teacher_entropy`               | the teacher's entropy over the candidates it reported. Bounded below the true value, since only `teacher_top_k` candidates cross the wire                             |
-| `teacher_jsd/<id>`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
-| `teacher_entropy/<id>`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
-| `teacher_token_frac/<id>`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher_jsd/<id>`   |
+| `teacher/<id>/jsd`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
+| `teacher/<id>/entropy`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `teacher/<id>/token_frac`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher/<id>/jsd`   |
+| `aux_loss` | the MoE router's load-balancing loss per micro-batch, averaged over ranks, logged when the model returns router logits and `router_aux_loss_coef` isn't 0. Unlike the rows above, it isn't a per-token average |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 
@@ -276,24 +295,24 @@ Throughput measures how many tokens the trainer processes per second. **Model FL
 
 Throughput and MFU are reported on two time bases:
 
-- **`_fwd_bwd`** measures performance during the forward and backward passes.
-- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+- **`fwd_bwd_`** measures performance during the forward and backward passes.
+- **`wall_clock_`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
 
 The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
 
-MFU is reported only when peak compute capacity is known for the local training device at the selected precision. Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL). Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
-| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
+| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `fwd_bwd_` metric below                                    |
 | `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
-| `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
-| `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                            |
-| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+| `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s` | forwarded tokens per second on each basis                                                                                                             |
+| `perf/wall_clock_trained_tokens_per_s`                                   | the same, counting only tokens the loss saw                                                                                                            |
+| `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## Design philosophy
 

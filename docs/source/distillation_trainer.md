@@ -47,7 +47,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_distillation.py
+torchrun --nproc_per_node 8 train_distillation.py
 ```
 
 ## Looking deeper into the distillation method
@@ -199,7 +199,7 @@ For more details, see the [Passing tools guide](https://huggingface.co/docs/tran
 > [!TIP]
 > The tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
-Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls.
+Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls, when the completion (all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings` otherwise).
 
 Example:
 

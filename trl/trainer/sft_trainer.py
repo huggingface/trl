@@ -49,7 +49,6 @@ from transformers.utils import is_peft_available
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
-    has_generation_markers,
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
@@ -988,10 +987,9 @@ class SFTTrainer(_BaseTrainer):
                 "supported for conversational datasets."
             )
 
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers if needed
+        if args.assistant_only_loss:
+            self.chat_template = get_training_chat_template(processing_class, require_prefix_preservation=False)
         else:
             self.chat_template = None
 
@@ -1048,12 +1046,6 @@ class SFTTrainer(_BaseTrainer):
                 )
 
         # Dataset
-        if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
-            raise ValueError(
-                "When `padding_free=True` without packing, `max_length` is not enforced. Either enable packing "
-                "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
-                "`max_length=None`."
-            )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         self._skip_prepare_dataset = (

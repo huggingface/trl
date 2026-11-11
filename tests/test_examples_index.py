@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).parent.parent
-SHARED_DIRS = {"accelerate_configs", "datasets"}
+SHARED_DIRS = {"datasets", "deepspeed_configs", "fsdp_configs"}
 
 
 def test_examples_index_matches_folders():

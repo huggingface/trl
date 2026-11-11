@@ -863,7 +863,17 @@ class DPOTrainer(_BaseTrainer):
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
         # The f-DPO reparameterization leaves a β·log Z(x) term that only cancels in the chosen-rejected reward
         # difference, so the other losses have no valid f-divergence generalization.
-        f_divergence_loss_types = {"sigmoid", "sigmoid_norm", "hinge", "ipo", "exo_pair", "robust", "discopop", "sft"}
+        f_divergence_loss_types = {
+            "sigmoid",
+            "sigmoid_norm",
+            "hinge",
+            "ipo",
+            "exo_pair",
+            "robust",
+            "discopop",
+            "sft",
+            "udpo",
+        }
         if self.f_divergence_type != "reverse_kl" and not set(self.loss_types) <= f_divergence_loss_types:
             raise ValueError(
                 f"`f_divergence_type='{self.f_divergence_type}'` is only supported for the following loss types: "
@@ -881,6 +891,13 @@ class DPOTrainer(_BaseTrainer):
             logger.warning(
                 "The `label_smoothing` parameter should lie in [0.0, 0.5) for the 'robust' loss. You provided "
                 f"{self.label_smoothing}."
+            )
+        if "udpo" in self.loss_types and not (0.0 <= self.label_smoothing < 0.5):
+            # With ε >= 0.5, a = ε / (1 - ε) >= 1 and the UDPO loss no longer prefers the chosen completions
+            raise ValueError(
+                "The `label_smoothing` parameter must lie in [0.0, 0.5) for the 'udpo' loss, as it is the probability "
+                f"ε that a preference label is flipped. You provided {self.label_smoothing}. To use the parameter a "
+                "of the UDPO paper, set `label_smoothing=a / (1 + a)`."
             )
         if "exo_pair" in self.loss_types and self.label_smoothing == 0.0:
             raise ValueError(
@@ -1564,11 +1581,23 @@ class DPOTrainer(_BaseTrainer):
                 delta = chosen_avg_score - rejected_avg_score
                 per_sequence_loss = -F.logsigmoid(self.beta * delta)
 
+            elif loss_type == "udpo":
+                # Normalized UDPO loss, α-UDPO in the paper (https://huggingface.co/papers/2607.03248, Eq. 14 scaled
+                # by α): -α·log((e^z + a) / (e^z + 1)), where a = ε / (1 - ε), ε = label_smoothing is the assumed
+                # probability that a label is flipped, and α = (1 + √a) / (1 - √a) keeps the maximum gradient
+                # magnitude at 1, as for "sigmoid". The log is computed in log space as log(σ(z) + a·σ(-z)) for
+                # numerical stability; ε = 0 recovers "sigmoid".
+                a = torch.tensor(self.label_smoothing / (1 - self.label_smoothing), device=device)
+                alpha = (1 + torch.sqrt(a)) / (1 - torch.sqrt(a))
+                logits = self.beta * delta_score
+                log_prob = torch.logaddexp(F.logsigmoid(logits), torch.log(a) + F.logsigmoid(-logits))
+                per_sequence_loss = -alpha * log_prob
+
             else:
                 raise ValueError(
                     f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
                     "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_unpaired', 'apo_zero', 'apo_down', "
-                    "'discopop', 'sft', 'sigmoid_norm']"
+                    "'discopop', 'sft', 'sigmoid_norm', 'udpo']"
                 )
 
             if self.use_weighting:
@@ -1579,7 +1608,7 @@ class DPOTrainer(_BaseTrainer):
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
-                per_sequence_loss *= chosen_weights * rejected_weights
+                per_sequence_loss = per_sequence_loss * (chosen_weights * rejected_weights)
 
             loss += per_sequence_loss.mean() * loss_weight
 
