@@ -1772,6 +1772,28 @@ class TestWorkerMetricPush(TrlTestCase):
         for _ in range(50):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
+    @pytest.mark.parametrize(
+        ("ends_on_eos", "clipped"),
+        [
+            (True, 0.0),  # ends on eos: the model stopped on its own
+            (False, 1.0),  # ends mid-sentence: cut off by max_completion_length
+        ],
+    )
+    def test_rollout_push_reports_the_completion(self, ends_on_eos, clipped):
+        loop = _rollout_loop()
+        completion_ids = [7, 8, loop.eos_token_ids[0] if ends_on_eos else 9]
+        loop._push_rollout_metrics(turns=1, sequences=1, completion_ids=completion_ids, drifts=[], duration_s=1.5)
+        payload = loop._metrics_queue.get(timeout=5)
+
+        assert payload["completions/mean_length"] == (3.0, 1.0)
+        assert payload["completions/max_length"] == 3.0
+        assert payload["completions/clipped_ratio"] == (clipped, 1.0)
+        # Only a completion that ended on EOS counts in the terminated lengths, as in GRPO
+        assert ("completions/mean_terminated_length" in payload) is ends_on_eos
+        if ends_on_eos:
+            assert payload["completions/mean_terminated_length"] == (3.0, 1.0)
+            assert payload["completions/min_terminated_length"] == payload["completions/max_terminated_length"] == 3.0
+
 
 def alternating_reward(completions, **kwargs):
     return [float(i % 2) for i in range(len(completions))]

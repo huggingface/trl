@@ -428,6 +428,7 @@ A **completion** is what vLLM generated for one prompt, counted across _every tu
 | `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
 | `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
 | `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
+| `completions/mean_terminated_length`, `completions/min_terminated_length`, `completions/max_terminated_length` | the same lengths, over the rollouts whose last turn ended on EOS |
 
 ### Rollouts
 
