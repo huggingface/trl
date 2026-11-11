@@ -723,7 +723,7 @@ class AsyncRolloutLoop:
         resets the server's caches, which preempts every running request.
         """
         rollouts_at_change = 0
-        preemptions_seen = 0.0
+        preemptions_seen = None
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
@@ -750,6 +750,8 @@ class AsyncRolloutLoop:
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if preemptions_seen is None:
+                preemptions_seen = preemptions
             if usage > 0.8 and self._concurrency <= self._kv_cap:
                 self._kv_cap = max(1, int(self._kv_cap * 0.7))
                 rollouts_at_change = self._total_rollouts
@@ -760,7 +762,7 @@ class AsyncRolloutLoop:
             self._push_metrics(
                 {
                     "rollout/concurrency_cap": float(self._kv_cap),
-                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_kv_cache_usage_frac": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
                     "rollout/vllm_preemption_count": preemptions - preemptions_seen,
@@ -1097,13 +1099,23 @@ class AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         if turns > 1:
             self._rates["rollout/fork_frac"][0] += len(drifts)
             self._rates["rollout/fork_frac"][1] += turns - 1
@@ -1116,6 +1128,7 @@ class AsyncRolloutLoop:
                 "rollout/drift_tokens_max": float(max(drifts, default=0)),
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -1367,6 +1380,13 @@ class AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        for reward_func_name, rewards in zip(self.reward_func_names, all_rewards, strict=False):
+            if len(rewards) != len(group.completions):
+                raise ValueError(
+                    f"The reward function '{reward_func_name}' returned {len(rewards)} rewards, but "
+                    f"{len(group.completions)} were expected (one per prompt-completion pair). Make sure the reward "
+                    f"function returns exactly one reward per completion."
+                )
         # Each environment that owns its reward contributes one reward column (named after its env class, in
         # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
         # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
@@ -1378,8 +1398,21 @@ class AsyncRolloutLoop:
         all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
-        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        return np.array(all_rewards, dtype=float)
+        all_rewards = np.array(
+            [[r if r is not None else float("nan") for r in row] for row in all_rewards], dtype=float
+        )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if np.isnan(all_rewards).all(axis=0).any():
+            nan_row_idx = int(np.isnan(all_rewards).all(axis=0).nonzero()[0][0])
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in group.reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = group.prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = group.completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        return all_rewards
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """
@@ -1428,6 +1461,11 @@ class AsyncRolloutLoop:
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        if self.tools or any(group.tool_call_counts):
+            self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
+            self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
+            self._rates["tools/failure_frequency"][0] += sum(group.tool_failure_counts)
+            self._rates["tools/failure_frequency"][1] += sum(group.tool_call_counts)
         zero_std = bool(np.all(scored == scored[:1]))
         self._rates["frac_reward_zero_std"][0] += zero_std
         self._rates["frac_reward_zero_std"][1] += 1
@@ -1439,18 +1477,6 @@ class AsyncRolloutLoop:
                 self._rates["reward_dropped"][1] += 1
             return []
 
-        total_calls = sum(group.tool_call_counts)
-        tool_metrics = (
-            [
-                {
-                    "tools/call_frequency": float(n_calls),
-                    "tools/failure_frequency": (n_failures / n_calls) if n_calls > 0 else 0.0,
-                }
-                for n_calls, n_failures in zip(group.tool_call_counts, group.tool_failure_counts, strict=True)
-            ]
-            if total_calls > 0
-            else [{}] * len(group.completions)
-        )
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
@@ -1460,16 +1486,8 @@ class AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
-            zip(
-                group.prompts,
-                group.completions,
-                group.completions_sequences,
-                advantages,
-                rewards,
-                tool_metrics,
-                strict=True,
-            )
+        for i, (prompt, completion, sequences, advantage, reward) in enumerate(
+            zip(group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True)
         ):
             metrics = {
                 "reward_kept": float(reward),
@@ -1486,7 +1504,6 @@ class AsyncRolloutLoop:
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
-                **tm,
             }
             for seq in sequences:
                 width = max(map(len, seq.sampler_logprobs))

@@ -68,7 +68,7 @@ from .weight_transfer import WeightTransferClient
 logger = get_logger(__name__)
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
 
 if is_trackio_available():
     import trackio
@@ -220,7 +220,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -321,14 +321,14 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
-            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
             #                                them rather than where the worker filled it
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
             # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
             # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
-            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            self.metrics["rollout/queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
@@ -1051,7 +1051,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
+        add_fused_lm_head(
+            model.get_base_model() if is_peft_model(model) else model,
+            temperature=self.temperature,
+            outputs=("log_probs", "entropy"),
+        )
 
         # Processing class
         if processing_class is None:
@@ -1098,6 +1102,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
+        # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) add virtual tokens rather than weights, and
+        # the trainer syncs weights to the vLLM server, so the server would generate without them.
+        if is_peft_model(model) and any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+            raise ValueError(
+                "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The trainer "
+                "syncs weights to the vLLM server, and these methods add virtual tokens instead, so the server would "
+                "generate without them. Use a weight-based adapter such as LoRA instead."
+            )
+
         # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and the importance ratio is wrong on every token with nothing raised. Checked on
@@ -1138,6 +1151,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             reward_funcs = []
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+
+        # At least one reward source is required: either `reward_funcs`, an environment that owns the reward via a
+        # `get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`. Environments are created in the
+        # rollout worker, which checks that they define `get_reward`.
+        if (
+            not reward_funcs
+            and environment_factory is None
+            and self.loop_cls.generate_one is AsyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
 
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
@@ -1633,29 +1659,32 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self._rollout_dataset.lookahead_tokens = (
                     max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
                 )
+                self._rollout_dataset.token_allowance.value = (
+                    self._rollout_dataset.consumed_tokens + self._rollout_dataset.lookahead_tokens
+                )
             self._rollout_dataset.step_tokens = 0
             metrics["batch/groups_per_step"].append(float(len(self._trained_groups) - self._last_groups_trained))
             self._last_groups_trained = len(self._trained_groups)
 
         # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None and flops_per_token is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
                 if self._peak_flops_per_device is not None and flops_per_token is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,
