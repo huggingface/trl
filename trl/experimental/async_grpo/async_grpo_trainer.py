@@ -68,7 +68,7 @@ from .weight_transfer import WeightTransferClient
 logger = get_logger(__name__)
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
 
 if is_trackio_available():
     import trackio
@@ -1051,7 +1051,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
+        add_fused_lm_head(
+            model.get_base_model() if is_peft_model(model) else model,
+            temperature=self.temperature,
+            outputs=("log_probs", "entropy"),
+        )
 
         # Processing class
         if processing_class is None:
@@ -1097,6 +1101,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # Unlike `GRPOTrainer`, no `autocast_adapter_dtype=False` branch (it works around a DeepSpeed ZeRO-3
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
+
+        # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) add virtual tokens rather than weights, and
+        # the trainer syncs weights to the vLLM server, so the server would generate without them.
+        if is_peft_model(model) and any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+            raise ValueError(
+                "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The trainer "
+                "syncs weights to the vLLM server, and these methods add virtual tokens instead, so the server would "
+                "generate without them. Use a weight-based adapter such as LoRA instead."
+            )
 
         # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
