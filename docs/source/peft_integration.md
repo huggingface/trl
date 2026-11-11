@@ -4,7 +4,7 @@ TRL supports [PEFT](https://github.com/huggingface/peft) (Parameter-Efficient Fi
 
 This guide covers how to use PEFT with different TRL trainers, including LoRA, QLoRA, and prompt tuning techniques.
 
-For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb).
+For a complete working example, see the [SFT with LoRA/QLoRA notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb).
 
 ## Installation
 
@@ -336,87 +336,6 @@ trainer.train()
 </hfoption>
 </hfoptions>
 
-### Proximal Policy Optimization (PPO)
-
-#### Multi-Adapter RL Training
-
-You can use a single base model with multiple PEFT adapters for the entire PPO algorithm - including retrieving reference logits, computing active logits, and calculating rewards. This approach is useful for memory-efficient RL training.
-
-> [!WARNING]
-> This feature is experimental and convergence has not been extensively tested. We encourage the community to share feedback and report any issues.
-
-**Requirements**
-
-Install PEFT and optionally bitsandbytes for 8-bit models:
-
-```bash
-pip install peft bitsandbytes
-```
-
-**Training Workflow**
-
-The multi-adapter approach requires three stages:
-
-1. **Supervised Fine-Tuning (SFT)**: Train a base model on your target domain (e.g., IMDB dataset) using `SFTTrainer`
-2. **Reward Model Training**: Train a reward model adapter using PEFT and `RewardTrainer` (see [reward modeling example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py))
-3. **PPO Training**: Fine-tune new adapters using PPO with the reward adapter
-
-> [!IMPORTANT]
-> Use the same base model (architecture and weights) for stages 2 & 3.
-
-**Basic Usage**
-
-After training your reward adapter and pushing it to the Hub:
-
-```python
-from peft import LoraConfig
-from trl.experimental.ppo import PPOTrainer, AutoModelForCausalLMWithValueHead
-
-model_name = "huggyllama/llama-7b"
-rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
-
-# Configure PPO adapter
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-# Load model with reward adapter
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    model_name,
-    peft_config=lora_config,
-    reward_adapter=rm_adapter_id,
-)
-
-trainer = PPOTrainer(model=model, ...)
-```
-
-In your training loop, compute rewards using:
-
-```python
-rewards = trainer.model.compute_reward_score(**inputs)
-```
-
-**Advanced Features**
-
-**Quantized Base Models**
-
-For memory-efficient training, load the base model in 8-bit or 4-bit while keeping adapters in float32:
-
-```python
-from transformers import BitsAndBytesConfig
-
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    model_name,
-    peft_config=lora_config,
-    reward_adapter=rm_adapter_id,
-    quantization_config=BitsAndBytesConfig(load_in_8bit=True),
-)
-```
-
 ## QLoRA: Quantized Low-Rank Adaptation
 
 QLoRA combines 4-bit quantization with LoRA to enable fine-tuning of very large models on consumer hardware. This technique can reduce memory requirements by up to 4x compared to standard LoRA.
@@ -541,6 +460,18 @@ python trl/scripts/sft.py \
     --lora_r 32 \
     --lora_alpha 16
 ```
+
+### Pre-quantized checkpoints
+
+Some checkpoints are released quantized, like [gpt-oss](https://huggingface.co/openai/gpt-oss-20b) in MXFP4 or [Mistral Medium 3.5](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B) in FP8. These weights can't be trained in place, so when you pass such a checkpoint by name, the trainer loads it dequantized, with or without a `peft_config`. The model then takes the memory of its dequantized weights, for example about 42 GB in bfloat16 for gpt-oss-20b, against 13 GB for its MXFP4 checkpoint. To load it in bfloat16, as for any other model:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(model_init_kwargs={"dtype": "bfloat16"})
+```
+
+FP8 checkpoints require transformers 5.0.0 or later.
 
 ## Prompt Tuning
 
@@ -737,14 +668,10 @@ model = PeftModel.from_pretrained(base_model, "username/model-name-lora")
 
 ## Multi-GPU Training
 
-PEFT works seamlessly with TRL's multi-GPU support through `accelerate`:
+PEFT works seamlessly with TRL's multi-GPU support:
 
 ```bash
-# Configure accelerate
-accelerate config
-
-# Launch training
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --use_peft \
@@ -755,7 +682,7 @@ accelerate launch trl/scripts/sft.py \
 For QLoRA with multiple GPUs, the base model is automatically sharded:
 
 ```bash
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path meta-llama/Llama-2-70b-hf \
     --load_in_4bit \
     --use_peft \
@@ -794,14 +721,14 @@ model = AutoModelForCausalLM.from_pretrained(
 > [!IMPORTANT]
 > - Keep the `lm_head` module on the first GPU (device 0) to avoid errors
 > - See this [tutorial on device maps](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) for proper configuration
-> - Run training scripts directly (not with `accelerate launch`): `python script.py`
+> - Run training scripts directly (not with `torchrun`): `python script.py`
 > - Data Parallelism is not yet supported with NPP
 
 ## Resources
 
 ### TRL Examples and Notebooks
 
-- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/notebooks/sft_trl_lora_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
+- **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
 - **[TRL Examples Directory](https://github.com/huggingface/trl/tree/main/examples)** - Collection of training scripts demonstrating PEFT with different trainers
 - **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/transformers)** - Step-by-step guides for common PEFT training scenarios
 

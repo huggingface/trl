@@ -24,12 +24,17 @@ from pathlib import Path
 
 import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
+from huggingface_hub.errors import NotASafetensorsRepoError
 from packaging.version import Version
+from safetensors import safe_open
 from torch import nn
 from transformers import AutoConfig, ProcessorMixin
+from transformers import set_seed as _set_seed
 
 
 ORGANIZATION = "trl-internal-testing"
+
+SEED = 42
 
 MODEL_CARD = """
 ---
@@ -49,7 +54,7 @@ api = HfApi()
 def _transformers_floor_from_pyproject():
     """Read the `transformers>=X.Y.Z` floor from the repo's pyproject.toml."""
     pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
-    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text())
+    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text(encoding="utf-8"))
     if match is None:
         raise RuntimeError(f"Could not find a `transformers>=` bound in {pyproject}")
     return match.group(1)
@@ -69,6 +74,18 @@ def check_transformers_version(expected_version=None):
         raise RuntimeError(
             f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
         )
+
+
+def set_seed(seed=SEED):
+    """Seed the RNGs that model construction draws from.
+
+    Without this every run produces different weights, so re-pushing a tiny model always creates a new
+    `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
+    `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
+    """
+    _set_seed(seed)
 
 
 def smoke_test(model, tokenizer_or_processor=None):
@@ -150,21 +167,41 @@ _TORCH_TO_SAFETENSORS_DTYPE = {
 def check_dtype_pattern(reference_id, model):
     """Flag tensors whose dtype diverges from the reference checkpoint.
 
-    Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
-    like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
+    Reads the reference safetensors header via the Hub API (no weight download) and compares it with the checkpoint
+    that `model` saves, whose names follow the reference layout (in memory, transformers may rename or fuse tensors).
+    Useful to catch cases like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is
+    bf16.
+
+    `model` can also be the state dict that gets saved, when the script writes the checkpoint itself (quantized weights).
     """
-    metadata = api.get_safetensors_metadata(reference_id)
+    try:
+        metadata = api.get_safetensors_metadata(reference_id)
+    except NotASafetensorsRepoError:
+        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+        return
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
-    mismatches = []
-    for name, tensor in model.state_dict().items():
-        ref_dtype = ref_dtypes.get(name)
-        if ref_dtype is None:
-            continue  # tensor has no counterpart in the reference (e.g. scale-down, PEFT wrapper, tying)
-        tiny_dtype = _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype)
-        if tiny_dtype != ref_dtype:
-            mismatches.append((name, ref_dtype, tiny_dtype))
+    if isinstance(model, nn.Module):
+        tiny_dtypes = {}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+            for path in Path(tmp_dir).glob("*.safetensors"):
+                with safe_open(path, "pt") as f:
+                    tiny_dtypes.update({name: f.get_slice(name).get_dtype() for name in f.keys()})
+    else:
+        tiny_dtypes = {name: _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype) for name, tensor in model.items()}
 
+    unmatched = [name for name in tiny_dtypes if name not in ref_dtypes]
+    if unmatched:
+        print(f"[dtype_check] {reference_id}: {len(unmatched)} tensors have no counterpart in the reference:")
+        for name in unmatched:
+            print(f"  {name}")
+
+    mismatches = [
+        (name, ref_dtypes[name], dtype)
+        for name, dtype in tiny_dtypes.items()
+        if name in ref_dtypes and ref_dtypes[name] != dtype
+    ]
     if not mismatches:
         print(f"[dtype_check] {reference_id}: all matched tensors have the reference dtype")
         return
@@ -174,8 +211,22 @@ def check_dtype_pattern(reference_id, model):
         print(f"  {name}: reference={ref}, tiny={tiny}")
 
 
-def print_config_diff(reference_id, model):
-    """Print the flat, recursive diff between the reference Hub config and the tiny-model config."""
+def _format_diff_value(value, width):
+    """Render a config value for the diff table, tagging lists with their length and marking truncation."""
+    text = f"[{len(value)} items] {value}" if isinstance(value, list) else str(value)
+    if width is None or len(text) <= width:
+        return text
+    return text[: width - 1] + "\u2026"
+
+
+def print_config_diff(reference_id, model, full=None):
+    """Print the flat, recursive diff between the reference Hub config and the tiny-model config.
+
+    Values are truncated to keep the table aligned; pass `--full-diff` (or `full=True`) to print them in full.
+    """
+    if full is None:
+        full = _parse_args().full_diff
+    width = None if full else 34
     reference_config = AutoConfig.from_pretrained(reference_id)
     ref_flat = _flatten(reference_config.to_dict())
     tiny_flat = _flatten(model.config.to_dict())
@@ -191,7 +242,7 @@ def print_config_diff(reference_id, model):
 
     print(f"[config_diff] {reference_id} vs tiny ({len(rows)} differences)")
     for k, r, t in rows:
-        print(f"  {k:48s} {str(r)[:34]:34s} → {str(t)[:34]}")
+        print(f"  {k:48s} {_format_diff_value(r, width):34s} → {_format_diff_value(t, width)}")
 
 
 def _parse_args():
@@ -201,13 +252,33 @@ def _parse_args():
         action="store_true",
         help="If the repo already exists, open a PR instead of skipping.",
     )
+    parser.add_argument(
+        "--revision",
+        help="Push to this existing PR of the repo (e.g. refs/pr/3) instead of skipping.",
+    )
+    parser.add_argument(
+        "--full-diff",
+        action="store_true",
+        help="Print untruncated values in the config diff.",
+    )
     args, _ = parser.parse_known_args()
     return args
 
 
-def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model.save_pretrained(tmpdir)
+        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr, revision)
+
+
+def push_dir_to_hub(
+    save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None
+):
+    """Push the model files saved in `save_dir`, with the tokenizer, generation config and model card, in one commit."""
     if create_pr is None:
         create_pr = _parse_args().create_pr
+    if revision is None:
+        revision = _parse_args().revision
 
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
@@ -219,38 +290,37 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, c
         repo_id += f"-{suffix}"
 
     exists = api.repo_exists(repo_id)
-    if exists and not create_pr:
-        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR)")
+    if exists and not create_pr and revision is None:
+        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR, or --revision to update one)")
         return
 
     if not exists:
         api.create_repo(repo_id, exist_ok=True)
 
-    # Save all artifacts to a temp dir and upload them in a single commit, so --create-pr opens one PR.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model.save_pretrained(tmpdir)
-        if tokenizer is not None:
-            tokenizer.save_pretrained(tmpdir)
-        if generation_config is not None:
-            generation_config.save_pretrained(tmpdir)
-        model_card.save(os.path.join(tmpdir, "README.md"))
+    # Upload all artifacts in a single commit, so --create-pr opens one PR.
+    if tokenizer is not None:
+        tokenizer.save_pretrained(save_dir)
+    if generation_config is not None:
+        generation_config.save_pretrained(save_dir)
+    model_card.save(os.path.join(save_dir, "README.md"))
 
-        operations = [
-            CommitOperationAdd(
-                path_in_repo=os.path.relpath(os.path.join(root, name), tmpdir),
-                path_or_fileobj=os.path.join(root, name),
-            )
-            for root, _, files in os.walk(tmpdir)
-            for name in files
-        ]
-        commit_info = api.create_commit(
-            repo_id=repo_id,
-            operations=operations,
-            commit_message=f"Upload {model.__class__.__name__}",
-            create_pr=exists and create_pr,
+    operations = [
+        CommitOperationAdd(
+            path_in_repo=os.path.relpath(os.path.join(root, name), save_dir),
+            path_or_fileobj=os.path.join(root, name),
         )
-        if commit_info.pr_url:
-            print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
+        for root, _, files in os.walk(save_dir)
+        for name in files
+    ]
+    commit_info = api.create_commit(
+        repo_id=repo_id,
+        operations=operations,
+        commit_message=f"Upload {model.__class__.__name__}",
+        create_pr=exists and create_pr,
+        revision=revision,
+    )
+    if commit_info.pr_url:
+        print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
 
 
 def init_weights_tiny_model(model):

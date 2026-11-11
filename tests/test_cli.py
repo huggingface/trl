@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 from io import StringIO
 from unittest.mock import patch
@@ -22,7 +23,7 @@ import yaml
 from .testing_utils import TrlTestCase
 
 
-@pytest.mark.parametrize("command", ["dpo", "grpo", "kto", "reward", "rloo", "sft"])
+@pytest.mark.parametrize("command", ["distillation", "dpo", "grpo", "kto", "reward", "rloo", "sft"])
 def test_help_no_type_error(command):
     # Regression test for https://github.com/huggingface/trl/issues/5099:
     # TrainingArguments help strings with unescaped "%" caused TypeError in argparse.
@@ -35,6 +36,78 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
+    @pytest.mark.parametrize(
+        "command,trainer_name",
+        [
+            ("distillation", "DistillationTrainer"),
+            ("dpo", "DPOTrainer"),
+            ("grpo", "GRPOTrainer"),
+            ("kto", "KTOTrainer"),
+            ("reward", "RewardTrainer"),
+            ("rloo", "RLOOTrainer"),
+            ("sft", "SFTTrainer"),
+        ],
+    )
+    @pytest.mark.parametrize("checkpoint", [None, "checkpoint-2"])
+    def test_resume_argument(self, command, trainer_name, checkpoint):
+        script = importlib.import_module(f"trl.scripts.{command}")
+        argv = ["--output_dir", self.tmp_dir, "--dataset_name", "unused", "--report_to", "none"]
+        if command == "distillation":
+            argv += ["--teacher_model_name_or_path", "unused"]
+        if checkpoint is not None:
+            argv += ["--resume_from_checkpoint", checkpoint]
+        parsed = script.make_parser().parse_args_and_config(argv)
+
+        with patch("datasets.load_dataset", return_value={"train": []}), patch(f"trl.{trainer_name}") as trainer:
+            script.main(*parsed)
+
+        trainer.return_value.train.assert_called_once_with(resume_from_checkpoint=checkpoint)
+
+    def test_sft_resume(self):
+        from trl import SFTTrainer
+        from trl.scripts import sft
+
+        argv = [
+            "--output_dir",
+            self.tmp_dir,
+            "--model_name_or_path",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "--dataset_name",
+            "trl-internal-testing/zen",
+            "--dataset_config",
+            "standard_language_modeling",
+            "--report_to",
+            "none",
+            "--max_steps",
+            "2",
+            "--save_steps",
+            "2",
+            "--per_device_train_batch_size",
+            "2",
+            "--gradient_accumulation_steps",
+            "1",
+            "--bf16",
+            "false",
+            "--loss_type",
+            "nll",
+        ]
+        sft.main(*sft.make_parser().parse_args_and_config(argv))
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-2")
+        argv[argv.index("--max_steps") + 1] = "3"
+        argv += ["--resume_from_checkpoint", checkpoint]
+
+        # Execute the real training step: only step 3 remains after restoring checkpoint-2.
+        with patch.object(SFTTrainer, "training_step", autospec=True, side_effect=SFTTrainer.training_step) as step:
+            sft.main(*sft.make_parser().parse_args_and_config(argv))
+        assert step.call_count == 1
+
+    def test_distillation(self):
+        from trl.cli import main
+
+        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
     def test_dpo(self):
         from trl.cli import main
 
@@ -93,6 +166,44 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    def test_sft_torchrun(self):
+        # Arguments the script does not know, `--nproc_per_node` here, go to torchrun.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none --nproc_per_node 2"
+        with patch("torch.distributed.run.run") as mock_run, patch("sys.argv", command.split(" ")):
+            main()
+
+        torchrun_args = mock_run.call_args.args[0]
+        assert torchrun_args.nproc_per_node == "2"
+        assert torchrun_args.training_script.endswith("sft.py")
+        assert "--nproc_per_node" not in torchrun_args.training_script_args
+        assert "--report_to" in torchrun_args.training_script_args
+
+    @pytest.mark.parametrize(
+        "launch_args, expected_launch_args",
+        [
+            (["--num_processes", "2"], ["--num_processes", "2"]),
+            (["--accelerate_config", "zero2"], ["--config_file"]),
+        ],
+    )
+    def test_sft_accelerate_launch_deprecated(self, launch_args, expected_launch_args):
+        # Arguments only `accelerate launch` knows still go to it, with a deprecation warning, until v2.0.0.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        with (
+            patch("trl.cli.accelerate_launcher.launch_training_script") as mock_launch,
+            patch("sys.argv", command.split(" ") + launch_args),
+            pytest.warns(FutureWarning, match="removed in v2.0.0"),
+        ):
+            main()
+
+        kwargs = mock_launch.call_args.kwargs
+        assert kwargs["script_name"] == "sft.py"
+        assert kwargs["launch_args"][: len(expected_launch_args)] == expected_launch_args
+        assert "--report_to" in kwargs["training_script_args"]
+
     def test_sft_config_file(self):
         from trl.cli import main
 
@@ -108,7 +219,7 @@ class TestCLI(TrlTestCase):
             "output_dir": output_dir,
             "lr_scheduler_type": "cosine_with_restarts",
         }
-        with open(config_path, "w") as config_file:
+        with open(config_path, "w", encoding="utf-8") as config_file:
             yaml.dump(config_content, config_file)
 
         # Test the CLI with config file
@@ -127,7 +238,7 @@ class TestCLI(TrlTestCase):
         from trl.cli import main
 
         config_path = os.path.join(self.tmp_dir, "config.yaml")
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
 
         # Patch the actual function that `VllmServeCommand.run` imports as `vllm_serve_main`
@@ -138,3 +249,77 @@ class TestCLI(TrlTestCase):
         mock_serve.assert_called_once()
         script_args = mock_serve.call_args.args[0]
         assert script_args.model == "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+
+class TestCLIModelInitKwargs(TrlTestCase):
+    @pytest.mark.parametrize(
+        "command,trainer_name",
+        [
+            ("distillation", "DistillationTrainer"),
+            ("dpo", "DPOTrainer"),
+            ("grpo", "GRPOTrainer"),
+            ("kto", "KTOTrainer"),
+            ("reward", "RewardTrainer"),
+            ("rloo", "RLOOTrainer"),
+            ("sft", "SFTTrainer"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "model_init_kwargs",
+        [None, {}, {"revision": "custom", "attn_implementation": "eager", "attention_dropout": 0.0}],
+    )
+    def test_model_init_kwargs(self, command, trainer_name, model_init_kwargs):
+        script = importlib.import_module(f"trl.scripts.{command}")
+        argv = ["--output_dir", self.tmp_dir, "--dataset_name", "unused", "--report_to", "none"]
+        if command == "distillation":
+            argv += ["--teacher_model_name_or_path", "unused"]
+        parsed = script.make_parser().parse_args_and_config(argv)
+        parsed[1].model_init_kwargs = model_init_kwargs
+        expected = {
+            "revision": parsed[2].model_revision,
+            "trust_remote_code": parsed[1].trust_remote_code,
+            "attn_implementation": parsed[2].attn_implementation,
+            "dtype": parsed[2].dtype,
+            **(model_init_kwargs or {}),
+        }
+
+        with patch("datasets.load_dataset", return_value={"train": []}), patch(f"trl.{trainer_name}") as trainer:
+            script.main(*parsed)
+
+        assert trainer.call_args.kwargs["args"].model_init_kwargs == expected
+
+    def test_sft_model_init_kwargs(self):
+        from trl import SFTTrainer
+        from trl.scripts import sft
+
+        argv = [
+            "--output_dir",
+            self.tmp_dir,
+            "--model_name_or_path",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "--dataset_name",
+            "trl-internal-testing/zen",
+            "--dataset_config",
+            "standard_language_modeling",
+            "--report_to",
+            "none",
+            "--max_steps",
+            "1",
+            "--per_device_train_batch_size",
+            "2",
+            "--gradient_accumulation_steps",
+            "1",
+            "--bf16",
+            "false",
+            "--loss_type",
+            "nll",
+            "--model_init_kwargs",
+            '{"attn_implementation": "eager", "attention_dropout": 0.25}',
+        ]
+        # Execute real training and inspect the model that the script loaded.
+        with patch.object(SFTTrainer, "train", autospec=True, side_effect=SFTTrainer.train) as train:
+            sft.main(*sft.make_parser().parse_args_and_config(argv))
+        trainer = train.call_args.args[0]
+        assert trainer.state.global_step == 1
+        assert trainer.model.config._attn_implementation == "eager"
+        assert trainer.model.config.attention_dropout == 0.25

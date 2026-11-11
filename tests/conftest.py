@@ -13,11 +13,34 @@
 # limitations under the License.
 
 import gc
+import logging
+import os
 import traceback
 from functools import wraps
 
 import pytest
 import torch
+from transformers.utils import is_peft_available, is_torch_xpu_available
+
+# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
+import trl  # noqa: F401
+from trl.import_utils import is_vllm_available
+
+
+# ============================================================================
+# Silence transformers "LOAD REPORT" tables
+# ============================================================================
+# transformers >= 5 prints a "LOAD REPORT" table whenever a checkpoint has missing/mismatched/unexpected keys
+# (transformers/utils/loading_report.py). TRL's tiny test models don't serialize the tied `lm_head.weight`, so
+# this fires on nearly every model load and floods the test output. It is emitted through `logging` at WARNING
+# level from three loggers; we drop only these records, keeping all other warnings visible.
+class _DropLoadReport(logging.Filter):
+    def filter(self, record):
+        return "LOAD REPORT" not in record.getMessage()
+
+
+for _logger_name in ("transformers.modeling_utils", "transformers.modeling_layers", "transformers.integrations.peft"):
+    logging.getLogger(_logger_name).addFilter(_DropLoadReport())
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -82,6 +105,9 @@ def apply_model_revisions(monkeypatch):
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        AutoProcessor,
+        AutoTokenizer,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
@@ -95,7 +121,7 @@ def apply_model_revisions(monkeypatch):
         def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                if "revision" not in kwargs:
+                if kwargs.get("revision") is None:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -108,32 +134,120 @@ def apply_model_revisions(monkeypatch):
         # Re-wrap as classmethod
         return classmethod(wrapper)
 
-    # Patch all transformers Auto* classes
+    def create_method_wrapper(original_method):
+        @wraps(original_method)
+        def wrapper(self, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_method(self, model_id, *args, **kwargs)
+
+        return wrapper
+
+    # Patch the transformers Auto* classes and the base classes they dispatch to
     for cls in [
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        # `AutoTokenizer`/`AutoProcessor` resolve the chat template before dispatching, so patching only the base
+        # classes loads it from the default branch.
+        AutoProcessor,
+        AutoTokenizer,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
     ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
 
+    def create_peft_classmethod_wrapper(original_classmethod):
+        original_func = original_classmethod.__func__
+
+        @wraps(original_func)
+        def wrapper(cls, model, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_func(cls, model, model_id, *args, **kwargs)
+
+        return classmethod(wrapper)
+
+    # PEFT adapters never reach the loaders above.
+    if is_peft_available():
+        from peft import AutoPeftModelForCausalLM, PeftModel
+
+        monkeypatch.setattr(
+            AutoPeftModelForCausalLM,
+            "from_pretrained",
+            create_classmethod_wrapper(AutoPeftModelForCausalLM.from_pretrained),
+        )
+        # `PeftModel.from_pretrained` takes the base model first and the adapter id second.
+        monkeypatch.setattr(PeftModel, "from_pretrained", create_peft_classmethod_wrapper(PeftModel.from_pretrained))
+        # `load_adapter` is an instance method, not a classmethod.
+        monkeypatch.setattr(PeftModel, "load_adapter", create_method_wrapper(PeftModel.load_adapter))
+
+
+@pytest.fixture(autouse=True)
+def force_use_cpu_without_accelerator(monkeypatch):
+    """Force `use_cpu=True` on all TRL configs when no accelerator is available.
+
+    TRL configs default `bf16` to `True` (see `_BaseConfig.__post_init__`), which makes
+    `transformers.TrainingArguments.__post_init__` raise `ValueError: Your setup doesn't support bf16/gpu. You need to
+    assign use_cpu ...` on machines without a GPU. Setting `use_cpu=True` before that validation runs lets the whole
+    suite run on CPU without editing every individual config in the tests. On a machine with an accelerator (CUDA, XPU,
+    NPU, ...) this fixture is a no-op, so on-device tests and explicit `use_cpu=False` are left untouched.
+    """
+    from transformers.testing_utils import torch_device
+
+    if torch_device is not None and torch_device != "cpu":
+        return
+
+    from trl.trainer.base_config import _BaseConfig
+
+    original_post_init = _BaseConfig.__post_init__
+
+    def patched_post_init(self):
+        self.use_cpu = True
+        original_post_init(self)
+
+    monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
+def restore_mixed_precision_env(monkeypatch):
+    """
+    Restore the mixed precision that `transformers.TrainingArguments` publishes process-wide.
+
+    On transformers < 5, `TrainingArguments.__post_init__` writes the mixed precision to `ACCELERATE_MIXED_PRECISION`
+    and reads that same variable back as the default for the next instantiation, where a `bf16=False` flag is
+    indistinguishable from an unset one. TRL configs default `bf16` to `True`, so the first trainer built in a worker
+    sets the variable to `bf16` for the whole process, and no config built later can clear it. transformers < 5 also
+    builds the `Accelerator` without passing the mixed precision, so accelerate falls back to the leaked variable and a
+    test that asks for `bf16=False` silently runs in bf16: with `test_chunked_logps_match_full_logits`, the streamed
+    projection enters autocast and the full-logits path does not, and the two no longer match. Setting the variable to
+    its current value arms monkeypatch's restore, so each test sees the value the session started with.
+
+    Only the minimum-versions CI job is affected: transformers >= 5 passes the mixed precision to the `Accelerator`
+    explicitly and never writes the variable.
+    """
+    monkeypatch.setenv("ACCELERATE_MIXED_PRECISION", os.environ.get("ACCELERATE_MIXED_PRECISION", "no"))
+
 
 @pytest.fixture(autouse=True)
 def cleanup_gpu():
     """
-    Automatically cleanup GPU memory after each test.
+    Automatically cleanup accelerator memory after each test.
 
-    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
-    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+    This fixture helps prevent accelerator out of memory errors when running tests in parallel with pytest-xdist by
+    ensuring models and tensors are properly garbage collected and accelerator memory caches are cleared between tests.
     """
     yield
     # Cleanup after test
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    if is_torch_xpu_available():
+        torch.xpu.synchronize()
+        torch.xpu.empty_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -147,9 +261,21 @@ def cleanup_vllm_dist_env():
     `TestGRPOTrainerSlow::test_vlm_processor_vllm_colocate_mode`). We call vLLM's own cleanup helper rather than a bare
     `torch.distributed.destroy_process_group()` so that vLLM's internal parallel-state globals (`_TP`, `_WORLD`, ...)
     are reset too, letting the next colocate test reinitialize cleanly.
+
+    It also restores `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, `MASTER_ADDR` and `MASTER_PORT`, which TRL sets before
+    building the vLLM `LLM` in colocate mode. Left set, they make the next test's `Accelerator` initialize
+    `torch.distributed` on the leaked port.
     """
+    dist_env = {
+        name: os.environ.get(name) for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT")
+    }
     yield
-    if torch.distributed.is_initialized():
+    if torch.distributed.is_initialized() and is_vllm_available():
         from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
         cleanup_dist_env_and_memory()
+    for name, value in dist_env.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value

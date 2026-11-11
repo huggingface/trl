@@ -4,8 +4,7 @@
 
 ## Overview
 
-TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style
-Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by  [Arash Ahmadian](https://huggingface.co/ArashAhmadian), Chris Cremer, [Matthias Gallé](https://huggingface.co/mgalle), [Marzieh Fadaee](https://huggingface.co/MarziehFadaee), [Julia Kreutzer](https://huggingface.co/JuliaKreutzerCohere), [Ahmet Üstün](https://huggingface.co/ahmetu) and [Sara Hooker](https://huggingface.co/sarahooker).
+TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by  [Arash Ahmadian](https://huggingface.co/ArashAhmadian), Chris Cremer, [Matthias Gallé](https://huggingface.co/mgalle), [Marzieh Fadaee](https://huggingface.co/MarziehFadaee), [Julia Kreutzer](https://huggingface.co/JuliaKreutzerCohere), [Ahmet Üstün](https://huggingface.co/ahmetu) and [Sara Hooker](https://huggingface.co/sarahooker).
 
 The abstract from the paper is the following:
 
@@ -24,7 +23,7 @@ This example demonstrates how to train a model using the RLOO method. We train a
   height="560px"
 ></iframe>
 
-Below is the script to train the model.
+Below is the script to train the model. `accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
 
 ```python
 # train_rloo.py
@@ -45,7 +44,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_rloo.py
+torchrun --nproc_per_node 8 train_rloo.py
 ```
 
 ## Looking deeper into the RLOO method
@@ -120,9 +119,9 @@ $$
 In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
 > [!NOTE]
-> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\). 
+> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\).
 >
-> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
+> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy.
 >
 > In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
 
@@ -145,12 +144,13 @@ While training and evaluating, we record the following metrics:
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of sequence probabilities where the RLOO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)} \\). A higher value means more samples are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
-- `clip_ratio/low_min`: The minimum ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The smallest per-completion clip indicator on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of sequence probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
-- `clip_ratio/high_max`: The maximum ratio of sequence probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/high_max`: The largest per-completion clip indicator on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
@@ -184,7 +184,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -223,7 +226,7 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
 - **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such models. For more details, see [DeepSpeed Integration](deepspeed_integration).
-- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **torchrun**: PyTorch's launcher starts one process per GPU on every node and connects them through a common rendezvous. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
 Below is an example SLURM script to train a 70B model with RLOO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
@@ -241,18 +244,20 @@ TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
 VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
 
 # Run training on the first 4 nodes (Group 1)
-srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
-     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-     --num_processes 32 \
-     --num_machines 4 \
-     --main_process_ip ${NODELIST[0]} \
-     --machine_rank $SLURM_PROCID \
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" torchrun \
+     --nnodes 4 \
+     --nproc_per_node 8 \
+     --node_rank $SLURM_PROCID \
      --rdzv_backend c10d \
+     --rdzv_endpoint ${NODELIST[0]}:29500 \
      train_rloo.py \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -279,6 +284,7 @@ def main():
         output_dir="Qwen2.5-72B-RLOO",
         per_device_train_batch_size=4,
         bf16=True,
+        deepspeed="examples/deepspeed_configs/zero3.json",
         use_vllm=True,
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
@@ -303,8 +309,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `completions` (contains the generated completions),
      - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
-     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
-     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6.
+     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -374,8 +380,8 @@ You can test this function as follows:
 
 ```python
 >>> prompts = [
-...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
-...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+...     [{"role": "user", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "user", "content": "What is the result of (3 + 1) * 2?"}],
 ... ]
 >>> completions = [
 ...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
@@ -447,7 +453,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
     for prompt, completion, t in zip(prompts, completions, task):
-        if t == "coding":
+        if t == "code":
             # Calculate coding-specific reward
             works = test_code_solution(prompt, completion)
             reward = 1.0 if works else -1.0
@@ -537,7 +543,7 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -550,18 +556,17 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
 ### Quick Start
 
-Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/rloo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/rloo_visual_math/rloo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
-accelerate launch \
-  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/rloo_vlm.py \
+torchrun --nproc_per_node 8 examples/rloo_visual_math/rloo_visual_math.py \
+  --deepspeed examples/deepspeed_configs/zero3.json \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
@@ -629,7 +634,7 @@ Below is a summary of the key changes for [`RLOOConfig`]:
 | `total_episodes` | use `max_steps=total_episodes / gradient_accumulation_steps` instead |
 | `local_rollout_forward_batch_size` | **removed** – now automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation) |
 | `num_sample_generations` | **removed** – use `logging_steps` to control generation logging frequency |
-| `response_length` | renamed to `max_completion_length` (default: `256`) |
+| `response_length` | renamed to `max_completion_length` (default: `512`) |
 | `stop_token` | **removed** |
 | `stop_token_id` | **removed** – use `processing_class.eos_token_id` instead |
 | `missing_eos_penalty` | **removed** – replicate with a custom reward function checking if `eos_token_id` is in `completion_ids` |

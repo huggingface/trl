@@ -14,7 +14,6 @@
 
 from .base import Command
 from .env import EnvCommand
-from .skills import SkillsCommand
 from .training import TrainingCommand
 from .vllm_serve import VllmServeCommand
 
@@ -22,6 +21,7 @@ from .vllm_serve import VllmServeCommand
 def get_commands() -> list[Command]:
     """Return all registered top-level TRL CLI commands."""
     return [
+        TrainingCommand("distillation"),
         TrainingCommand("dpo"),
         EnvCommand(),
         TrainingCommand("grpo"),
@@ -29,7 +29,6 @@ def get_commands() -> list[Command]:
         TrainingCommand("reward"),
         TrainingCommand("rloo"),
         TrainingCommand("sft"),
-        SkillsCommand(),
         VllmServeCommand(),
     ]
 

@@ -21,11 +21,10 @@ from contextlib import contextmanager
 from packaging.version import Version
 
 
-LIGER_KERNEL_MIN_VERSION = "0.8.0"
-PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
+LIGER_KERNEL_MIN_VERSION = "0.8.2"
 
 
-# From transformers: https://github.com/huggingface/transformers/blob/556312cd45a5e619c41b0f8adf680eab0d334324/src/transformers/utils/import_utils.py#L48-L77
+# Adapted from transformers: https://github.com/huggingface/transformers/blob/556312cd45a5e619c41b0f8adf680eab0d334324/src/transformers/utils/import_utils.py#L48-L77
 def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[bool, str] | bool:
     """Check if `pkg_name` exist, and optionally try to get its version"""
     spec = importlib.util.find_spec(pkg_name)
@@ -33,20 +32,10 @@ def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[
     package_version = "N/A"
     if package_exists and return_version:
         try:
-            # importlib.metadata works with the distribution package, which may be different from the import
-            # name (e.g. `PIL` is the import name, but `pillow` is the distribution name)
-            distributions = PACKAGE_DISTRIBUTION_MAPPING[pkg_name]
-            # Per PEP 503, underscores and hyphens are equivalent in package names.
-            # Prefer the distribution that matches the (normalized) package name.
-            normalized_pkg_name = pkg_name.replace("_", "-")
-            if normalized_pkg_name in distributions:
-                distribution_name = normalized_pkg_name
-            elif pkg_name in distributions:
-                distribution_name = pkg_name
-            else:
-                distribution_name = distributions[0]
-            package_version = importlib.metadata.version(distribution_name)
-        except (importlib.metadata.PackageNotFoundError, KeyError):
+            # importlib.metadata works with the distribution name. The packages TRL checks have the same name as their
+            # distribution, up to `_` vs `-`, which importlib.metadata normalizes (e.g. `liger_kernel`/`liger-kernel`)
+            package_version = importlib.metadata.version(pkg_name)
+        except importlib.metadata.PackageNotFoundError:
             # If we cannot find the metadata (because of editable install for example), try to import directly.
             # Note that this branch will almost never be run, so we do not import packages for nothing here
             package = importlib.import_module(pkg_name)
@@ -57,12 +46,12 @@ def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[
         return package_exists
 
 
+def is_aiohttp_available() -> bool:
+    return _is_package_available("aiohttp")
+
+
 def is_deepspeed_available() -> bool:
     return _is_package_available("deepspeed")
-
-
-def is_fastapi_available() -> bool:
-    return _is_package_available("fastapi")
 
 
 def is_harbor_available() -> bool:
@@ -71,10 +60,6 @@ def is_harbor_available() -> bool:
 
 def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
-
-
-def is_joblib_available() -> bool:
-    return _is_package_available("joblib")
 
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
@@ -94,38 +79,25 @@ def is_openreward_available() -> bool:
     return _is_package_available("openreward")
 
 
-def is_pydantic_available() -> bool:
-    return _is_package_available("pydantic")
-
-
 def is_requests_available() -> bool:
     return _is_package_available("requests")
-
-
-def is_unsloth_available() -> bool:
-    return _is_package_available("unsloth")
-
-
-def is_uvicorn_available() -> bool:
-    return _is_package_available("uvicorn")
 
 
 def is_vllm_available(min_version: str | None = None) -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
-        if not (Version("0.16.0") <= Version(_vllm_version) <= Version("0.23.0")):
+        # Use base_version to drop any local segment (e.g. the "+cu129" in "0.24.0+cu129"), which PEP 440 orders
+        # above the plain release and would otherwise fail the upper-bound check.
+        _vllm_base_version = Version(Version(_vllm_version).base_version)
+        if not (Version("0.23.0") <= _vllm_base_version < Version("0.34.0")):
             warnings.warn(
-                f"TRL currently supports vLLM versions from 0.16.0 to 0.23.0. You have version {_vllm_version} "
+                f"TRL currently supports vLLM versions from 0.23.0 to 0.33.x. You have version {_vllm_version} "
                 "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )
         if min_version is not None and Version(_vllm_version) < Version(min_version):
             return False
     return _vllm_available
-
-
-def is_vllm_ascend_available() -> bool:
-    return _is_package_available("vllm_ascend")
 
 
 def is_weave_available() -> bool:

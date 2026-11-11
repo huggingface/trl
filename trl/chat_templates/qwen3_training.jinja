@@ -1,11 +1,11 @@
 {#- Training variant of the Qwen3 chat template (see qwen3.jinja for the original).
     Modifications vs the original:
-    - {%- if '</think>' in content %} → {%- if '<think>' in content and '</think>' in content %}
-      Always check for both tags to avoid edge cases where the model generates only one tag.
     - Removed the loop.index0 > ns.last_query_index conditional; always include thinking block.
       This makes the template prefix-preserving for the [user, assistant] → [user, assistant, tool] transition.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the part of the thinking block that the generation prompt pre-fills before {% generation %},
+      so that assistant-only loss doesn't train it.
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -44,14 +44,20 @@
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
-            {%- if '<think>' in content and '</think>' in content %}
+            {%- if '</think>' in content %}
                 {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
         {{- '<|im_start|>' + message.role + '\n' }}
+        {%- if enable_thinking is defined and enable_thinking is false %}
+            {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' }}
+            {%- set think_completion = '' %}
+        {%- else %}
+            {%- set think_completion = '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' %}
+        {%- endif %}
         {%- generation %}
-        {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {{- think_completion + content.lstrip('\n') }}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}

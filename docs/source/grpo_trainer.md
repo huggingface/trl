@@ -23,7 +23,7 @@ This example demonstrates how to train a model using the GRPO method. We train a
   height="560px"
 ></iframe>
 
-Below is the script to train the model.
+Below is the script to train the model. `accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
 
 ```python
 # train_grpo.py
@@ -44,7 +44,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_grpo.py
+torchrun --nproc_per_node 8 train_grpo.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 1 day.
@@ -157,7 +157,7 @@ $$
 The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
 
 $$
-\tau_{i,t} = \begin{cases} 
+\tau_{i,t} = \begin{cases}
 \tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
 \tau_{\text{neg}}, & \text{otherwise}
 \end{cases}
@@ -180,20 +180,30 @@ While training and evaluating, we record the following metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
+- `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
+- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
 - `rewards/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after summing rewards across functions (weighted by `reward_weights`).
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over completion tokens. A growing value indicates a widening train-inference mismatch. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/sampling_logp_difference/max`: The largest such absolute difference. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/min`: The smallest importance sampling ratio used to correct the train-inference mismatch, **after** the constraint selected by `vllm_importance_sampling_mode` has been applied (clipped to `[C_min, C_max]` for `*_truncate` modes, set to zero for `*_mask` modes). Computed over completion tokens, or over sequences for the `sequence_*` modes. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/mean`: The average constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
+- `sampling/importance_sampling_ratio/max`: The largest constrained importance sampling ratio. Logged only when `use_vllm=True` and `vllm_importance_sampling_correction=True`.
 - `policy_loss`: The policy gradient loss value (before any entropy bonus). Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`.
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `entropy_coef`: The current entropy regularization coefficient. Logged when `entropy_coef` is nonzero or `use_adaptive_entropy=True`. Updated once per optimizer step when `use_adaptive_entropy=True`.
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \\). A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
-- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The smallest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
-- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/high_max`: The largest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `cispo_clip_ratio`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) importance sampling weights that were clipped at `epsilon_high` while having a positive advantage:  \\(r_{i,t}(\theta) > \epsilon_\mathrm{high}\\). Logged only when `loss_type="cispo"`.
+- `vespo/phi_seq_mean`: The average value of the VESPO Gamma weighting  \\(\varphi(w)\\)  applied to the sequence-level importance weights. Values below `1.0` mean sequences are being down-weighted. Logged only when `loss_type="vespo"`.
 
 ## Customization
 
@@ -208,7 +218,7 @@ pip install trl[vllm]
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
 > [!TIP]
-> By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
+> By default, sequence-level Masked Importance Sampling (`vllm_importance_sampling_mode="sequence_mask"`) is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Masked Importance Sampling](paper_index#masked-importance-sampling) and [Sequence-level Importance Sampling](paper_index#sequence-level-importance-sampling)
 
 #### Option 1: Colocate mode
 
@@ -230,7 +240,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -322,14 +335,14 @@ training_args = GRPOConfig(
 > [!TIP]
 > TRL defaults `max_memory_percent` to `0.5` (instead of transformers' `0.9`) to leave enough VRAM for the training backward pass. Tune it down to `0.3`–`0.4` for large generation batches (N≥32) or if you see out-of-memory errors.
 
-For a full training example, see [`examples/scripts/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_continuous_batching.py).
+For a full training example, see [`examples/grpo_continuous_batching/grpo_continuous_batching.py`](https://github.com/huggingface/trl/blob/main/examples/grpo_continuous_batching/grpo_continuous_batching.py).
 
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
 - **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such models. For more details, see [DeepSpeed Integration](deepspeed_integration).
-- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **torchrun**: PyTorch's launcher starts one process per GPU on every node and connects them through a common rendezvous. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
 Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
@@ -347,18 +360,20 @@ TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
 VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
 
 # Run training on the first 4 nodes (Group 1)
-srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
-     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-     --num_processes 32 \
-     --num_machines 4 \
-     --main_process_ip ${NODELIST[0]} \
-     --machine_rank $SLURM_PROCID \
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" torchrun \
+     --nnodes 4 \
+     --nproc_per_node 8 \
+     --node_rank $SLURM_PROCID \
      --rdzv_backend c10d \
+     --rdzv_endpoint ${NODELIST[0]}:29500 \
      train_grpo.py \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -379,6 +394,7 @@ def main():
 
     training_args = GRPOConfig(
         per_device_train_batch_size=4,
+        deepspeed="examples/deepspeed_configs/zero3.json",
         use_vllm=True,
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
@@ -408,8 +424,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `completions` (contains the generated completions),
      - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
-     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
-     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6.
+     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6.
      - `environments`: a list of environment instances, one per completion. Only present when `environment_factory` is provided. Use this to read state accumulated during the episode (e.g., `env.counter`). For stateful environments, prefer letting the environment own the reward via a `get_reward` method instead — see [Rewards](#rewards).
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
@@ -480,8 +496,8 @@ You can test this function as follows:
 
 ```python
 >>> prompts = [
-...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
-...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+...     [{"role": "user", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "user", "content": "What is the result of (3 + 1) * 2?"}],
 ... ]
 >>> completions = [
 ...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
@@ -553,7 +569,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
     for prompt, completion, t in zip(prompts, completions, task):
-        if t == "coding":
+        if t == "code":
             # Calculate coding-specific reward
             works = test_code_solution(prompt, completion)
             reward = 1.0 if works else -1.0
@@ -715,6 +731,8 @@ For more details, see the [Passing tools guide](https://huggingface.co/docs/tran
 > [!TIP]
 > The GRPO tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
+Use `max_tool_calling_iterations` in the [`GRPOConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the model produces a response turn with no tool calls, when the completion (all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings` otherwise).
+
 Example:
 
 ```python
@@ -759,23 +777,22 @@ You can also provide tools through `environment_factory`. In this mode, [`GRPOTr
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.
 
-The following is a minimal example of using `environment_factory` to define a simple environment with an `increment` method (exposed as a tool).
+When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 
 ```python
-from datasets import Dataset
-from trl import GRPOConfig, GRPOTrainer
+import random
 
-instructions = [f"Increment the counter by {i}." for i in range(1, 7)]
-dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": instruction}] for instruction in instructions]})
+from trl import GRPOConfig, GRPOTrainer
 
 class IncrementEnv:
     # Reserved methods
-    def reset(self, **kwargs) -> str | None:  # required; receives sampled row fields as kwargs (e.g., `prompt`)
+    def reset(self, **kwargs) -> str | None:  # required; called at the start of each rollout
         self.counter = 0
-        return "Counter reset to 0.\n"
+        self.target = random.randint(1, 6)  # self-sample the task
+        return f"Increment the counter by {self.target}."  # returned string becomes the prompt
 
     def get_reward(self) -> float:  # optional: the environment scores itself from its own state
-        return float(self.counter)
+        return float(self.counter == self.target)
 
     # Public methods (exposed as tools)
     def increment(self, step: int) -> int:
@@ -793,8 +810,7 @@ class IncrementEnv:
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
-    args=GRPOConfig(chat_template_kwargs={"enable_thinking": False}),
-    train_dataset=dataset,
+    args=GRPOConfig(max_steps=1000, chat_template_kwargs={"enable_thinking": False}),
     environment_factory=IncrementEnv,
 )
 trainer.train()
@@ -802,8 +818,47 @@ trainer.train()
 
 An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
 
-- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is appended to the last user message.
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In GRPO, when it returns a string, that string is the user prompt.
 - `get_reward` (optional, sync or async) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
+
+> [!NOTE]
+> Because the environment self-samples on each `reset()`, the `G` members of a GRPO group may not share the same initial state, making the group baseline slightly noisier. For identical states within a group, have `reset()` derive the state deterministically from a shared key.
+
+#### Providing an external dataset (optional)
+
+Instead of letting the environment self-sample, you can provide an external `train_dataset`. For example when your tasks already live in a dataset, or to route between [multiple environments](#multiple-environments). Per rollout, the trainer samples one row, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments (so the environment reads the task from the dataset).
+
+```python
+from datasets import Dataset
+from trl import GRPOTrainer
+
+# Each row carries the prompt and the task data (here, the counter target to reach).
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {i}."}] for i in range(1, 7)],
+        "target": list(range(1, 7)),
+    }
+)
+
+class IncrementEnv:
+    def reset(self, target, **kwargs) -> None:  # the row's `target` column arrives as a keyword argument
+        self.counter = 0
+        self.target = target
+
+    def get_reward(self) -> float:
+        return float(self.counter == self.target)
+
+    def increment(self, step: int) -> int:  # exposed as a tool (see the full docstring above)
+        self.counter += step
+        return self.counter
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    train_dataset=dataset,  # the dataset owns the task; the "target" column reaches reset(target=...)
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
 
 ### Rewards
 
@@ -815,8 +870,8 @@ def format_reward(completions, **kwargs):  # trainer-owned: scores the completio
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
+    args=GRPOConfig(max_steps=1000),
     reward_funcs=format_reward,          # trainer-owned: scores the completion
-    train_dataset=dataset,
     environment_factory=IncrementEnv,    # env-owned: scores its internal state via `get_reward`
 )
 ```
@@ -827,25 +882,19 @@ This works identically for [`AsyncGRPOTrainer`](async_grpo_trainer).
 
 ### Multiple environments
 
-To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each example then selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed in the example's prompt**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa).
+To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each rollout selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa). Each environment still owns its data and returns the prompt from `reset()`, so the dataset only needs the `environment` column to route between them.
 
 ```python
+import random
+
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
-dataset = Dataset.from_dict(
-    {
-        "prompt": [
-            [{"role": "user", "content": "Compute the 7th Fibonacci number."}],
-            [{"role": "user", "content": "Reach the goal tile."}],
-        ],
-        "environment": ["coding", "game"],  # selects the factory for each example
-    }
-)
 
 class CodingEnv:
-    def reset(self, **kwargs) -> str | None:
-        ...
+    def reset(self, **kwargs) -> str:
+        n = random.randint(1, 20)
+        return f"Compute the {n}th Fibonacci number."
 
     def run_code(self, code: str) -> str:  # exposed as a tool only for "coding" examples
         """Run the given Python code and return its stdout.
@@ -859,8 +908,8 @@ class CodingEnv:
         ...
 
 class GameEnv:
-    def reset(self, **kwargs) -> str | None:
-        ...
+    def reset(self, **kwargs) -> str:
+        return "Reach the goal tile."
 
     def move(self, action: str) -> str:  # exposed as a tool only for "game" examples
         """Apply an action to the game and return the new observation.
@@ -872,6 +921,9 @@ class GameEnv:
             The observation after the move.
         """
         ...
+
+# The dataset only routes: each row picks the environment for that rollout
+dataset = Dataset.from_dict({"environment": ["coding", "game"] * 500})
 
 trainer = GRPOTrainer(
     model="Qwen/Qwen3-0.6B",
@@ -909,6 +961,8 @@ The returned images are automatically injected into the conversation and passed 
 
 Tested with:
 
+- **Beam** — e.g., `reflection/Beam-1.0-501B-A23B`
+- [**DeepSeek-R1**](https://huggingface.co/collections/deepseek-ai/deepseek-r1) — e.g., `deepseek-ai/DeepSeek-R1`
 - [**Gemma4**](https://huggingface.co/collections/google/gemma-4) — e.g., `google/gemma-4-E2B-it`
 - **GLM-4-MoE** ([4.5](https://huggingface.co/collections/zai-org/glm-45), [4.6](https://huggingface.co/collections/zai-org/glm-46) or [4.7](https://huggingface.co/collections/zai-org/glm-47)) — e.g., `zai-org/GLM-4.7`
 - [**GPT-OSS**](https://huggingface.co/collections/openai/gpt-oss) — e.g., `openai/gpt-oss-20b`
@@ -933,7 +987,7 @@ All environments plug into the same `environment_factory` slot, so they are inte
 | [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
 | [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -946,18 +1000,17 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
 ### Quick Start
 
-Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/grpo_visual_math/grpo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
-accelerate launch \
-  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/grpo_vlm.py \
+torchrun --nproc_per_node 8 examples/grpo_visual_math/grpo_visual_math.py \
+  --deepspeed examples/deepspeed_configs/zero3.json \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \

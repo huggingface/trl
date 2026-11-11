@@ -15,10 +15,19 @@
 import torch
 from transformers import AutoConfig, AutoProcessor, Gemma3ForConditionalGeneration, GenerationConfig
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "google/gemma-3-4b-it"
 
@@ -34,7 +43,9 @@ text_config = {
     "hidden_size": 16,
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
-    "layer_types": None,  # Set it automatically from num_hidden_layers
+    # One of each attention type. Deriving the pattern from num_hidden_layers=2 gives two
+    # sliding layers (the reference is 5:1 over 34 layers), so the global RoPE path would never run.
+    "layer_types": ["sliding_attention", "full_attention"],
     "intermediate_size": 32,
 }
 vision_config = {

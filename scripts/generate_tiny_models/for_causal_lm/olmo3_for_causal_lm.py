@@ -21,12 +21,15 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 # 4.57.0 (the release that introduced Olmo 3) was yanked for a packaging issue, so pin the first non-yanked patch.
 check_transformers_version("4.57.1")
+
+set_seed()
 
 MODEL_ID = "allenai/Olmo-3-7B-Think"
 
@@ -39,6 +42,9 @@ config = Olmo3Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    # One of each attention type. Deriving the pattern from num_hidden_layers=2 gives two
+    # sliding layers (the reference is 3:1 over 32 layers), so the global RoPE path would never run.
+    layer_types=["sliding_attention", "full_attention"],
     # Non-size fields kept aligned with the reference so the tiny config only differs in what we scale down.
     max_position_embeddings=65536,
     rms_norm_eps=1e-06,

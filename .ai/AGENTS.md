@@ -34,6 +34,21 @@ This is intentional: each trainer must be readable, modifiable, and evolvable in
 
 **When modifying duplicated code**: if you change a pattern that exists in multiple trainers (e.g., the vLLM generation path in `_generate_single_turn`), apply the same change to all other trainers. A fix in GRPO often implies the same fix in RLOO, and vice versa. Not propagating a change is a bug.
 
+Find every copy by grepping a distinctive line of the block:
+
+```sh
+grep -rn "self._last_loaded_step" trl/trainer/ trl/experimental/
+```
+
+After propagating, diff the corresponding regions to confirm they stayed aligned:
+
+```sh
+diff <(sed -n '/def _generate_single_turn/,/def /p' trl/trainer/grpo_trainer.py) \
+     <(sed -n '/def _generate_single_turn/,/def /p' trl/trainer/rloo_trainer.py)
+```
+
+Remaining diffs must all be semantic divergences, not drift.
+
 **When reviewing**: if a PR touches duplicated logic, verify that all copies are updated consistently. A common mistake is fixing one trainer and forgetting the others.
 
 ### Simplicity
@@ -47,6 +62,14 @@ Concretely:
 - Do not add defensive code, fallback paths, or configuration options "just in case". Only handle cases that actually exist today.
 - Avoid `hasattr` and `getattr`. Their use is almost always a symptom of overly defensive programming or a disguised version check (e.g., "this attribute was added in version X"). Instead, either drop the conditional entirely or express the version check explicitly with a version comparison. There is nearly always a cleaner alternative.
 - When in doubt, prefer less code. Every new function, parameter, or branch is maintenance burden. The best abstraction is often no abstraction.
+
+### Tests
+
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, `object.__new__` (building an instance without its `__init__`), or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
+
+Test behavior through the public API (the trainer, its config, public functions) rather than private methods: a test that calls a private method usually has to build the object around it by hand, and it breaks on any refactor of the internals. Call a private function directly only when its behavior cannot be reached deterministically otherwise, such as a pure helper.
+
+There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
 
 ## Documentation
 
