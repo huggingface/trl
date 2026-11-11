@@ -633,6 +633,11 @@ class TestWorkerMetrics:
         assert payload["completions/mean_length"] == (3.0, 1.0)
         assert payload["completions/max_length"] == 3.0
         assert payload["completions/clipped_ratio"] == (clipped, 1.0)
+        # Only a completion that ended on EOS counts in the terminated lengths, as in GRPO
+        assert ("completions/mean_terminated_length" in payload) is ends_on_eos
+        if ends_on_eos:
+            assert payload["completions/mean_terminated_length"] == (3.0, 1.0)
+            assert payload["completions/min_terminated_length"] == payload["completions/max_terminated_length"] == 3.0
         assert payload["rollout/score_s"] == (0.25, 1.0)
         # A per-teacher latency series only exists under MOPD; with one teacher the blended mean is the whole story.
         assert ("teacher/math/score_s" in payload) is per_teacher

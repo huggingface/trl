@@ -1139,6 +1139,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
+        # At least one reward source is required: either `reward_funcs`, an environment that owns the reward via a
+        # `get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`. Environments are created in the
+        # rollout worker, which checks that they define `get_reward`.
+        if (
+            not reward_funcs
+            and environment_factory is None
+            and self.loop_cls.generate_one is AsyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
+
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
             # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
