@@ -94,3 +94,136 @@ jobs:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Tests (experimental)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  tests_experimental_dev:
+    permissions:
+      contents: read
+    name: Tests (experimental) with dev dependencies (CUDA)
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install -U \
+            ".[dev]" \
+            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
+            "datasets @ git+https://github.com/huggingface/datasets.git" \
+            "transformers @ git+https://github.com/huggingface/transformers.git" \
+            "peft @ git+https://github.com/huggingface/peft.git"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test_experimental
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests (experimental) with dev dependencies (CUDA)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  tests_experimental_min_versions:
+    permissions:
+      contents: read
+    name: Tests (experimental) with minimum versions (CUDA)
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          # Oldest supported Python, so every pin is exactly the pyproject floor
+          uv pip install \
+            ".[dev]" \
+            "accelerate==1.11.0" \
+            "bitsandbytes==0.45.2" \
+            "datasets==4.7.0" \
+            "deepspeed==0.18.6" \
+            "huggingface_hub==0.34.0" \
+            "math-verify==0.8.0" \
+            "numpy==1.26.0" \
+            "pandas==2.1.1" \
+            "peft==0.17.0" \
+            "psutil==5.9.4" \
+            "pyarrow==21.0.0" \
+            "pyyaml==6.0.1" \
+            "torch==2.6.0" \
+            "transformers==4.56.2"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test_experimental
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests (experimental) with minimum versions (CUDA)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
