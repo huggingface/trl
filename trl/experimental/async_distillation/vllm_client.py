@@ -31,26 +31,25 @@ class VLLMClient:
 
     Ported from [`~trl.experimental.async_grpo.vllm_client.VLLMClient`]. The student's server uses the full API
     (readiness, world size, pause/resume, weight-update endpoints) since [`WeightTransferClient`] streams updated
-    weights to it; the teacher's server only ever needs [`wait_for_server_ready`], since the teacher is static and is
-    otherwise queried directly over `/v1/completions` from the rollout worker's `aiohttp` session, not through this
-    client.
+    weights to it; the teachers' servers don't use this client: they are static, and the rollout worker queries them
+    directly over `/v1/completions` from its `aiohttp` session.
 
     Args:
         server_url (`str`):
             Base URL of the vLLM server, e.g. `"http://localhost:8000"`.
-        server_timeout (`float`, *optional*, defaults to `240.0`):
-            Seconds to wait for the server to become reachable in [`wait_for_server_ready`].
+        timeout (`float`, *optional*, defaults to `1800.0`):
+            Seconds allowed for every call: waiting for the server in [`wait_for_server_ready`] and each request after.
     """
 
-    def __init__(self, server_url: str, server_timeout: float = 240.0):
+    def __init__(self, server_url: str, timeout: float = 1800.0):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
 
         self.server_url = server_url.rstrip("/")
-        self.server_timeout = server_timeout
+        self.timeout = timeout
 
     def wait_for_server_ready(self, poll_interval_s: float = 2.0) -> None:
-        """Block until the server answers `/health`, or raise `TimeoutError` after `server_timeout` seconds."""
+        """Block until the server answers `/health`, or raise `TimeoutError` after `timeout` seconds."""
         logger.info(f"Waiting for vLLM server at {self.server_url} ...")
         start = time.time()
         while True:
@@ -62,9 +61,9 @@ class VLLMClient:
                     return
             except (requests.ConnectionError, requests.Timeout, OSError):
                 pass
-            if elapsed >= self.server_timeout:
+            if elapsed >= self.timeout:
                 raise TimeoutError(
-                    f"Timed out after {self.server_timeout:.0f}s waiting for vLLM server at {self.server_url}. "
+                    f"Timed out after {self.timeout:.0f}s waiting for vLLM server at {self.server_url}. "
                     "Make sure the vLLM server is running and reachable. If the server needs more time to load the "
                     "model, increase `vllm_server_timeout` in your AsyncDistillationConfig."
                 )
@@ -74,17 +73,19 @@ class VLLMClient:
 
     def get_max_model_len(self) -> int:
         """Return the served model's `max_model_len` (the cap on prompt + completion tokens)."""
-        response = requests.get(f"{self.server_url}/v1/models")
+        response = requests.get(f"{self.server_url}/v1/models", timeout=self.timeout)
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
     def get_server_info(self) -> dict:
         """Return the server's resolved `vllm_config`, as reported by `/server_info`."""
-        response = requests.get(f"{self.server_url}/server_info", params={"config_format": "json"})
+        response = requests.get(
+            f"{self.server_url}/server_info", params={"config_format": "json"}, timeout=self.timeout
+        )
         response.raise_for_status()
         return response.json()["vllm_config"]
 
-    def load_lora_adapter(self, lora_name: str, lora_path: str, timeout: int = 1800) -> None:
+    def load_lora_adapter(self, lora_name: str, lora_path: str) -> None:
         """Register a PEFT adapter directory under `lora_name`, making it selectable as a model name.
 
         Args:
@@ -99,7 +100,7 @@ class VLLMClient:
             # `load_inplace` stays `False`: it makes the server re-read the adapter from disk on every request
             # (https://github.com/vllm-project/vllm/pull/41482). New policies get a new name instead.
             json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": False},
-            timeout=timeout,
+            timeout=self.timeout,
         )
         if response.status_code == 404:
             raise RuntimeError(
@@ -109,56 +110,56 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def unload_lora_adapter(self, lora_name: str, timeout: int = 1800) -> None:
+    def unload_lora_adapter(self, lora_name: str) -> None:
         """Remove a previously registered adapter. Missing names are not an error."""
-        requests.post(f"{self.server_url}/v1/unload_lora_adapter", json={"lora_name": lora_name}, timeout=timeout)
+        requests.post(f"{self.server_url}/v1/unload_lora_adapter", json={"lora_name": lora_name}, timeout=self.timeout)
 
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
-        response = requests.get(f"{self.server_url}/get_world_size")
+        response = requests.get(f"{self.server_url}/get_world_size", timeout=self.timeout)
         return response.json()["world_size"]
 
-    def pause(self, timeout: int = 1800) -> None:
+    def pause(self) -> None:
         """Freeze in-flight requests before replacing the model weights. The KV and prefix caches are kept: clearing
         them makes vLLM preempt every running request and recompute it from scratch after the update."""
         response = requests.post(
-            f"{self.server_url}/pause", params={"mode": "keep", "clear_cache": "false"}, timeout=timeout
+            f"{self.server_url}/pause", params={"mode": "keep", "clear_cache": "false"}, timeout=self.timeout
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def resume(self, timeout: int = 1800) -> None:
+    def resume(self) -> None:
         """Resume generation after a weight update."""
-        response = requests.post(f"{self.server_url}/resume", timeout=timeout)
+        response = requests.post(f"{self.server_url}/resume", timeout=self.timeout)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_weight_transfer_engine(self, init_info: dict, timeout: int = 1800) -> None:
+    def init_weight_transfer_engine(self, init_info: dict) -> None:
         """Initialise the server side of the NCCL weight-transfer group."""
         response = requests.post(
-            f"{self.server_url}/init_weight_transfer_engine", json={"init_info": init_info}, timeout=timeout
+            f"{self.server_url}/init_weight_transfer_engine", json={"init_info": init_info}, timeout=self.timeout
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def start_weight_update(self, timeout: int = 1800) -> None:
+    def start_weight_update(self) -> None:
         """Prepare the workers for a weight reload; must complete before any weights are sent."""
         response = requests.post(
-            f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=timeout
+            f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=self.timeout
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def update_weights(self, update_info: dict, timeout: int = 1800) -> None:
+    def update_weights(self, update_info: dict) -> None:
         """Drive the workers' blocking NCCL recv; returns once the server has received every chunk."""
         response = requests.post(
-            f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=timeout
+            f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=self.timeout
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def finish_weight_update(self, timeout: int = 1800) -> None:
+    def finish_weight_update(self) -> None:
         """Finalise the weight update on the server."""
-        response = requests.post(f"{self.server_url}/finish_weight_update", timeout=timeout)
+        response = requests.post(f"{self.server_url}/finish_weight_update", timeout=self.timeout)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")

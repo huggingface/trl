@@ -24,7 +24,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, Qwen2Config
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -33,7 +33,6 @@ from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
     add_fused_lm_head,
-    adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
     create_model_from_path,
@@ -288,6 +287,21 @@ class TestCreateModelFromPath(TrlTestCase):
                 "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
+    )
+    def test_dequantizes_fp8_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
+        assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.23.0"),
+        reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+    )
+    def test_dequantizes_mxfp4_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-GptOssForCausalLM")
+        assert model.model.layers[0].mlp.experts.gate_up_proj.dtype == torch.float32
 
 
 class TestModelAcceptsImages(TrlTestCase):
@@ -1433,24 +1447,37 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
-    "trl-internal-testing/tiny-GptOssForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1673,10 +1700,24 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize(
-        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
+        ],
     )
     def test_aux_loss(self, model_id):
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model = model.to(torch_device)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
         attention_mask = torch.ones_like(input_ids)
         attention_mask[1, 8:] = 0
@@ -1692,6 +1733,18 @@ class TestAddFusedLMHead:
         )
 
         torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
 
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1730,7 +1783,9 @@ class TestAddFusedLMHead:
         # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
         # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
         # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model_ref = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model_ref = model_ref.to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S = 2, 8
@@ -1766,23 +1821,36 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-    "trl-internal-testing/tiny-GptOssForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1882,7 +1950,10 @@ class TestAddFusedLMHeadLoss:
     """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id, architecture=AutoModelForCausalLM, dtype=torch.float32, device_map=torch_device
+        )
         chunked_model = copy.deepcopy(ref_model)
         add_fused_lm_head(chunked_model)
 
@@ -1920,14 +1991,25 @@ class TestAddFusedLMHeadLoss:
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
         ],
     )
     def test_forward_matches_reference_with_aux_loss(self, model_id):
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id,
+            architecture=AutoModelForCausalLM,
+            dtype=torch.float32,
+            output_router_logits=True,
+            device_map=torch_device,
         )
         chunked_model = copy.deepcopy(ref_model)
         add_fused_lm_head(chunked_model)
@@ -2211,10 +2293,27 @@ class TestComputeFlopsPerToken(TrlTestCase):
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
         # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",  # linear attention, shared experts
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_unsupported_model_type(self, model_id):
+        cfg = AutoConfig.from_pretrained(model_id).get_text_config()
+        assert compute_flops_per_token(cfg, 16384) is None
 
 
 class TestGetPeakFlops:
@@ -2271,43 +2370,3 @@ class TestComputeMfu(TrlTestCase):
         world_size = 8
         tps = peak * world_size / flops
         assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)
-
-
-class TestAdjustedMfu(TrlTestCase):
-    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
-
-    def test_consistent_with_formula(self):
-        # `adjusted_mfu(mfu, cfg, seq_len) == mfu * (full - half_attn) / full`, with
-        # `full = compute_flops_per_token(cfg, seq_len)` and
-        # `half_attn = L * 3 * 2 * n_heads * head_dim * seq_len`. Cross-check the two helpers.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        seq_len = 16384
-        flops_full = compute_flops_per_token(cfg, seq_len)
-        half_attn = cfg.num_hidden_layers * 3 * 2 * cfg.num_attention_heads * cfg.head_dim * seq_len
-        expected = 100.0 * (flops_full - half_attn) / flops_full
-        assert adjusted_mfu(100.0, cfg, seq_len) == pytest.approx(expected)
-
-    def test_proportional_to_input(self):
-        # The correction is purely multiplicative in `mfu`. `adjusted_mfu(2*x, ...)` should
-        # equal `2 * adjusted_mfu(x, ...)`.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        a = adjusted_mfu(50.0, cfg, 16384)
-        b = adjusted_mfu(100.0, cfg, 16384)
-        assert b == pytest.approx(2 * a)
-
-    def test_decreases_with_seq_len(self):
-        # Longer sequences → attention takes a larger share of total compute → causal
-        # correction subtracts a larger absolute amount → factor strictly decreases.
-        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
-        f_short = adjusted_mfu(100.0, cfg, 4096)
-        f_med = adjusted_mfu(100.0, cfg, 16384)
-        f_long = adjusted_mfu(100.0, cfg, 65536)
-        assert f_short > f_med > f_long
-
-    def test_config_without_head_dim(self):
-        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
-        # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        derived = adjusted_mfu(100.0, cfg, 16384)
-        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
-        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)

@@ -88,10 +88,10 @@ The prompts are padded to `pad_to_multiple_of` before generation too, so the sta
 
 On a `trn2.3xlarge` instance, which contains one Trainium2 chip, the default [Logical NeuronCore configuration](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-features/logical-neuroncore-config.html) (`LNC=2`) pairs the chip's 8 physical NeuronCores into 4 logical NeuronCores.
 
-To train on all four, use [Accelerate](https://huggingface.co/docs/accelerate):
+To train on all four, launch one process per NeuronCore with [torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html):
 
 ```bash
-accelerate launch --num_processes 4 train.py
+torchrun --nproc_per_node 4 train.py
 ```
 
 In this setup, SFT runs 3.6x faster on 4 NeuronCores than on 1.

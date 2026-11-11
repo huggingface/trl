@@ -461,6 +461,18 @@ python trl/scripts/sft.py \
     --lora_alpha 16
 ```
 
+### Pre-quantized checkpoints
+
+Some checkpoints are released quantized, like [gpt-oss](https://huggingface.co/openai/gpt-oss-20b) in MXFP4 or [Mistral Medium 3.5](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B) in FP8. These weights can't be trained in place, so when you pass such a checkpoint by name, the trainer loads it dequantized, with or without a `peft_config`. The model then takes the memory of its dequantized weights, for example about 42 GB in bfloat16 for gpt-oss-20b, against 13 GB for its MXFP4 checkpoint. To load it in bfloat16, as for any other model:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(model_init_kwargs={"dtype": "bfloat16"})
+```
+
+FP8 checkpoints require transformers 5.0.0 or later.
+
 ## Prompt Tuning
 
 Prompt tuning is another PEFT technique that learns soft prompts (continuous embeddings) prepended to the input, while keeping the entire model frozen. This is particularly effective for large models.
@@ -656,14 +668,10 @@ model = PeftModel.from_pretrained(base_model, "username/model-name-lora")
 
 ## Multi-GPU Training
 
-PEFT works seamlessly with TRL's multi-GPU support through `accelerate`:
+PEFT works seamlessly with TRL's multi-GPU support:
 
 ```bash
-# Configure accelerate
-accelerate config
-
-# Launch training
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --use_peft \
@@ -674,7 +682,7 @@ accelerate launch trl/scripts/sft.py \
 For QLoRA with multiple GPUs, the base model is automatically sharded:
 
 ```bash
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path meta-llama/Llama-2-70b-hf \
     --load_in_4bit \
     --use_peft \
@@ -713,7 +721,7 @@ model = AutoModelForCausalLM.from_pretrained(
 > [!IMPORTANT]
 > - Keep the `lm_head` module on the first GPU (device 0) to avoid errors
 > - See this [tutorial on device maps](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) for proper configuration
-> - Run training scripts directly (not with `accelerate launch`): `python script.py`
+> - Run training scripts directly (not with `torchrun`): `python script.py`
 > - Data Parallelism is not yet supported with NPP
 
 ## Resources

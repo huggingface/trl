@@ -788,7 +788,11 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
+qwen3_6_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_v2.jinja").read_text(encoding="utf-8")
+
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
+qwen3_8_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_v2.jinja").read_text(encoding="utf-8")
 
 qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_text(encoding="utf-8")
 
@@ -887,8 +891,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_5_think_chat_template,
         qwen3_5_think_training_chat_template,
         qwen3_6_chat_template,
+        qwen3_6_v2_chat_template,
         qwen3_6_training_chat_template,
         qwen3_8_chat_template,
+        qwen3_8_v2_chat_template,
         qwen3_8_training_chat_template,
         qwen3_coder_chat_template,
         qwen3_coder_next_chat_template,
@@ -1271,17 +1277,22 @@ smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja"
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
     tokenizer: PreTrainedTokenizerBase | None = None,
+    require_prefix_preservation: bool = True,
 ) -> str | None:
     r"""
     Get a training-compatible chat template, if needed.
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
-    %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    The supported templates are listed in [Training templates](chat_templates#training-templates).
+    %%}` markers for assistant-only loss masking. A template with a stored training template always gets it, even when
+    it has markers of its own. Returns `None` if any other template already satisfies the requirements. The supported
+    templates are listed in [Training templates](chat_templates#training-templates).
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
             Tokenizer or processor instance to check.
+        require_prefix_preservation (`bool`, *optional*, defaults to `True`):
+            Whether a template without a stored training template must also be prefix-preserving to be returned as is.
+            Assistant-only loss only needs the markers, so `SFTTrainer` sets it to `False`.
 
     Returns:
         `str` or `None`:
@@ -1342,12 +1353,7 @@ def get_training_chat_template(
     if isinstance(chat_template, dict):
         chat_template = chat_template["default"]
 
-    # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
-    # (the check itself renders a tool message), so skip it otherwise.
-    prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and has_generation_markers(chat_template):
-        return None  # No patching needed
-
+    # A stored template gets its training template, even when it has markers of its own (#8182)
     if chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
@@ -1459,11 +1465,27 @@ def get_training_chat_template(
     if chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
+    if chat_template == qwen3_6_v2_chat_template:
+        return qwen3_6_training_chat_template
+
     if chat_template == qwen3_8_chat_template:
+        return qwen3_8_training_chat_template
+
+    if chat_template == qwen3_8_v2_chat_template:
         return qwen3_8_training_chat_template
 
     if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
+
+    # Otherwise, check if patching is needed. Prefix-preservation only matters when the template actually supports
+    # tools (the check itself renders a tool message), so skip it otherwise.
+    prefix_ok = (
+        not require_prefix_preservation
+        or not supports_tool_calling(processing_class)
+        or is_chat_template_prefix_preserving(processing_class)
+    )
+    if prefix_ok and has_generation_markers(chat_template):
+        return None  # No patching needed
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
