@@ -15,6 +15,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import itertools
 import json
 import math
@@ -570,7 +571,7 @@ class _StubRolloutWorker:
         pass
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def stub_rollout_worker(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
 
@@ -754,9 +755,8 @@ class TransformersVLLMServer:
     shares the trainer's accelerator. It listens on a local port from a thread of the test process, so the rollout
     worker, which runs in a spawned child process, reaches it over HTTP like the real server.
 
-    The trainer's [`WeightTransferClient`] streams the weights to vLLM over NCCL, which needs vLLM installed and one
-    device per rank. The `vllm_server` fixture hands the trainer this server in its place, so the trainer sends the
-    weights to it directly.
+    The trainer's weight syncs reach it through [`InProcessWeightTransferClient`], which the `make_vllm_server` fixture
+    hands the trainer in place of [`WeightTransferClient`].
 
     Args:
         model_id (`str`):
@@ -903,24 +903,6 @@ class TransformersVLLMServer:
             )
         return output.sequences[0, prompt_ids.shape[1] :], torch.cat(output.scores).float().log_softmax(-1)
 
-    # The interface of `WeightTransferClient`, which the trainer calls on each weight sync
-    def init_weight_transfer(self):
-        pass
-
-    def pause(self):
-        pass  # `send_weights` holds the generation lock instead
-
-    def send_weights(self, iterator):
-        with self.generate_lock, torch.no_grad():
-            for name, tensor in iterator:
-                self.model.get_parameter(name).copy_(tensor)
-
-    def resume(self):
-        pass
-
-    def destroy(self):
-        pass
-
     def _handler(self):
         server = self
 
@@ -950,29 +932,61 @@ class TransformersVLLMServer:
         return Handler
 
 
+class InProcessWeightTransferClient:
+    """Copies the trainer's weight syncs into a [`TransformersVLLMServer`]'s model, in place of [`WeightTransferClient`],
+    which streams them to vLLM over NCCL and so needs vLLM installed and one device per rank.
+
+    It takes the arguments of [`WeightTransferClient`], so the trainer builds it the same way, and checks each weight
+    it receives against the manifest the trainer declared.
+    """
+
+    def __init__(self, server: TransformersVLLMServer, *, vllm_client, weight_update_info, compute_dtype=None):
+        assert vllm_client.server_url == server.url
+        self.server = server
+        self.shapes = dict(zip(weight_update_info["names"], weight_update_info["shapes"], strict=True))
+
+    def init_weight_transfer(self):
+        pass
+
+    def pause(self):
+        pass  # `send_weights` holds the generation lock instead
+
+    def send_weights(self, iterator):
+        with self.server.generate_lock, torch.no_grad():
+            for name, tensor in iterator:
+                assert list(tensor.shape) == self.shapes[name], f"{name} does not match the manifest"
+                self.server.model.get_parameter(name).copy_(tensor)
+
+    def resume(self):
+        pass
+
+    def destroy(self):
+        pass
+
+
 @pytest.fixture
-def vllm_server(monkeypatch):
+def make_vllm_server(monkeypatch):
     """Starts a [`TransformersVLLMServer`], as `vllm serve <model_id>` would. The trainer's rollout worker generates
-    from it, and the trainer's weight syncs go to it.
+    from it, and the trainer's weight syncs go to it through an [`InProcessWeightTransferClient`].
 
     Call it with the model id. The server shuts down when the test ends.
     """
     servers = []
 
-    def serve(model_id: str) -> TransformersVLLMServer:
+    def make(model_id: str) -> TransformersVLLMServer:
         server = TransformersVLLMServer(model_id)
         servers.append(server)
-        # Overrides `stub_rollout_worker` and `stub_weight_transfer`, which pytest runs first as autouse fixtures
-        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker)
-        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
+        monkeypatch.setattr(
+            async_grpo_trainer_module, "WeightTransferClient", functools.partial(InProcessWeightTransferClient, server)
+        )
         return server
 
-    yield serve
+    yield make
     for server in servers:
         server.close()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def stub_weight_transfer(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
@@ -1061,8 +1075,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
         ],
     )
-    def test_train(self, model_id, vllm_server):
+    def test_train(self, model_id, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        server = make_vllm_server(model_id)
 
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -1070,7 +1085,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=server.url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1081,6 +1096,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_served_params = {n: param.clone() for n, param in server.model.named_parameters()}
 
         trainer.train()
 
@@ -1106,6 +1122,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        # Check that the weight syncs reached the server
+        for n, param in previous_served_params.items():
+            assert not torch.equal(param, server.model.get_parameter(n)), (
+                f"Parameter {n} was not synced to the server."
+            )
 
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
@@ -1215,7 +1237,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         torch.testing.assert_close(outputs.entropy[:, :-1], expected_entropies, atol=1e-4, rtol=1e-4)
 
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_logps_use_mixed_precision(self, vllm_server):
+    def test_logps_use_mixed_precision(self, make_vllm_server):
         # Without autocast, the backbone would silently run in fp32 under bf16 training
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         training_args = AsyncGRPOConfig(
@@ -1224,7 +1246,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
             num_generations=2,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1247,7 +1269,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         release_memory(trainer.model, trainer)
 
-    def test_train_with_iterable_dataset(self, vllm_server):
+    def test_train_with_iterable_dataset(self, make_vllm_server):
         # Iterable (streaming) datasets have no length, so `max_steps` is required.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train", streaming=True)
 
@@ -1258,7 +1280,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_steps=4,
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1320,7 +1342,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             )
             assert trainer.train_dataset is train_dataset
 
-    def test_train_model(self, vllm_server):
+    def test_train_model(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32", attn_implementation="eager"
         )
@@ -1332,7 +1354,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1353,7 +1375,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_model_dtype(self, vllm_server):
+    def test_train_model_dtype(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -1364,7 +1386,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1388,10 +1410,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_peft_init_is_seeded(self, vllm_server):
+    def test_peft_init_is_seeded(self, make_vllm_server):
         # Two trainers with the same seed start from the same adapter weights
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        server = vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         adapters = []
         for global_seed in range(2):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
@@ -1409,7 +1431,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
-    def test_train_peft_config(self, vllm_server):
+    def test_train_peft_config(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1420,7 +1442,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1473,7 +1495,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             )
 
     @require_peft
-    def test_peft_modules_to_save_lm_head_allowed(self, vllm_server):
+    def test_peft_modules_to_save_lm_head_allowed(self, make_vllm_server):
         # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
         # so `lm_head.weight` resolves to the trained weight and the chunked projection trains it correctly. This is the documented
         # workaround in the guard's error message, so it must stay unblocked.
@@ -1481,7 +1503,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
@@ -1517,7 +1539,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             )
 
     @require_peft
-    def test_train_peft_model(self, vllm_server):
+    def test_train_peft_model(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig()
@@ -1530,7 +1552,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1555,7 +1577,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_train_moe_peft_model(self, vllm_server):
+    def test_train_moe_peft_model(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
@@ -1568,7 +1590,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1596,7 +1618,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     # default in `AsyncGRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly
     # test PEFT + gradient checkpointing, which has caused issues in the past.
     @require_peft
-    def test_train_peft_with_gradient_checkpointing(self, vllm_server):
+    def test_train_peft_with_gradient_checkpointing(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1608,7 +1630,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             gradient_checkpointing=True,  # enable gradient checkpointing
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1634,7 +1656,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_torch_accelerator
-    def test_train_with_fp16(self, vllm_server):
+    def test_train_with_fp16(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -1644,7 +1666,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             fp16=True,
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1665,7 +1687,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_multiple_reward_funcs(self, vllm_server):
+    def test_train_multiple_reward_funcs(self, make_vllm_server):
         # Test that AsyncGRPOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1675,7 +1697,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1696,7 +1718,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_sync_and_async_reward_funcs(self, vllm_server):
+    def test_train_sync_and_async_reward_funcs(self, make_vllm_server):
         # Test that AsyncGRPOTrainer can be instantiated with multiple reward functions, one of which is async, in both
         # the function and the callable class form.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1707,7 +1729,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1728,7 +1750,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_multiple_reward_funcs_with_None_output(self, vllm_server):
+    def test_train_multiple_reward_funcs_with_None_output(self, make_vllm_server):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1738,7 +1760,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
 
@@ -1762,7 +1784,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_reward_func_additional_column(self, vllm_server):
+    def test_train_reward_func_additional_column(self, make_vllm_server):
         # Test if trainer can handle reward function that rely on additional columns in the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1776,7 +1798,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1797,7 +1819,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_reward_func_wrong_number_of_rewards(self, vllm_server):
+    def test_reward_func_wrong_number_of_rewards(self, make_vllm_server):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
         # broadcasting (when it returns a single value) or failing later with an opaque shape error.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1807,7 +1829,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1821,7 +1843,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             trainer.train()
         assert "returned 1 rewards" in str(excinfo.value.__cause__)
 
-    def test_train_with_gradient_checkpointing(self, vllm_server):
+    def test_train_with_gradient_checkpointing(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -1831,7 +1853,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             gradient_checkpointing=True,
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1852,7 +1874,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_with_gradient_accumulation(self, vllm_server):
+    def test_train_with_gradient_accumulation(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -1862,7 +1884,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             gradient_accumulation_steps=2,  # accumulate over 2 micro-batches
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1918,7 +1940,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
 
-    def test_train_vllm_top_k(self, vllm_server):
+    def test_train_vllm_top_k(self, make_vllm_server):
         """Test that with top_k, the log-probs are normalized over the candidate set vLLM sampled from."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1929,7 +1951,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             logging_steps=1,
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
             report_to="none",
             top_k=10,
         )
@@ -1958,7 +1980,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="top_k"):
             AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none", **sampling_kwargs)
 
-    def test_warning_raised_all_rewards_none(self, vllm_server, capfd):
+    def test_warning_raised_all_rewards_none(self, make_vllm_server, capfd):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1968,7 +1990,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -1984,7 +2006,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         expected_warning = "All reward functions returned None for the following kwargs:"
         assert expected_warning in capfd.readouterr().err
 
-    def test_train_num_generations_larger_than_batch_size(self, vllm_server):
+    def test_train_num_generations_larger_than_batch_size(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -1994,7 +2016,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             num_generations=6,  # the number of generations is larger than the batch size, but
             gradient_accumulation_steps=2,  # gradient accumulation should allow that
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -2015,7 +2037,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_with_chat_template_kwargs(self, vllm_server):
+    def test_train_with_chat_template_kwargs(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -2024,7 +2046,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
             report_to="none",
             chat_template_kwargs={"enable_thinking": False},
         )
@@ -2052,14 +2074,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
-    def test_train_with_tools(self, tools: list[Callable], vllm_server):
+    def test_train_with_tools(self, tools: list[Callable], make_vllm_server):
         # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
         # succeed and the other will fail (because of a wrong argument name).
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2105,13 +2127,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @pytest.mark.xfail(raises=FileNotFoundError, reason="Completions are not saved to parquet", strict=True)
     @require_response_parsing
-    def test_train_with_tools_log_completions(self, vllm_server):
+    def test_train_with_tools_log_completions(self, make_vllm_server):
         # The logged completions mix types within a field: the tool returns content blocks while assistant content is
         # a string, and `query` is a string in one call and a list in the other. The completions table must still be
         # written (#7674).
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -2173,7 +2195,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_response_parsing
-    def test_train_with_multiple_environments(self, vllm_server, monkeypatch):
+    def test_train_with_multiple_environments(self, make_vllm_server, monkeypatch):
         # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
         # only that environment's tools are exposed. Here we build a dataset with both environments and check that a
         # tool call from a "counter" example dispatches to the CounterEnvironment's `increment`, while a tool call
@@ -2182,7 +2204,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         record_path = os.path.join(self.tmp_dir, "record.jsonl")
         monkeypatch.setenv("TRL_TEST_RECORD", record_path)
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2242,14 +2264,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_response_parsing
-    def test_train_with_multiple_environments_same_tool_name(self, vllm_server, monkeypatch):
+    def test_train_with_multiple_environments_same_tool_name(self, make_vllm_server, monkeypatch):
         # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
         # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
         dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
         record_path = os.path.join(self.tmp_dir, "record.jsonl")
         monkeypatch.setenv("TRL_TEST_RECORD", record_path)
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
@@ -2287,7 +2309,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert records["count"] and all(answer == 42 for answer in records["count"])
 
     @require_response_parsing
-    def test_train_with_unknown_environment_raises(self, vllm_server):
+    def test_train_with_unknown_environment_raises(self, make_vllm_server):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
         # environment should fail with a clear error rather than a bare KeyError mid-rollout.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -2297,7 +2319,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
             report_to="none",
         )
 
@@ -2320,11 +2342,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         strict=False,  # a step can hold whole groups by chance
     )
     @require_response_parsing
-    def test_train_with_environment_factory(self, vllm_server):
+    def test_train_with_environment_factory(self, make_vllm_server):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
         # succeed and the other will fail (because `reset` is not exposed as a tool).
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2368,13 +2390,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_response_parsing
-    def test_tool_discovery_does_not_evaluate_environment_properties(self, vllm_server):
+    def test_tool_discovery_does_not_evaluate_environment_properties(self, make_vllm_server):
         # Tool discovery must list the environment's methods on its class. `inspect.getmembers` calls `getattr` on
         # every name before applying the predicate, so listing the instance evaluates its properties, and a property
         # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
         # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
         # instances, so a second batch that listed the instance would raise before generating anything.
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -2407,11 +2429,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         strict=False,  # a window can average to the expected values by chance
     )
     @require_response_parsing
-    def test_train_with_environment_owned_reward(self, vllm_server):
+    def test_train_with_environment_owned_reward(self, make_vllm_server):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
         # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
         # (counters 1, 0, 0) get rewards 1.0, 0.0, 0.0.
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2486,7 +2508,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert "get_reward" not in tool_names
 
     @require_response_parsing
-    def test_environment_owned_reward_mixed_environments(self, vllm_server):
+    def test_environment_owned_reward_mixed_environments(self, make_vllm_server):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
         # env *class* contributes one reward column (named after its class); a rollout is scored only when its
         # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
@@ -2501,7 +2523,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             }
         )
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=9,  # one generation batch holds the 3 environments
@@ -2601,10 +2623,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         strict=True,
     )
     @require_response_parsing
-    def test_train_with_environment_owned_data(self, vllm_server):
+    def test_train_with_environment_owned_data(self, make_vllm_server):
         # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
         # `max_steps` drives the training loop. A placeholder dataset is built internally.
-        server = vllm_server("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3ForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2639,10 +2661,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_response_parsing
-    def test_train_with_malformed_tool_calls(self, vllm_server):
+    def test_train_with_malformed_tool_calls(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2728,7 +2750,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert tag in trainer.model.model_tags
 
     @require_peft
-    def test_tag_added_peft(self, vllm_server):
+    def test_tag_added_peft(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         trainer = AsyncGRPOTrainer(
@@ -2736,7 +2758,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=str_length_reward,
             args=AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
-                vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+                vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
                 report_to="none",
             ),
             train_dataset=dataset,
@@ -2799,6 +2821,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         return trainer
 
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_checkpoint_keeps_master_dtype_without_fsdp(self):
         trainer = self._train_one_step_and_save()
 
@@ -2814,6 +2837,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @require_peft
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self, fake_vllm):
         from peft import LoraConfig
 
@@ -2824,6 +2848,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
 
     @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_fsdp_checkpoint_body(self):
         self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
         trainer = self._train_one_step_and_save(fsdp=True)
@@ -2833,6 +2858,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         "correction",
         [{}, {"top_k": 3}, {"score_centering": False}],
     )
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_off_policy_correction(self, correction, peft_config=None):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -2872,11 +2898,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_score_centering_with_lora(self, fake_vllm):
         from peft import LoraConfig
 
         self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
 
+    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
@@ -2960,7 +2988,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         ],
     )
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
-    def test_train_vlm(self, model_id, vllm_server):
+    def test_train_vlm(self, model_id, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -2970,7 +2998,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=make_vllm_server(model_id).url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -2999,7 +3027,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
         ],
     )
-    def test_train_vlm_text_only_data(self, model_id, vllm_server):
+    def test_train_vlm_text_only_data(self, model_id, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -3008,7 +3036,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=make_vllm_server(model_id).url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -3059,7 +3087,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         ],
     )
     @require_peft
-    def test_train_vlm_peft(self, model_id, vllm_server):
+    def test_train_vlm_peft(self, model_id, make_vllm_server):
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -3071,7 +3099,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=make_vllm_server(model_id).url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -3097,7 +3125,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
-    def test_train_vlm_multi_image(self, vllm_server):
+    def test_train_vlm_multi_image(self, make_vllm_server):
         model_id = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
@@ -3108,7 +3136,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id).url,
+            vllm_server_base_url=make_vllm_server(model_id).url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -3131,7 +3159,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(raises=TypeError, reason="`log_multimodal` is not supported", strict=True)
-    def test_train_vlm_log_multimodal_false(self, vllm_server):
+    def test_train_vlm_log_multimodal_false(self, make_vllm_server):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -3139,7 +3167,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
             num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Gemma3ForConditionalGeneration").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Gemma3ForConditionalGeneration").url,
             report_to="none",
             log_completions=True,
             log_multimodal=False,
@@ -3155,12 +3183,12 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
     @require_response_parsing
-    def test_train_with_tools_multimodal_response(self, vllm_server):
+    def test_train_with_tools_multimodal_response(self, make_vllm_server):
         # Test that tools returning images (multimodal responses) work correctly with a VLM.
         # The tool returns a list of content blocks including an image.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -3204,11 +3232,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
     @require_response_parsing
-    def test_train_with_tools_text_response_multimodal_prompt(self, vllm_server):
+    def test_train_with_tools_text_response_multimodal_prompt(self, make_vllm_server):
         # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -3322,11 +3350,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_response_parsing
-    def test_train_with_tools_gemma4(self, vllm_server):
+    def test_train_with_tools_gemma4(self, make_vllm_server):
         # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        server = make_vllm_server("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -3384,11 +3412,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
     )
     @require_response_parsing
-    def test_train_with_tools_deepseekv3(self, vllm_server):
+    def test_train_with_tools_deepseekv3(self, make_vllm_server):
         # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        server = vllm_server("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        server = make_vllm_server("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -3465,6 +3493,7 @@ class TestRolloutStartIndex(TrlTestCase):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
+@pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic, on a real trainer with the stub rollout worker."""
 
@@ -5015,19 +5044,18 @@ class TestCustomRolloutLoop(TrlTestCase):
             loop_cls = _FixedRolloutLoop
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker):
-            trainer = FixedTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-                reward_funcs=two_reward,
-                args=AsyncGRPOConfig(
-                    output_dir=self.tmp_dir,
-                    num_generations=2,
-                    max_steps=1,
-                    vllm_server_base_url="http://127.0.0.1:9",
-                    report_to="none",
-                ),
-                train_dataset=dataset,
-            )
+        trainer = FixedTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=two_reward,
+            args=AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                num_generations=2,
+                max_steps=1,
+                vllm_server_base_url="http://127.0.0.1:9",
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
         trainer.rollout_worker.start()
         try:
             sample = trainer.rollout_queue.get(timeout=120)
@@ -5207,6 +5235,7 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
+@pytest.mark.usefixtures("stub_weight_transfer")
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct group_ids.
 
