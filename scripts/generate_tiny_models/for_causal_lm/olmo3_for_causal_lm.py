@@ -21,12 +21,15 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 # 4.57.0 (the release that introduced Olmo 3) was yanked for a packaging issue, so pin the first non-yanked patch.
 check_transformers_version("4.57.1")
+
+set_seed()
 
 MODEL_ID = "allenai/Olmo-3-7B-Think"
 

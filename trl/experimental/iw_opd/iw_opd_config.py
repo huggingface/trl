@@ -22,7 +22,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class IWOPDConfig(_BaseConfig):
     r"""
-    Configuration class for the [`IWOPDTrainer`].
+    Configuration class for the [`experimental.iw_opd.IWOPDTrainer`].
 
     Extends [`~transformers.TrainingArguments`] with parameters specific to knowledge distillation. This config is
     independent of [`SFTConfig`] — all necessary fields are declared here.
@@ -36,7 +36,7 @@ class IWOPDConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
-            is provided as a string.
+            is provided as a string. The `revision` value is also used when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
@@ -166,7 +166,8 @@ class IWOPDConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument "
-            "of the trainer is provided as a string."
+            "of the trainer is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -438,16 +439,6 @@ class IWOPDConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
-        if self.use_teacher_server and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
-                "requires a local teacher model."
-            )
-        if self.distillation_objective == "iw_opd" and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with distillation_objective='iw_opd' because IW-OPD needs "
-                "sampled-token student and teacher logprobs."
-            )
         if self.distillation_objective == "iw_opd" and self.lmbda < 1.0:
             raise ValueError(
                 "distillation_objective='iw_opd' requires lmbda=1.0 because IW-OPD is an on-policy objective."

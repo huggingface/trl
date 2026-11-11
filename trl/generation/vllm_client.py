@@ -17,7 +17,6 @@ import base64
 import copy
 import logging
 import math
-import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -27,10 +26,8 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 import torch
-from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers.utils import get_json_schema
-from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_available
 
@@ -38,16 +35,32 @@ from ..import_utils import is_requests_available, is_vllm_available
 if is_requests_available():
     import requests
     from requests import ConnectionError
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 
 
 if is_vllm_available():
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip
 
+# vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
+# `trainer_send_weights` with a stateful trainer engine and moved `packed` from the per-update info to the init info.
+# The rendezvous and packed-broadcast helpers the statics were built on are still exposed, so they are called directly.
+_HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
+if _HAS_STATEFUL_TRAINER_ENGINE:
+    from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
+    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
+elif is_vllm_available():
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
-# `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
-# ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
-_HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
+# vLLM 0.32.0 (vllm-project/vllm#58181) gave `/inference/v1/generate` its own logprob wire shape with integer token
+# IDs; before that it used the OpenAI shape with "token_id:<id>" placeholder strings.
+_HAS_GENERATE_LOGPROBS = is_vllm_available(min_version="0.32.0")
+
+# vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
+# with an empty body.
+_HAS_RESET_PREFIX_CACHE_SUCCESS = is_vllm_available(min_version="0.26.0")
+
+_DEFAULT_GENERATION_CONCURRENCY = 64
 
 
 logger = logging.getLogger(__name__)
@@ -93,7 +106,8 @@ def parse_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, li
     Args:
         choices_logprobs (`list[dict]`):
             Logprobs of each choice, either `{"tokens": ..., "top_logprobs": ...}` (completions) or `{"content":
-            [{"token": ..., "logprob": ..., "top_logprobs": ...}]}` (chat completions and token IDs).
+            [{"token": ..., "logprob": ..., "top_logprobs": ...}]}` (chat completions, and `/inference/v1/generate`
+            below vLLM 0.32.0).
 
     Returns:
         Tuple of (logprobs, logprob_token_ids), or `(None, None)` when the server returned no logprob.
@@ -121,6 +135,42 @@ def parse_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, li
             top_logprobs = {token: logprob, **(top_logprobs or {})}
             items = sorted(top_logprobs.items(), key=lambda item: -item[1])
             seq_token_ids.append([int(token.removeprefix("token_id:")) for token, _ in items])
+            seq_logprobs.append([None if math.isnan(logprob) else logprob for _, logprob in items])
+        all_logprobs.append(seq_logprobs)
+        all_token_ids.append(seq_token_ids)
+    return all_logprobs, all_token_ids
+
+
+def parse_generate_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, list | None]:
+    """
+    Parse the logprobs of a batch of `/inference/v1/generate` choices into two lists of shape (num_sequences, seq_len,
+    num_logprobs).
+
+    From vLLM 0.32.0 (vllm-project/vllm#58181) the endpoint has its own wire shape: `{"content": [{"token_id": ...,
+    "logprob": ..., "rank": ..., "top_logprobs": [...]}]}`, with integer token IDs. `top_logprobs` holds the sampled
+    token first, then the remaining candidates in rank order.
+
+    Args:
+        choices_logprobs (`list[dict]`):
+            Logprobs of each choice.
+
+    Returns:
+        Tuple of (logprobs, logprob_token_ids), or `(None, None)` when the server returned no logprob.
+    """
+    if choices_logprobs[0] is None:
+        return None, None
+
+    all_logprobs = []
+    all_token_ids = []
+    for logprobs in choices_logprobs:
+        seq_logprobs = []
+        seq_token_ids = []
+        for entry in logprobs["content"]:
+            # The sampled token is always included, even when it falls outside the top-N.
+            top_logprobs = {top["token_id"]: top["logprob"] for top in entry["top_logprobs"]}
+            top_logprobs = {entry["token_id"]: entry["logprob"], **top_logprobs}
+            items = sorted(top_logprobs.items(), key=lambda item: -item[1])
+            seq_token_ids.append([token_id for token_id, _ in items])
             seq_logprobs.append([None if math.isnan(logprob) else logprob for _, logprob in items])
         all_logprobs.append(seq_logprobs)
         all_token_ids.append(seq_token_ids)
@@ -222,14 +272,15 @@ class VLLMClient:
             allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
         )
 
-        adapter = HTTPAdapter(max_retries=retry_strategy)
+        # Match the default generation concurrency so connections can be reused across batches.
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_maxsize=_DEFAULT_GENERATION_CONCURRENCY)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
-            self.host = socket.gethostbyname(parsed_url.hostname)
+            self.host = parsed_url.hostname
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
@@ -290,13 +341,32 @@ class VLLMClient:
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    def get_server_info(self) -> dict:
+        """
+        Returns the resolved configuration of the vLLM server, as reported by its `/server_info` endpoint.
+
+        Returns:
+            `dict`: The server's `VllmConfig`, as a JSON tree.
+        """
+        response = self.session.get(f"{self.base_url}/server_info", params={"config_format": "json"})
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} does not expose its development endpoints, which TRL uses to "
+                "synchronize weights. Restart it with `VLLM_SERVER_DEV_MODE=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        return response.json()["vllm_config"]
+
     def get_world_size(self) -> int:
         """
         Returns the number of workers of the vLLM server, i.e. `tensor_parallel_size * data_parallel_size`.
         """
         return self._get(f"{self.base_url}/get_world_size")["world_size"]
 
-    def image_features(self, images: list[list | None], max_concurrent_requests: int = 64) -> list[dict | None]:
+    def image_features(
+        self, images: list[list | None], max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY
+    ) -> list[dict | None]:
         """
         Processes images server-side into the features that pair with token IDs in
         [`~generation.vllm_client.VLLMClient.generate`].
@@ -322,11 +392,18 @@ class VLLMClient:
             messages = [
                 {"role": "user", "content": [{"type": "image", "image": image} for image in images_for_prompt]}
             ]
-            rendered = self._post(
+            response = self.session.post(
                 f"{self.base_url}/v1/chat/completions/render",
                 json={"model": self.model, "messages": to_openai_messages(messages), "max_tokens": 1},
             )
-            return rendered["features"]
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The vLLM server at {self.base_url} does not serve `/v1/chat/completions/render`, which "
+                    "multimodal prompts use. From vLLM 0.30.0, restart it with `--enable-scale-out`."
+                )
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            return response.json()["features"]
 
         with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(images))) as executor:
             return list(executor.map(send, images))
@@ -434,7 +511,7 @@ class VLLMClient:
         prompts: list[list[int]],
         features: list[dict | None],
         sampling_params: dict,
-        max_concurrent_requests: int = 64,
+        max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY,
     ) -> dict[str, list[list[int]]]:
         """Generate from token IDs paired with multimodal features, one request per prompt."""
         # The server leaves the default output kind on non-streaming requests, under which it returns only the
@@ -457,7 +534,10 @@ class VLLMClient:
             responses = list(executor.map(send, range(len(prompts))))
 
         choices = [choice for response in responses for choice in response["choices"]]
-        logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
+        if _HAS_GENERATE_LOGPROBS:
+            logprobs, logprob_token_ids = parse_generate_logprobs([choice["logprobs"] for choice in choices])
+        else:
+            logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
         return {
             "prompt_ids": list(prompts),  # the server generates from what it was given, so it echoes back unchanged
             "completion_ids": [choice["token_ids"] for choice in choices],
@@ -481,7 +561,7 @@ class VLLMClient:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         chat_template: str | None = None,
-        max_concurrent_requests: int = 64,
+        max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
@@ -696,6 +776,13 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
+        # Weight synchronization needs a weight-transfer engine, so name the missing setting instead of failing later.
+        if self.get_server_info()["weight_transfer_config"] is None:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} has no weight-transfer engine. Restart it with "
+                """`--weight-transfer-config '{"backend": "nccl"}'`."""
+            )
+
         # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
         world_size = self.get_world_size() + 1
         init_info = {
@@ -704,6 +791,8 @@ class VLLMClient:
             "rank_offset": 1,
             "world_size": world_size,
         }
+        if _HAS_STATEFUL_TRAINER_ENGINE:
+            init_info["packed"] = True
 
         # vLLM builds the trainer side of the group on the current device, so point it at the requested one. A device
         # without an index (e.g. `torch.device("cuda")`) means the current device, which is already the right one.
@@ -722,7 +811,10 @@ class VLLMClient:
             future = executor.submit(
                 self._post, f"{self.base_url}/init_weight_transfer_engine", json={"init_info": init_info}
             )
-            self.communicator = NCCLWeightTransferEngine.trainer_init(init_info)
+            if _HAS_STATEFUL_TRAINER_ENGINE:
+                self.communicator = open_trainer_endpoint(init_info)
+            else:
+                self.communicator = NCCLWeightTransferEngine.trainer_init(init_info)
             future.result()
 
         # When the client object is deleted, close the weight update group
@@ -752,12 +844,10 @@ class VLLMClient:
             self._finish_weight_update()
 
     def _start_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/start_weight_update", json={})
+        self._post(f"{self.base_url}/start_weight_update", json={})
 
     def _finish_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/finish_weight_update", json={})
+        self._post(f"{self.base_url}/finish_weight_update", json={})
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
@@ -789,7 +879,9 @@ class VLLMClient:
                 Iterator yielding the `(name, tensor)` pairs described by `metadata`.
         """
         names, dtype_names, shapes = (list(field) for field in zip(*metadata, strict=True))
-        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes, "packed": True}
+        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes}
+        if not _HAS_STATEFUL_TRAINER_ENGINE:
+            update_info["packed"] = True
 
         if not self._updating_weights:
             self._start_weight_update()
@@ -797,10 +889,15 @@ class VLLMClient:
         # trainer-side broadcast.
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(self._post, f"{self.base_url}/update_weights", json={"update_info": update_info})
-            NCCLWeightTransferEngine.trainer_send_weights(
-                iterator=named_params,
-                trainer_args=NCCLTrainerSendWeightsArgs(group=self.communicator, packed=True),
-            )
+            if _HAS_STATEFUL_TRAINER_ENGINE:
+                packed_nccl_broadcast_producer(
+                    iterator=named_params, group=self.communicator, src=0, post_iter_func=lambda item: item[1]
+                )
+            else:
+                NCCLWeightTransferEngine.trainer_send_weights(
+                    iterator=named_params,
+                    trainer_args=NCCLTrainerSendWeightsArgs(group=self.communicator, packed=True),
+                )
             future.result()
         if not self._updating_weights:
             self._finish_weight_update()
@@ -823,7 +920,12 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        self._post(f"{self.base_url}/reset_prefix_cache")
+        if _HAS_RESET_PREFIX_CACHE_SUCCESS:
+            self._post(f"{self.base_url}/reset_prefix_cache")
+        else:
+            response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """

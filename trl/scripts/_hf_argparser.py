@@ -356,7 +356,7 @@ class HfArgumentParser(ArgumentParser):
             file_args = []
             for args_file in args_files:
                 if args_file.exists():
-                    file_args += args_file.read_text().split()
+                    file_args += args_file.read_text(encoding="utf-8").split()
 
             # in case of duplicate arguments the last one has precedence
             # args specified via the command line should overwrite args from files, so we add them last
@@ -450,5 +450,7 @@ class HfArgumentParser(ArgumentParser):
         """
         import yaml
 
-        outputs = self.parse_dict(yaml.safe_load(Path(yaml_file).read_text()), allow_extra_keys=allow_extra_keys)
+        outputs = self.parse_dict(
+            yaml.safe_load(Path(yaml_file).read_text(encoding="utf-8")), allow_extra_keys=allow_extra_keys
+        )
         return tuple(outputs)

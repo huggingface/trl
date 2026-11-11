@@ -1,35 +1,28 @@
 version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+
+# Single PR for all CI pins: doc-builder is pinned both in .github/workflows and in pre-commit.
+multi-ecosystem-groups:
+  github-actions-and-pre-commit:
     schedule:
       interval: "weekly"
-    cooldown:
-      default-days: 7
-    groups:
-      actions:
-        patterns: ["*"]
 
-  # Actions pinned inside our local composite actions. The "/" directory above
-  # does not cover them: it only scans .github/workflows and the root action.yml.
+updates:
+  # "/" only covers .github/workflows and the root action.yml, hence the composite actions glob.
   - package-ecosystem: "github-actions"
     directories:
+      - "/"
       - "/.github/actions/*"
-    schedule:
-      interval: "weekly"
     cooldown:
       default-days: 7
-    groups:
-      local-actions:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: "github-actions-and-pre-commit"
 
-  # Not grouped, so that each hook bump stays reviewable on its own
   - package-ecosystem: "pre-commit"
     directory: "/"
-    schedule:
-      interval: "weekly"
     cooldown:
       default-days: 7
+    patterns: ["*"]
+    multi-ecosystem-group: "github-actions-and-pre-commit"
     ignore:
       # Ruff is frozen on purpose: a bump reformats code and rewrites source through `--fix`, without
       # reporting anything new under our own rule selection. Bump it by hand when there is a reason.

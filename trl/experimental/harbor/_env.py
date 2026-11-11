@@ -87,9 +87,10 @@ class HarborEnv:
     def reward(self) -> float:
         # Submission = the agent wrote /workdir/answer.txt during the rollout; the verifier reads it.
         # Computed once, lazily, on first read (TRL reads this after the rollout via reward_funcs).
-        # A fresh env that was never `reset` (e.g. the trainer probing tool methods via
-        # `inspect.getmembers`, which evaluates properties) has no sandbox/task to verify — return 0.0
-        # without invoking the verifier, which would start the Harbor backend and import `harbor`.
+        # A fresh env that was never `reset` has no sandbox/task to verify — return 0.0 without invoking
+        # the verifier, which would start the Harbor backend and import `harbor`. The trainer discovers
+        # tool methods on the class, so it never reads this property; the guard is for user code that
+        # touches a fresh env directly.
         if self._env is None:
             return 0.0
         if self._reward is _NO_REWARD:
@@ -134,7 +135,7 @@ class HarborEnv:
         dockerfile = self._task.paths.environment_dir / "Dockerfile"
         if not dockerfile.exists():
             return
-        for line in dockerfile.read_text().splitlines():
+        for line in dockerfile.read_text(encoding="utf-8").splitlines():
             s = line.strip()
             if not s.upper().startswith("COPY ") or "--from" in s:
                 continue
