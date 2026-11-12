@@ -201,6 +201,15 @@ trainer.train()
 > [!TIP]
 > Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 
+For text datasets, dataset preparation builds the labels from the completion and assistant masks. The collator uses
+those labels directly, so there is no need to match an independently tokenized response delimiter. This also avoids
+depending on whether BPE tokenization changes a delimiter's token IDs in context.
+
+The default text collator raises `ValueError` if a batch has no supervised next-token targets. The first token of a
+sequence cannot serve as a next-token target, and padding-free document starts are also excluded. Check your labels,
+masks, and `max_length` when this happens. This check also applies when using `skip_prepare_dataset=True`; provide
+labels with at least one usable target per batch. Mixed batches may still contain individual fully masked examples.
+
 ### Train adapters with PEFT
 
 We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.

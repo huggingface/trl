@@ -120,6 +120,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
+    Raises:
+        `ValueError`:
+            If the batch contains no supervised next-token targets after causal shifting and document-start masking.
+
     Examples:
     ```python
     >>> from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
@@ -225,6 +229,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+        # The first label has no preceding logit. In padding-free mode, document starts have also been masked above.
+        if not output["labels"][:, 1:].ne(-100).any():
+            raise ValueError(
+                "The batch has no supervised next-token targets. Check the labels, completion/assistant masks, "
+                "and truncation length. At least one target must remain after causal shifting."
             )
         return output
 
@@ -1501,13 +1511,13 @@ class SFTTrainer(_BaseTrainer):
 
                 dataset = dataset.map(truncate, fn_kwargs={"sl": sl}, **map_kwargs)
 
-                # Drop examples left fully masked by truncation (e.g. a prompt alone filling `max_length` with
-                # `truncation_mode="keep_start"`), since they contribute no loss.
+                # Drop examples with no next-token targets after truncation (e.g. a prompt alone filling
+                # `max_length`). The first label has no preceding logit, so it cannot contribute to the loss.
                 if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
                     map_kwargs["desc"] = f"Dropping fully masked examples from {dataset_name} dataset"
 
                 dataset = dataset.filter(
-                    lambda example: any(label != -100 for label in example["labels"]), **map_kwargs
+                    lambda example: any(label != -100 for label in example["labels"][1:]), **map_kwargs
                 )
 
             # Pack
