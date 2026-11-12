@@ -449,7 +449,7 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
 
 ### `qwen2_5_base_training.jinja`
 
