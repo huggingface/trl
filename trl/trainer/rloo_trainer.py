@@ -1817,8 +1817,10 @@ class RLOOTrainer(_BaseTrainer):
             self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
-        if images is not None and self.log_multimodal:
-            self._logs["images"].extend(gather_object(images))
+        if self.log_multimodal:
+            # Every rank must call gather_object, even one without images (e.g. when only some ranks got images from
+            # tools), otherwise the others wait forever. Pad with None to keep the images aligned with the prompts.
+            self._logs["images"].extend(gather_object(images if images is not None else [None] * len(prompts)))
 
         output = {
             "prompt_ids": prompt_ids,
@@ -1984,13 +1986,14 @@ class RLOOTrainer(_BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
-            images_raw = self._logs["images"] or []
-
             for logging_backend in logging_backends:
-                if images_raw:
+                if any(self._logs["images"]):
                     images = []
                     for image_list in self._logs["images"]:
-                        images.append([logging_backend.Image(image) for image in image_list])
+                        if image_list:
+                            images.append([logging_backend.Image(image) for image in image_list])
+                        else:
+                            images.append([])
                     df = pd.concat(
                         [df_base, pd.Series(images, name="image")],
                         axis=1,

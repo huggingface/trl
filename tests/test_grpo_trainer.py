@@ -3152,6 +3152,29 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
         assert "test_column" in trainer._logs["extra"]
 
+    def test_train_log_multimodal_without_images(self):
+        # Images are gathered on every rank even when this rank has none, otherwise ranks with images (e.g. from
+        # tools) would wait forever for the others (#8177). Ranks without images log None, one entry per prompt.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            log_completions=True,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert len(trainer._logs["images"]) == len(trainer._logs["prompt"])
+        assert all(image_list is None for image_list in trainer._logs["images"])
+
     def test_train_reward_func_with_log_metric(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
