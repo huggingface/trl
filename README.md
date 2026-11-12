@@ -118,7 +118,7 @@ from datasets import load_dataset
 from trl import AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
-if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+if __name__ == "__main__":
     dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
     trainer = AsyncGRPOTrainer(
