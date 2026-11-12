@@ -355,7 +355,7 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
 
 ### `idefics3_training.jinja`
 
