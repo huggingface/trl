@@ -1766,8 +1766,6 @@ class TestGetTrainingChatTemplate:
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
@@ -1833,8 +1831,6 @@ class TestGetTrainingChatTemplate:
             )
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
         ]
