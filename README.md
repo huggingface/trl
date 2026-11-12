@@ -30,7 +30,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 ## Highlights
 
-- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) and more.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) and more.
 
 - **Efficient and scalable**:
   - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
@@ -107,6 +107,40 @@ trainer.train()
 
 > [!NOTE]
 > For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
+
+### `AsyncGRPOTrainer`
+
+[`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) runs the same algorithm as [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) with generation decoupled from training: a vLLM server streams rollouts while the trainer updates the model, so the two overlap instead of alternating. The trainer needs vLLM and kernels, and `accuracy_reward` needs math-verify, which you can install with `pip install trl[vllm,kernels,math_verify]`.
+
+```python
+# train_async_grpo.py
+from datasets import load_dataset
+from trl import AsyncGRPOTrainer
+from trl.rewards import accuracy_reward
+
+if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+    )
+    trainer.train()
+```
+
+Generation runs on a vLLM server, on a different GPU than the trainer. Start it on GPU 0:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+    --weight-transfer-config '{"backend": "nccl"}' --logprobs-mode processed_logprobs --max-model-len 4096
+```
+
+Then run the training on GPU 1:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
+```
 
 ### `DPOTrainer`
 
