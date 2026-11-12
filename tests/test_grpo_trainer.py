@@ -1778,6 +1778,21 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    def test_get_gamma_weights_ignores_masked_tokens(self):
+        # Regression test for #7952: a token outside the mask must not contribute to the sequence weight, even when
+        # its importance sampling ratio is 0 (as set by `vllm_importance_sampling_mode="token_mask"`).
+        advantages = torch.tensor([[1.0], [-1.0]])
+        log_ratio_per_token = torch.zeros((2, 4))
+        importance_sampling_ratio = torch.ones((2, 4))
+        importance_sampling_ratio[:, 2] = 0.0
+        mask = torch.ones((2, 4))
+        mask[:, 2] = 0.0
+
+        phi_seq = GRPOTrainer.get_gamma_weights(advantages, log_ratio_per_token, mask, importance_sampling_ratio)
+
+        # Every remaining token is on-policy with ratio 1, so w = 1 and φ(1) = 1
+        torch.testing.assert_close(phi_seq, torch.ones((2, 1)))
+
     @pytest.mark.parametrize(
         "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
     )
