@@ -63,6 +63,27 @@ if is_aiohttp_available():
 
 logger = get_logger(__name__)
 
+
+async def _pool_keepalive_timeout(server_urls: list[str]) -> float:
+    """
+    Seconds a pooled connection may stay idle: 1 s under the shortest keep-alive among `server_urls`, so the client
+    always drops an idle connection before a server closes it under a new request.
+
+    Each server's keep-alive is read from vLLM's `/server_info` (`VLLM_HTTP_TIMEOUT_KEEP_ALIVE`), which needs
+    `VLLM_SERVER_DEV_MODE=1`. A server that doesn't expose it counts as vLLM's 5 s default.
+    """
+    timeouts = []
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+        for url in server_urls:
+            try:
+                async with session.get(f"{url}/server_info") as response:
+                    response.raise_for_status()
+                    timeouts.append(float((await response.json())["vllm_env"]["VLLM_HTTP_TIMEOUT_KEEP_ALIVE"]))
+            except (TimeoutError, aiohttp.ClientError, KeyError, TypeError, ValueError):
+                timeouts.append(5.0)
+    return max(min(timeouts) - 1, 1.0)
+
+
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
 
@@ -662,7 +683,10 @@ class AsyncRolloutLoop:
         """
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        connector = aiohttp.TCPConnector(limit=self.config.max_concurrent_rollouts + 1)
+        keepalive_timeout = await _pool_keepalive_timeout([self.vllm_server_url])
+        connector = aiohttp.TCPConnector(
+            limit=self.config.max_concurrent_rollouts + 1, keepalive_timeout=keepalive_timeout
+        )
         timeout = aiohttp.ClientTimeout(total=self.config.vllm_server_timeout)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             self.session = session
