@@ -262,6 +262,36 @@ def decode_char_spans(
     return spans
 
 
+def build_teacher_inputs_from_completion_ids(
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_texts: list[str],
+    completion_ids: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tokenize teacher prompts and append the student's completion token IDs unchanged."""
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=False)["input_ids"]
+
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    for prompt_ids, row_completion_ids in zip(prompt_token_ids, completion_ids, strict=True):
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+        sequence = torch.tensor(prompt_ids + row_completion_ids.tolist(), dtype=torch.long)
+        labels = sequence.clone()
+        labels[: len(prompt_ids)] = -100
+        sequences.append(sequence)
+        attention_masks.append(torch.ones_like(sequence))
+        labels_list.append(labels)
+
+    return (
+        pad(sequences, padding_side="right", padding_value=pad_token_id if pad_token_id is not None else 0),
+        pad(labels_list, padding_side="right", padding_value=-100),
+        pad(attention_masks, padding_side="right", padding_value=0).bool(),
+    )
+
+
 class ULDLoss(nn.Module):
     """
     Universal Logit Distillation Loss.
@@ -1300,6 +1330,12 @@ class GOLDTrainer(SFTTrainer):
 
         self.pad_token_id = self._tokenizer.pad_token_id
         self._student_special_ids = {i for i, token in self._tokenizer.added_tokens_decoder.items() if token.special}
+        self.use_privileged_context = args.use_privileged_context
+        self.teacher_prompt_template = args.teacher_prompt_template or "{prompt}\n\n{privileged_context}"
+        self.privileged_context_column = args.privileged_context_column
+
+        if self.use_privileged_context and self._is_vlm:
+            raise ValueError("`use_privileged_context=True` is currently supported only for text models.")
 
         # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
         # VLMs so that both receive images and multimodal inputs.
@@ -1557,6 +1593,17 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(processing_class, ProcessorMixin):
             # A sampled image token would mismatch the image features
             generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and self.model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                generation_kwargs["suppress_tokens"].append(self.model.config.vision_start_token_id)
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
@@ -1630,6 +1677,7 @@ class GOLDTrainer(SFTTrainer):
             "chat_template_kwargs",
             "tools",
             "teacher_prompt_ids",
+            "teacher_prompt_text",
             "completion_mask",
             "images",
             "image",
@@ -1911,6 +1959,7 @@ class GOLDTrainer(SFTTrainer):
             "completion_mask",
             "assistant_masks",
             "teacher_prompt_ids",
+            "teacher_prompt_text",
         )
     )
 
@@ -2398,6 +2447,66 @@ class GOLDTrainer(SFTTrainer):
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
 
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        """Extract text from a ChatML message content value."""
+        if isinstance(content, list):
+            return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+        return str(content)
+
+    @staticmethod
+    def _render_prompt_and_completion(
+        processing_class: PreTrainedTokenizerBase,
+        prompt: list[dict[str, Any]],
+        completion: list[dict[str, Any]],
+        chat_template_kwargs: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Render a conversation and split it into prompt and completion text."""
+        prompt_text = processing_class.apply_chat_template(
+            prompt, add_generation_prompt=True, tokenize=False, **chat_template_kwargs
+        )
+        full_text = processing_class.apply_chat_template(prompt + completion, tokenize=False, **chat_template_kwargs)
+        # The generation prompt is not always a prefix of the full render (e.g. templates that open a `<think>` block
+        # in the generation prompt but strip it from rendered assistant turns), so split at the common prefix.
+        prompt_text = "".join(
+            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
+        )
+        return prompt_text, full_text[len(prompt_text) :]
+
+    @staticmethod
+    def _build_privileged_teacher_prompt(
+        prompt: str | list[dict[str, Any]],
+        privileged_context: Any,
+        teacher_prompt_template: str,
+        privileged_context_column: str,
+    ) -> str | list[dict[str, Any]]:
+        """Build the teacher prompt by enriching the final user turn with privileged context."""
+        if privileged_context is None:
+            raise ValueError(f"`{privileged_context_column}` must not be None when `use_privileged_context=True`.")
+
+        privileged_context = str(privileged_context)
+        if isinstance(prompt, list):
+            messages = [dict(message) for message in prompt]
+            if not messages:
+                raise ValueError(
+                    "Privileged-context teacher prompt construction expects the conversation to end with a user turn, "
+                    "but the prompt is empty."
+                )
+            last_message = messages[-1]
+            if last_message.get("role") != "user":
+                raise ValueError(
+                    "Privileged-context teacher prompt construction expects the conversation to end with a user turn, "
+                    f"but the last message has role '{last_message.get('role')}'."
+                )
+            teacher_content = teacher_prompt_template.format(
+                prompt=GOLDTrainer._extract_text_content(last_message.get("content", "")),
+                privileged_context=privileged_context,
+            )
+            messages[-1] = {**last_message, "content": teacher_content}
+            return messages
+
+        return teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_context)
+
     def _prepare_dataset(
         self,
         dataset: Dataset | IterableDataset,
@@ -2423,8 +2532,13 @@ class GOLDTrainer(SFTTrainer):
                 "Packing is not supported with cross-tokenizer ULD because the alignment is defined per "
                 "prompt/completion example."
             )
+        if packing and self.use_privileged_context:
+            raise ValueError(
+                "Packing is not supported with privileged context because teacher prompts are constructed per "
+                "prompt/completion example."
+            )
 
-        if is_processed and not _cross_tok:
+        if is_processed and not (_cross_tok or self.use_privileged_context):
             return super()._prepare_dataset(dataset, processing_class, args, packing, formatting_func, dataset_name)
 
         # Build the kwargs for the `map` function
@@ -2457,11 +2571,20 @@ class GOLDTrainer(SFTTrainer):
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
             def tokenize(
-                example, processing_class, dataset_text_field, max_length, max_completion_length, teacher_tokenizer
+                example,
+                processing_class,
+                dataset_text_field,
+                max_length,
+                max_completion_length,
+                teacher_tokenizer,
+                use_privileged_context,
+                teacher_prompt_template,
+                privileged_context_column,
             ):
                 """Emit input_ids, attention_mask, completion_mask, and, for cross-tokenizer ULD, the teacher's prompt
                 ids (``teacher_prompt_ids``) rendered with its own chat template."""
                 result = {}
+                teacher_prompt_text = None
                 prompt_messages = None
 
                 if is_conversational(example) or "messages" in example:
@@ -2496,6 +2619,48 @@ class GOLDTrainer(SFTTrainer):
                 else:
                     prompt_text = ""
                     full_text = example.get(dataset_text_field, example.get("text", ""))
+
+                if use_privileged_context:
+                    if privileged_context_column not in example:
+                        raise ValueError(
+                            f"Dataset is missing the `{privileged_context_column}` column required when "
+                            "`use_privileged_context=True`."
+                        )
+                    privileged_context = example[privileged_context_column]
+                    if "prompt" in example:
+                        teacher_prompt = example["prompt"]
+                        teacher_completion = example["completion"]
+                    elif is_conversational(example):
+                        messages = example["messages"]
+                        assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                        if not assistant_indices:
+                            raise ValueError(
+                                "Privileged-context distillation requires a prompt/completion dataset or messages "
+                                "ending with an assistant completion."
+                            )
+                        teacher_prompt = messages[: assistant_indices[-1]]
+                        teacher_completion = [messages[assistant_indices[-1]]]
+                    else:
+                        raise ValueError(
+                            "Privileged-context distillation requires a prompt/completion dataset or conversational "
+                            "messages with an assistant completion."
+                        )
+                    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
+                        teacher_prompt,
+                        privileged_context,
+                        teacher_prompt_template,
+                        privileged_context_column,
+                    )
+                    if isinstance(teacher_prompt, list):
+                        # Render the teacher exactly like the student, so the prompts differ only by the privileged context.
+                        teacher_prompt_text, _ = GOLDTrainer._render_prompt_and_completion(
+                            processing_class,
+                            teacher_prompt,
+                            teacher_completion,
+                            example.get("chat_template_kwargs", {}),
+                        )
+                    else:
+                        teacher_prompt_text = teacher_prompt
 
                 if teacher_tokenizer is not None:
                     if prompt_messages:  # the teacher reads the prompt in its own chat template
@@ -2552,6 +2717,8 @@ class GOLDTrainer(SFTTrainer):
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
                 result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
+                if teacher_prompt_text is not None:
+                    result["teacher_prompt_text"] = teacher_prompt_text
                 return result
 
             dataset = dataset.map(
@@ -2562,6 +2729,9 @@ class GOLDTrainer(SFTTrainer):
                     "max_length": args.max_length,
                     "max_completion_length": args.max_completion_length,
                     "teacher_tokenizer": self.teacher_tokenizer,
+                    "use_privileged_context": self.use_privileged_context,
+                    "teacher_prompt_template": self.teacher_prompt_template,
+                    "privileged_context_column": self.privileged_context_column,
                 },
                 **map_kwargs,
             )
@@ -2790,7 +2960,52 @@ class GOLDTrainer(SFTTrainer):
         # Standard JSD reuses these for the teacher (same-family VLM); cross-tokenizer ULD rebuilds
         # teacher inputs separately below.
         student_forward_kwargs = self._get_model_forward_kwargs(inputs)
-        if (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None:
+        if self.use_privileged_context:
+            if "teacher_prompt_text" not in inputs:
+                raise ValueError(
+                    "Privileged-context distillation requires `teacher_prompt_text` in the batch. Use the default "
+                    "data collator or preserve this field in a custom collator."
+                )
+
+            student_completion_ids = [
+                row_input_ids[row_labels != -100]
+                for row_input_ids, row_labels in zip(inputs["input_ids"], inputs["labels"], strict=True)
+            ]
+            teacher_input_ids, teacher_labels, teacher_attention_mask = build_teacher_inputs_from_completion_ids(
+                self._tokenizer,
+                inputs["teacher_prompt_text"],
+                student_completion_ids,
+            )
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
+
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                use_cache=False,
+                **student_forward_kwargs,
+            )
+
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
+                    input_ids=teacher_input_ids,
+                    attention_mask=teacher_attention_mask,
+                    use_cache=False,
+                )
+
+            student_completion_mask = inputs["labels"][:, 1:] != -100
+            teacher_completion_mask = teacher_labels[:, 1:] != -100
+
+            loss = self.generalized_jsd_loss(
+                student_logits=outputs_student.logits[:, :-1, :][student_completion_mask],
+                teacher_logits=outputs_teacher.logits[:, :-1, :][teacher_completion_mask],
+                beta=self.beta,
+                temperature=self.temperature,
+                num_items_in_batch=num_items_in_batch,
+            )
+        elif (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None:
             teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_spans, teacher_forward_kwargs = (
                 self._build_cross_tokenizer_teacher_inputs(inputs)
             )

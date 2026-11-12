@@ -27,8 +27,7 @@ Full fine-tuning of gpt-oss-20b on 500k chess puzzles, then back to MXFP4. TRL l
 FSDP2 shards the model across the GPUs of one node, and the fine-tuned experts are quantized again at the end, so the
 model is served like the original. About 2 hours on 4xH200; see README.md for the results.
 
-    accelerate launch --config_file examples/accelerate_configs/fsdp2.yaml --num_processes 4 \
-        examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
+    torchrun --nproc_per_node 4 examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
 """
 
 import torch
@@ -45,6 +44,8 @@ train_dataset = load_dataset("trl-lib/chess-puzzles", split="train[:500000]")
 
 training_args = SFTConfig(
     output_dir="gpt-oss-20b-chess",
+    fsdp=True,
+    fsdp_config={"cpu_ram_efficient_loading": True},
     model_init_kwargs={
         # Flash Attention 3 from the Hub runs on Hopper and keeps packed sequences apart.
         "attn_implementation": "kernels-community/vllm-flash-attn3",

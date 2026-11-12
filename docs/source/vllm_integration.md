@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.22.1` to `0.33.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.23.0` to `0.33.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -107,7 +107,7 @@ trainer.train()
 And the train command on separate GPUs from the server:
 
 ```sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 ```
 
 ## Why using vLLM?

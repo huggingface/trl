@@ -51,6 +51,7 @@ from trl.experimental.gold.gold_trainer import (
     _load_exact_token_map,
     _load_sparse_projection_matrix,
     build_teacher_inputs,
+    build_teacher_inputs_from_completion_ids,
     decode_char_spans,
 )
 from trl.experimental.utils import (
@@ -79,14 +80,7 @@ def openr1_examples():
 
 @pytest.fixture(scope="module")
 def countdown_examples():
-    try:
-        dataset = load_dataset(
-            "HuggingFaceTB/Countdown-Tasks-3to4",
-            "gkd_verified_Qwen2.5-7B-Instruct",
-            split="train[:3]",
-        )
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"Countdown dataset unavailable: {exc}")
+    dataset = load_dataset("HuggingFaceTB/Countdown-Task-GOLD", "verified_Qwen2.5-7B-Instruct", split="train[:3]")
     return [{"messages": row["messages"]} for row in dataset]
 
 
@@ -204,6 +198,8 @@ def smollm_tokenizer():
 
 @pytest.fixture(scope="session")
 def gemma4_tokenizer():
+    if Version(transformers.__version__) < Version("5.5.0"):
+        pytest.skip("Gemma4 requires transformers>=5.5.0")
     tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -691,6 +687,10 @@ def test_prepare_dataset_keeps_seam_token(tmp_path, qwen_tokenizer):
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
     row = _prepared_row(
@@ -752,6 +752,10 @@ def test_build_teacher_inputs_works_without_backend_tokenizer(gemma4_tokenizer):
     assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path, gemma4_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
     trainer = GOLDTrainer(
@@ -1387,6 +1391,10 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     torch.testing.assert_close(loss, loss_fn.last_unmatched_loss, atol=1e-6, rtol=1e-5)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_build_teacher_vlm_inputs_feeds_images_and_completion(tmp_path, vlm_dataset, vlm_examples):
     """Cross-architecture VLM ULD must render the teacher prompt through the teacher processor (so it actually sees
     the image via pixel_values), followed by the teacher's own tokenization of the completion and its EOS."""
@@ -1448,6 +1456,10 @@ def _get_assistant_texts(examples):
 
 @pytest.mark.parametrize(
     "student, teacher", [("smolvlm_processor", "qwen3_vl_processor"), ("qwen3_vl_processor", "smolvlm_processor")]
+)
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
 )
 def test_vlm_chatml_collator_preserves_completion(request, vlm_examples, student, teacher):
     student_processor = request.getfixturevalue(student)
@@ -1569,6 +1581,10 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch, tmp_path
     assert isinstance(trainer._vlm_collator, DataCollatorForVisionLanguageChatML)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
     a ValueError telling the user to enable ULD loss."""
@@ -1582,6 +1598,10 @@ def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
             )
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=True, GOLDTrainer should store
     the teacher's processor and emit a warning about cross-architecture distillation."""
@@ -1833,6 +1853,10 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(tmp_path, vlm_datase
     assert inputs["_raw_prompts"] == expected_prompts
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.0.0"),
+    reason="LFM2.5-VL requires transformers>=5.0.0",
+)
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(tmp_path, vlm_dataset):
     # LFM2-VL's processor returns `spatial_shapes`, which generation needs alongside the pixel values
     trainer = GOLDTrainer(
@@ -1909,6 +1933,10 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields(tmp_path, vlm_dat
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
     student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
@@ -1962,10 +1990,29 @@ def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
     assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
 
+def test_generation_suppresses_vision_start_token(tmp_path, vlm_dataset):
+    # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    expected = [trainer.model.config.image_token_id]
+    if Version(transformers.__version__) < Version("5.3.0"):
+        expected.append(trainer.model.config.vision_start_token_id)
+    assert trainer.generation_config.suppress_tokens == expected
+
+
 @pytest.mark.xfail(
     condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
     strict=True,
+)
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
 )
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
@@ -2164,6 +2211,255 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+def test_gold_config_validates_privileged_context_scope():
+    config = GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0)
+    assert config.teacher_prompt_template is None
+    assert config.privileged_context_column == "privileged_context"
+
+    with pytest.raises(ValueError, match="requires `lmbda=0`"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True)
+    with pytest.raises(ValueError, match="seq_kd=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, seq_kd=True)
+    with pytest.raises(ValueError, match="use_uld_loss=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, use_uld_loss=True)
+    for loss_type in ("p_kl", "h_kl"):
+        with pytest.raises(ValueError, match="X-Token KD"):
+            GOLDConfig(
+                output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, xtoken_loss_type=loss_type
+            )
+    with pytest.raises(ValueError, match=r"`\{prompt\}`"):
+        GOLDConfig(
+            output_dir="test",
+            bf16=False,
+            use_privileged_context=True,
+            lmbda=0.0,
+            teacher_prompt_template="Context: {privileged_context}",
+        )
+
+
+def test_privileged_context_rewrites_last_user_turn():
+    prompt = [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "user", "content": "What caused the outage?"},
+    ]
+
+    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
+        prompt,
+        "The timeout changed immediately before the errors.",
+        "Question: {prompt}\n\nEvidence: {privileged_context}",
+        "privileged_context",
+    )
+    expected_messages = prompt[:-1] + [
+        {
+            "role": "user",
+            "content": "Question: What caused the outage?\n\nEvidence: The timeout changed immediately before the errors.",
+        }
+    ]
+    assert teacher_prompt == expected_messages
+    assert prompt[-1]["content"] == "What caused the outage?"
+
+
+@pytest.fixture
+def privileged_context_dataset():
+    return Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "What caused the outage?"}]],
+            "completion": [[{"role": "assistant", "content": "The timeout change caused it."}]],
+            "privileged_context": ["The deployment changed the timeout immediately before the errors."],
+        }
+    )
+
+
+@pytest.mark.parametrize("dataset_format", ["prompt_completion", "messages"])
+@pytest.mark.parametrize("teacher_prompt_template", ["{prompt}", "{prompt}\n\n{privileged_context}"])
+def test_privileged_context_teacher_prompt_rendered_like_student(
+    tmp_path, privileged_context_dataset, dataset_format, teacher_prompt_template
+):
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_QWEN2)
+    # Reasoning templates can open a thinking block only in the generation prompt, so it is not a prefix of the
+    # full conversation render. Both teacher and student must split at the same boundary.
+    tokenizer.chat_template = (
+        "{{ conversation_prefix }}{% for message in messages %}"
+        "<|im_start|>{{ message['role'] }}\n{{ message['content'] }}<|im_end|>\n"
+        "{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}"
+    )
+    example = privileged_context_dataset[0]
+    prompt = [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        *example["prompt"],
+    ]
+    row = {
+        "privileged_context": example["privileged_context"],
+        "chat_template_kwargs": {"conversation_prefix": "CUSTOM_CHAT_PREFIX\n"},
+    }
+    if dataset_format == "prompt_completion":
+        row.update(prompt=prompt, completion=example["completion"])
+    else:
+        row["messages"] = prompt + example["completion"]
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            teacher_prompt_template=teacher_prompt_template,
+            lmbda=0.0,
+            max_length=512,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=Dataset.from_list([row]),
+        processing_class=tokenizer,
+    )
+    prepared = trainer.train_dataset[0]
+    student_prompt = tokenizer.decode(
+        [
+            token_id
+            for token_id, mask in zip(prepared["input_ids"], prepared["completion_mask"], strict=True)
+            if not mask
+        ],
+        clean_up_tokenization_spaces=False,
+    )
+    expected_prompt = student_prompt.replace(
+        example["prompt"][-1]["content"],
+        teacher_prompt_template.format(
+            prompt=example["prompt"][-1]["content"], privileged_context=example["privileged_context"]
+        ),
+    )
+
+    assert len(prepared["input_ids"]) < 512  # Prompt equality is only expected without student truncation.
+    assert prepared["teacher_prompt_text"] == expected_prompt
+    assert prepared["teacher_prompt_text"].startswith("CUSTOM_CHAT_PREFIX\n")
+    assert "Earlier answer" in prepared["teacher_prompt_text"]
+    assert "<think>" not in prepared["teacher_prompt_text"]
+
+
+def test_privileged_context_preparation_preserves_shared_completion_tokens(tmp_path, privileged_context_dataset):
+    context = "private evidence " * 64 + "END_OF_PRIVATE_CONTEXT"
+    dataset = privileged_context_dataset.remove_columns("privileged_context").add_column(
+        "privileged_context", [context]
+    )
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            max_length=32,
+            max_completion_length=8,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=dataset,
+    )
+    row = trainer.train_dataset[0]
+    batch = trainer.data_collator([row])
+    completion_ids = [batch["input_ids"][0][batch["labels"][0] != -100]]
+    teacher_input_ids, teacher_labels, _ = build_teacher_inputs_from_completion_ids(
+        trainer.processing_class,
+        [row["teacher_prompt_text"]],
+        completion_ids,
+    )
+
+    assert "END_OF_PRIVATE_CONTEXT" in row["teacher_prompt_text"]
+    assert len(row["input_ids"]) <= 32
+    assert teacher_input_ids.shape[1] > 32
+    assert batch["teacher_prompt_text"] == [row["teacher_prompt_text"]]
+    assert torch.equal(
+        batch["input_ids"][batch["labels"] != -100],
+        teacher_input_ids[teacher_labels != -100],
+    )
+
+
+def test_privileged_context_preparation_requires_context_column(tmp_path, privileged_context_dataset):
+    with pytest.raises(ValueError, match="missing the `privileged_context` column"):
+        GOLDTrainer(
+            model=_TINY_QWEN2,
+            teacher_model=_TINY_QWEN2,
+            args=GOLDConfig(
+                output_dir=str(tmp_path),
+                use_privileged_context=True,
+                lmbda=0.0,
+                use_cpu=True,
+                bf16=False,
+                report_to="none",
+            ),
+            train_dataset=privileged_context_dataset.remove_columns("privileged_context"),
+        )
+
+
+def test_privileged_context_preparation_custom_column(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            privileged_context_column="my_context",
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=privileged_context_dataset.rename_column("privileged_context", "my_context"),
+    )
+    assert "deployment changed the timeout" in trainer.train_dataset[0]["teacher_prompt_text"]
+
+
+def test_privileged_context_default_behavior_unchanged(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, report_to="none"),
+        train_dataset=privileged_context_dataset.remove_columns("privileged_context"),
+    )
+
+    assert not trainer.use_privileged_context
+    assert "teacher_prompt_text" not in trainer.train_dataset.column_names
+
+
+def test_privileged_context_loss_uses_enriched_teacher_prompt(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=privileged_context_dataset,
+    )
+    batch = trainer.data_collator([trainer.train_dataset[0]])
+    teacher_inputs = []
+
+    def record_teacher_inputs(model, args, kwargs):
+        teacher_inputs.append(kwargs["input_ids"].clone())
+
+    handle = trainer.teacher_model.register_forward_pre_hook(record_teacher_inputs, with_kwargs=True)
+    trainer.model.eval()
+    try:
+        with torch.no_grad():
+            loss = trainer.compute_loss(trainer.model, batch)
+    finally:
+        handle.remove()
+
+    assert torch.isfinite(loss)
+    assert teacher_inputs[0].shape[1] > batch["input_ids"].shape[1]
+    assert "deployment changed the timeout" in trainer.processing_class.decode(
+        teacher_inputs[0][0], skip_special_tokens=False
+    )
 
 
 class TestXTokenLoss(TrlTestCase):

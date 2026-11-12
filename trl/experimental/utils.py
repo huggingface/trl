@@ -298,6 +298,8 @@ class DataCollatorForChatML:
         # Forward the teacher's prompt for cross-tokenizer ULD, when the dataset has it.
         if "teacher_prompt_ids" in examples[0]:
             out["teacher_prompt_ids"] = [ex["teacher_prompt_ids"] for ex in examples]
+        if "teacher_prompt_text" in examples[0]:
+            out["teacher_prompt_text"] = [ex["teacher_prompt_text"] for ex in examples]
         return out
 
 
