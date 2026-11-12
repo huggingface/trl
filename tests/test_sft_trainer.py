@@ -944,6 +944,24 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.router_aux_loss_coef == 0.5
         assert trainer.aux_loss_enabled
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.23.0.dev0"),
+        reason="transformers rejects router logits under reentrant checkpointing from 5.23",
+    )
+    def test_aux_loss_fails_with_reentrant_gradient_checkpointing(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="reentrant gradient checkpointing"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+            )
+
     def test_aux_loss_does_not_scale_with_gradient_accumulation(self):
         # Four copies of one example: every micro-batch has the same aux loss as the full batch
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train").select([0] * 4)
