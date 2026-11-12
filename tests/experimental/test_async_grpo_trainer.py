@@ -1034,9 +1034,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.20.1"),
-                    reason="Beam was introduced in transformers-5.20.1",
+                marks=pytest.mark.skip(
+                    reason="Needs the trained tiny Beam from #8195: with random weights no group has a reward spread, so "
+                    "no step completes"
                 ),
             ),
             pytest.param(
