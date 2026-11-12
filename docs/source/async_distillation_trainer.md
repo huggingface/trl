@@ -46,13 +46,14 @@ After every `weight_sync_steps` training steps, the updated student weights are 
 from datasets import load_dataset
 from trl.experimental.async_distillation import AsyncDistillationTrainer
 
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-trainer = AsyncDistillationTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    train_dataset=dataset,
-)
-trainer.train()
+    trainer = AsyncDistillationTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
+    )
+    trainer.train()
 ```
 
 The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k` can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer enabled so the trainer can push updated weights into it. Scoring sends the student's whole sequence and asks the teacher for one more token, so the teacher's `--max-model-len` (or its default) must be larger than the student's:

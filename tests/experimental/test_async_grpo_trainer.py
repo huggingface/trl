@@ -34,14 +34,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
-import requests
 import torch
 import transformers
 from accelerate import PartialState
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, load_dataset
 from packaging.version import Version
-from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
@@ -49,6 +47,10 @@ from transformers.utils import is_peft_available
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
+pytest.importorskip("requests")  # the trainer talks to the vLLM server through it
+
+import requests
+from requests.adapters import BaseAdapter
 
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
