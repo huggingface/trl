@@ -1901,7 +1901,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=str_length_reward,
-            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            # Tree attention runs on FlashAttention, which needs half precision
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, dtype="bfloat16", report_to="none"),
             train_dataset=dataset,
         )
         trainer.current_gradient_accumulation_steps = 1
