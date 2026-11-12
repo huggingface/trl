@@ -2369,7 +2369,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="vllm_mode='colocate'"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -2418,7 +2418,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="ensure_weight_tying"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
