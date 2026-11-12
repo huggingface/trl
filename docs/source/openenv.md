@@ -744,6 +744,15 @@ The harness trainer logs the [tool metrics](async_grpo_trainer#tool-metrics) of 
 - The trainer itself has no tools, so `tools/call_frequency` and `tools/failure_frequency` only count the groups where at least one rollout called a tool.
 - `rollout/correctness_mean` is logged only with a `rollout_reward_fn`: the verifier's `env_reward`, averaged over the rollouts that have one.
 
+The other metrics of [`experimental.async_grpo.AsyncGRPOTrainer`] are logged too, with these differences:
+
+- The reward of a session is logged as `rewards/rollout/mean` and `rewards/rollout/group_std`, since the trainer has no `reward_funcs`.
+- `rollout/duration_s` covers the whole session, including the sandbox start and the verifier.
+- `rollout/duration_s`, `rollout/turns_mean`, `rollout/turns_max` and the `completions/*` lengths leave out the sessions that failed.
+- `rollout/turns_mean`, `rollout/turns_max` and the `completions/*` lengths count the captured turns only, without auxiliary calls and discarded retries. The tokens of a wholly masked turn are counted.
+- When the agent owns its loop, its requests go to vLLM directly, so `rollout/vllm_retry_count` doesn't count their retries.
+- `env/reset_s` and `env/reward_s` aren't logged, because there is no `environment_factory`.
+
 It also logs these metrics about the sessions:
 
 - `harness/create_s`, `harness/run_s`, `harness/verify_s`: The time to create a session, run it and verify it. When the agent owns its loop, the run includes fetching the capture; with a `harness_adapter`, it includes the turns TRL samples.
