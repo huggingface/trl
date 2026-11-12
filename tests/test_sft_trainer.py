@@ -57,6 +57,12 @@ if is_peft_available():
     )
 
 
+_HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
+    reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
+    strict=True,
+)
+
+
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding."""
@@ -738,9 +744,13 @@ class TestSFTTrainer(TrlTestCase):
             else:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
     @require_peft
     def test_train_moe_with_peft_config(self):
-        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -884,7 +894,14 @@ class TestSFTTrainer(TrlTestCase):
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.xfail(
+                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
@@ -2229,6 +2246,137 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
             max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
+            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
+            # ever start training, the feature-selection plumbing has likely regressed.
+            if model_id in (
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
+                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="LFM2.5-VL requires transformers>=5.0.0",
+                    ),
+                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.15.0"),
+                        reason="Muse Glimmer was introduced in transformers-5.15.0",
+                    ),
+                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
+            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("4.57.0"),
+                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                    ),
+                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ),
+        ],
+    )
+    @require_vision
+    @require_kernels
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+    )
+    def test_train_vlm_flash_attention(self, model_id):
+        # Flash Attention 3 runs on the vision tower too, and needs a head size that is a multiple of 8
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            model_init_kwargs={"attn_implementation": attn_implementation},
+            bf16=True,  # Flash Attention only supports bf16 and fp16
             report_to="none",
         )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
