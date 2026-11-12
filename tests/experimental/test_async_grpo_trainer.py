@@ -1157,6 +1157,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
         ],
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:2]")
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
@@ -1180,6 +1181,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 train_dataset=dataset,
             )
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train[:2]")
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
@@ -1194,6 +1196,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.router_aux_loss_coef == 0.5
         assert trainer.aux_loss_enabled
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
@@ -1214,6 +1217,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_logps_match_plain_forward(self):
         # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1310,6 +1314,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_init_with_train_dataset(self, train_dataset_type):
         streaming = "iterable" in train_dataset_type
         if train_dataset_type == "none":
@@ -2178,6 +2183,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         Version(transformers.__version__) < Version("5.13.0.dev0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_tools_without_jmespath(self):
         # jmespath is only used by the legacy `response_schema` parser (transformers < 5.13); the new-style
         # `response_template` parser doesn't need it. The guard must therefore not fire on newer transformers, where
@@ -2693,6 +2699,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_init_auto_processing_class_uses_model_revision(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = AsyncGRPOTrainer(
@@ -2709,6 +2716,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # catch the tokenizer being loaded from the default branch instead of the pinned revision.
         assert len(trainer.processing_class.chat_template) == 2558
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_pad_token_id_synced_with_model_config(self):
         # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
@@ -2727,6 +2735,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_tag_added(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -2767,6 +2776,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             (type("MyAsyncGRPOTrainer", (AsyncGRPOTrainer,), {"_name": "My AsyncGRPO"}), "trl/other"),
         ],
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_telemetry_topic(self, trainer_cls, topic, monkeypatch):
         # Telemetry is off in CI, and `send_telemetry` would reach the Hub
         monkeypatch.delenv("CI", raising=False)
@@ -3291,6 +3301,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
         ],
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_vision_tower_is_frozen(self, model_id):
         trainer = self._trainer(model_id)
 
@@ -3314,6 +3325,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
         ],
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_weight_sync_streams_the_text_tower_only(self, model_id):
         # The whole point of loading the full VLM: parameter names must match the vLLM server, which serves the
         # `*ForConditionalGeneration` architecture (`model.language_model.*`), not the text tower alone
