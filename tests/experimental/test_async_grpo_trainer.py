@@ -33,17 +33,19 @@ from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
-import requests
 import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
+pytest.importorskip("requests")  # the trainer talks to the vLLM server through it
+
+import requests
+from requests.adapters import BaseAdapter
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
