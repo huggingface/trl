@@ -33,17 +33,19 @@ from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
-import requests
 import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
+pytest.importorskip("requests")  # the trainer talks to the vLLM server through it
+
+import requests
+from requests.adapters import BaseAdapter
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
@@ -910,6 +912,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=training_args,
             )
+
+    def test_remove_unused_columns_raises(self):
+        # Every dataset column is passed to the reward functions, so unneeded columns are removed from the dataset,
+        # not by the trainer
+        with pytest.raises(ValueError, match="remove_unused_columns"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, remove_unused_columns=True)
 
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
