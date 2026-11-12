@@ -1767,7 +1767,6 @@ class TestGetTrainingChatTemplate:
         trains_generation_prompt = [
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
         ]
         if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
             reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
