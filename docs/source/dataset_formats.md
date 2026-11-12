@@ -380,6 +380,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 
 | Trainer | Expected dataset type |
 | --- | --- |
+| [`DistillationTrainer`] | [Prompt-only](#prompt-only), conversational |
 | [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
 | [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
 | [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |

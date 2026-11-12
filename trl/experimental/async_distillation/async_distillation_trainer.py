@@ -1060,7 +1060,7 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncDistil
 
 class AsyncDistillationTrainer(_BaseTrainer):
     """
-    Async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected exactly like
+    Async counterpart to [`DistillationTrainer`], architected exactly like
     [`~trl.experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy
     completions and scores them against a teacher server while training proceeds concurrently, decoupling rollout from
     the gradient-update loop. Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this
