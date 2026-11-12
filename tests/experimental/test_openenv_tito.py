@@ -425,6 +425,34 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     assert "tools/latency_s" not in payload
 
 
+def test_session_metrics_reach_the_queue(make_loop):
+    session = Session(captured_entry())
+    session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
+    session.verify = lambda completion: VerifyResult(env_reward=1.0, metrics={"wall_s": 3.5, "error": "late"})
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
+    loop._loop.run_until_complete(loop.generate_one([], [], group_id=0))
+    loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["harness/wall_s"] == (3.5, 1)
+    assert "harness/error" not in payload
+    assert payload["harness/timeout_frac"] == (1.0, 1)
+    assert all(payload[f"harness/{phase}_s"][1] == 1 for phase in ("create", "run", "verify"))
+    assert "harness/session_failure_count" not in payload
+
+
+def test_unscorable_sessions_are_counted(make_loop):
+    def create(*args, **kwargs):
+        raise ConnectionError("harness server unavailable")
+
+    loop = make_loop(SimpleNamespace(create=create), max_session_backoff_s=0)
+    for _ in range(3):
+        loop._loop.run_until_complete(loop.generate_one([], [], group_id=0))
+    loop._push_metrics({})
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["harness/session_failure_count"] == 3
+    assert "harness/run_s" not in payload
+
+
 def test_harness_worker_produces_scored_training_samples(make_loop):
     indices = itertools.count()
 

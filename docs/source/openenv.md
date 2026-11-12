@@ -744,6 +744,13 @@ The harness trainer logs the [tool metrics](async_grpo_trainer#tool-metrics) of 
 - The trainer itself has no tools, so `tools/call_frequency` and `tools/failure_frequency` only count the groups where at least one rollout called a tool.
 - `rollout/correctness_mean` is logged only with a `rollout_reward_fn`: the verifier's `env_reward`, averaged over the rollouts that have one.
 
+It also logs these metrics about the sessions:
+
+- `harness/create_s`, `harness/run_s`, `harness/verify_s`: The time to create a session, run it and verify it. When the agent owns its loop, the run includes fetching the capture; with a `harness_adapter`, it includes the turns TRL samples.
+- `harness/timeout_frac`: The fraction of sessions whose agent ran out of time. Their captured turns are still trained on. Logged only when the agent owns its loop.
+- `harness/session_failure_count`: The number of sessions that were unscorable because they failed to start or run, or their capture was rejected.
+- `harness/{key}`: Each numeric entry of the `metrics` returned by the session's `verify`, averaged over the sessions that report it.
+
 ### Requirements
 
 The OpenEnv Harbor server owns the dataset and the sandboxes. It needs the credential of the sandbox backend (for example `E2B_API_KEY`):

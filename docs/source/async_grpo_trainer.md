@@ -209,7 +209,7 @@ Units:
 - `tools/parallel_calls_mean`: The average number of tool calls in an assistant message that calls tools.
 - `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools, over every rollout, including rollouts with no call and the groups that are then dropped. Logged only when the trainer has tools.
 
-`HarnessAsyncGRPOTrainer` logs most of these under the same names. See [Training on harnesses](openenv#metrics) for the differences.
+`HarnessAsyncGRPOTrainer` logs most of these under the same names, along with its own `harness/*` metrics. See [Training on harnesses](openenv#metrics) for the differences.
 
 ### Environment metrics
 

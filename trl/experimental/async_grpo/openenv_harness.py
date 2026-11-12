@@ -176,9 +176,17 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 self._rates["tools/latency_s"][1] += 1
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
+            timed_out = metrics.pop("timed_out", None)
+            if timed_out is not None:
+                self._rates["harness/timeout_frac"][0] += timed_out
+                self._rates["harness/timeout_frac"][1] += 1
+            for name, value in metrics.pop("session").items():
+                self._rates[f"harness/{name}"][0] += value
+                self._rates[f"harness/{name}"][1] += 1
         if result is not self._EMPTY_ROLLOUT:
             self._consecutive_session_failures = 0
         elif not self._stop_event.is_set():
+            self._counters["harness/session_failure_count"] += 1
             # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
             self._consecutive_session_failures += 1
             if (
@@ -230,11 +238,13 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             # The agent sends the factory's model name on every call, and in vLLM's API an adapter is a model name:
             # point each new session at the policy version published now.
             self._factory.model = self._request_model
+        t0 = time.monotonic()
         try:
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
             logger.warning("harness session create failed; scoring rollout as unscorable", exc_info=True)
             return self._EMPTY_ROLLOUT, None
+        create_s = time.monotonic() - t0
         self._live_sessions.add(session)
         timed_out = False
         trace: list[TraceEntry] = []
@@ -244,6 +254,7 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
         try:
             if self._stop_event.is_set():
                 return self._EMPTY_ROLLOUT, None
+            t0 = time.monotonic()
             if self._adapter is not None:
                 turns: list[TurnRecord] = []
                 turn_times: list[tuple[float, float, list[str]]] = []
@@ -291,7 +302,10 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 tool_call_count = sum(tool_calls_by_name.values())
                 tool_failures_by_name = _tool_failures_by_name(entries)
             tool_failure_count = sum(tool_failures_by_name.values())
+            run_s = time.monotonic() - t0
+            t0 = time.monotonic()
             verify = session.verify(completion)
+            verify_s = time.monotonic() - t0
             env_reward = float(verify.env_reward) if verify.env_reward is not None else None
             outcome = HarnessRolloutOutcome(
                 env_reward=env_reward,
@@ -308,7 +322,16 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 tool_calls_by_name=tool_calls_by_name,
                 tool_failures_by_name=tool_failures_by_name,
                 tool_latency=tool_latency,
+                # Numeric diagnostics the session reports with its reward, such as Harbor's rollout wall time
+                session={
+                    "create_s": create_s,
+                    "run_s": run_s,
+                    "verify_s": verify_s,
+                    **{key: float(value) for key, value in verify.metrics.items() if isinstance(value, int | float)},
+                },
             )
+            if self._adapter is None:
+                metrics["timed_out"] = timed_out
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
             return (
