@@ -2426,10 +2426,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    @pytest.mark.xfail(
-        reason="`rewards/<func>/mean` averages over training samples, so a rollout that forks counts once per sample (#8250)",
-        strict=False,  # a window can average to the expected values by chance
-    )
     @require_response_parsing
     def test_train_with_environment_owned_reward(self, make_vllm_server):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
@@ -2551,12 +2547,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
         # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
-        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising. Metrics are logged at every
-        # step: the last entry is the run's summary
-        logged = trainer.state.log_history[-2]
-        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising. Reward metrics are logged
+        # only by the steps that scored a group, so the columns are gathered over the whole log
+        logs = [log for log in trainer.state.log_history if "reward" in log]
+        reward_columns = {key for log in logs for key in log if key.startswith("rewards/") and key.endswith("/mean")}
         assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
-        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+        scored = [log["rewards/ScoredEnvironment/mean"] for log in logs if "rewards/ScoredEnvironment/mean" in log]
+        assert scored and all(mean == 1.0 for mean in scored)
 
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
@@ -5286,7 +5283,7 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
         # So does each reward function's mean, except for a group the function didn't score
-        assert metrics["rewards/dummy_reward_func/mean"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
+        assert metrics["rewards/str_length_reward/mean"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
         assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
         assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
 
