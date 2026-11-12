@@ -1819,6 +1819,13 @@ class AsyncRolloutLoop:
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        # Each reward function's mean over the rollouts it scored, dropped groups included, like `reward`. A function
+        # that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no reward) adds nothing.
+        for name, func_rewards in zip(self.reward_func_names, per_func_rewards, strict=True):
+            func_scored = func_rewards[~np.isnan(func_rewards)]
+            if len(func_scored):
+                self._rates[f"rewards/{name}/mean"][0] += float(func_scored.sum())
+                self._rates[f"rewards/{name}/mean"][1] += len(func_scored)
         if self.tools or any(group.tool_call_counts):
             self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
             self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
@@ -1844,19 +1851,12 @@ class AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward) in enumerate(
-            zip(group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True)
+        for prompt, completion, sequences, advantage, reward in zip(
+            group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True
         ):
             metrics = {
                 "reward_kept": float(reward),
                 "reward_group_std": reward_std,
-                **{
-                    f"rewards/{name}/mean": float(func_reward)
-                    for name, func_reward, used in zip(
-                        self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
-                    )
-                    if used
-                },
                 **{
                     f"rewards/{name}/group_std": std
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
@@ -2206,7 +2206,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/group_std
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
