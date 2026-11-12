@@ -1505,24 +1505,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         )
 
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed. In
-        # AsyncDistillationTrainer, we need additional columns to compute the loss, hence the override.
-        if self._signature_columns is None:
-            self._signature_columns = [
-                "input_ids",
-                "attention_mask",
-                "completion_mask",
-                "position_ids",
-                "teacher_topk_ids",
-                "teacher_topk_logprobs",
-                "teacher_id",
-                "teacher_id_idx",
-                "global_n_tokens",
-                "global_n_forward_tokens",
-                "mean_seq_len",
-            ]
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP keeps the student's
