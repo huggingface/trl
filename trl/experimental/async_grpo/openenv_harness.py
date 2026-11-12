@@ -176,10 +176,6 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 self._rates["tools/latency_s"][1] += 1
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
-            timed_out = metrics.pop("timed_out", None)
-            if timed_out is not None:
-                self._rates["harness/timeout_frac"][0] += timed_out
-                self._rates["harness/timeout_frac"][1] += 1
             for name, value in metrics.pop("session").items():
                 self._rates[f"harness/{name}"][0] += value
                 self._rates[f"harness/{name}"][1] += 1
@@ -322,20 +318,18 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 tool_calls_by_name=tool_calls_by_name,
                 tool_failures_by_name=tool_failures_by_name,
                 tool_latency=tool_latency,
-                # Numeric diagnostics the session reports with its reward, such as Harbor's rollout wall time
+                # Numeric diagnostics the session reports with its reward
                 session={
                     "create_s": create_s,
                     "run_s": run_s,
                     "verify_s": verify_s,
                     **{
-                        f"verify/{key}": float(value)
+                        f"session/{key}": float(value)
                         for key, value in verify.metrics.items()
                         if isinstance(value, int | float)
                     },
                 },
             )
-            if self._adapter is None:
-                metrics["timed_out"] = timed_out
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
             return (
