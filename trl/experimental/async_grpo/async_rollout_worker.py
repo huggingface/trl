@@ -458,19 +458,6 @@ class AsyncRolloutLoop:
             self._dataset_iter = iter(dataset.select(range(self._row_index, len(dataset))))
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
-        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
-        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        has_template = getattr(processing_class, "response_template", None) is not None
-        has_schema = getattr(processing_class, "response_schema", None) is not None
-        if not has_template and not has_schema:
-            processing_class = add_response_schema(processing_class)
-        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
-            warnings.warn(
-                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
-                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
-                "support will eventually be removed. See the Transformers response-parsing docs.",
-                FutureWarning,
-            )
         self.tokenizer = processing_class
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
@@ -545,6 +532,25 @@ class AsyncRolloutLoop:
                 self.reward_func_names.append(env_type.__name__)
         else:
             self.tools = tools
+
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            try:
+                processing_class = add_response_schema(processing_class)
+            except ValueError:
+                # Only tool calls need a parser: without tools, turns of an unknown template are decoded as plain text
+                if self.tools:
+                    raise
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
 
         # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
         # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
@@ -1219,7 +1225,15 @@ class AsyncRolloutLoop:
                 **self.chat_template_kwargs,
             )
             turn = await self.generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            # Decode the turn. It's important to use `parse_response` when possible, because it handles tool calls.
+            if (
+                getattr(self.tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self.tokenizer, "response_schema", None) is not None  # old-style
+            ):
+                assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            else:
+                content = self.tokenizer.decode(turn.output_ids, skip_special_tokens=True)
+                assistant_message = {"role": "assistant", "content": content}
             completion.append(assistant_message)
             completion_ids.extend(turn.output_ids)
             messages.append(assistant_message)
@@ -1452,6 +1466,11 @@ class AsyncRolloutLoop:
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
+        # Completions that repeat an earlier one of the group token for token; about 0 when sampling is random
+        num_completions = len(group.completions_ids)
+        num_distinct = len({tuple(ids) for ids in group.completions_ids})
+        self._rates["completions/duplicate_frac"][0] += num_completions - num_distinct
+        self._rates["completions/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         self._rates["reward"][0] += float(scored.sum())
@@ -1465,6 +1484,11 @@ class AsyncRolloutLoop:
         self._rates["frac_reward_zero_std"][0] += zero_std
         self._rates["frac_reward_zero_std"][1] += 1
         if zero_std:
+            if len(scored):
+                # The reward a dropped group is stuck at: near the top of its range, the prompts are too easy; near the
+                # bottom, too hard. With 0/1 rewards, this is the share of dropped groups whose completions all pass.
+                self._rates["reward_dropped"][0] += reward_mean
+                self._rates["reward_dropped"][1] += 1
             return []
 
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
