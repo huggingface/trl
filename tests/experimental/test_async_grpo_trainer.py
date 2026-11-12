@@ -1008,27 +1008,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Cohere2ForCausalLM",
-                marks=pytest.mark.xfail(
-                    raises=RuntimeError,
-                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.0.0"),
-                        reason="GLM4 tokenizer requires transformers>=5.0.0",
-                    ),
-                    pytest.mark.xfail(
-                        raises=RuntimeError,
-                        reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
@@ -1036,28 +1022,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                     raises=ValueError, reason="Attention sinks are not supported (#8231)", strict=True
                 ),
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-                marks=pytest.mark.xfail(
-                    raises=RuntimeError,
-                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
                 marks=pytest.mark.xfail(
                     raises=ValueError, reason="Mamba layers are not supported (#8232)", strict=True
                 ),
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-PhimoeForCausalLM",
-                marks=pytest.mark.xfail(
-                    raises=RuntimeError,
-                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
