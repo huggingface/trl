@@ -57,6 +57,9 @@ VLLM_SERVE_TRL_ARGS = [
     "processed_logprobs",
     "--max-logprobs",
     "-1",
+    # vLLM's default 0.9 leaves a 24 GB GPU too little room for the weight-sync receive buffers
+    "--gpu-memory-utilization",
+    "0.5",
 ]
 # From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
 if is_vllm_available(min_version="0.30.0"):
@@ -924,8 +927,9 @@ class TestVLLMClientServerVLM(TrlTestCase):
         env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
         env["VLLM_SERVER_DEV_MODE"] = "1"
 
-        # Start the server process
-        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
+        # Start the server process, with smaller images and context so its memory profiling fits a 24 GB GPU
+        args = ["--mm-processor-kwargs", '{"max_pixels": 1003520}', "--max-model-len", "4096"]
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS, *args], env=env)
 
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")

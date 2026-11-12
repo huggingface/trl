@@ -6,22 +6,21 @@ logprobs, and loss masks, then updates the same vLLM instance.
 ## Local setup
 
 Use Python 3.12 and this TRL checkout. The typed capture API was merged in
-[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install the pinned upstream revision:
+[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280) and released in OpenEnv 0.7.0. Install that release:
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git OpenEnv
-git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
-pip install -e . trackio datasets ./OpenEnv
+git clone --depth 1 --branch v0.7.0 https://github.com/openenv/OpenEnv.git OpenEnv
+pip install -e . trackio datasets "openenv[harbor]==0.7.0" kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-The source path is required because this revision's environment wheel does not package
-`harbor_env.harness`. Both the core package and the harness above use the same revision.
+The source path is required because the OpenEnv wheel does not package `harbor_env.harness`.
+Keep the checkout on the same tag as the installed package.
 
 Run the OpenEnv server with its sandbox credentials, then start vLLM and the trainer using the commands
-in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install './OpenEnv[harbor]'`;
+in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install "openenv[harbor]==0.7.0"`;
 the trainer can use an existing server. Use the same model and vLLM endpoint for rollouts and weight updates.
-Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
+Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-concurrent-rollouts + 1` (9 for the defaults); the factory
 keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
 
 Training saves a checkpoint every 50 steps, keeps the latest three, and saves the final model and
@@ -37,6 +36,14 @@ Use `--train-script-url` with the raw URL of the TRL revision being tested befor
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
 subsequent sessions receive the new proxy URL.
 
+You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script. 
+
+HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every verifier upload fails and all rewards are `None` (loss 0). The launcher patches Harbor for this; when running `openenv harbor serve` yourself, apply the same patch to the server's environment first:
+
+```sh
+python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Path(t.__file__); p.write_text(p.read_text().replace('tar -xzf ', 'tar --no-same-owner -xzf '))"
+```
+
 ## Capture contract
 
 - OpenEnv supplies a validated `TrainingTrace` with required masks. Prompt and completion IDs come
@@ -45,15 +52,15 @@ subsequent sessions receive the new proxy URL.
   zeros and ones. TRL maps the completion span to its generic `TurnRecord.output_mask`.
 - For example, prompt `[10, 11]`, completion `[12, 13, 14]`, and mask `[0, 0, 1, 0, 1]` train on tokens
   `12` and `14`, while retaining `13` as context.
-- The worker constructs the session factory with its sampling policy. Pass a callable such as
+- The trainer constructs the session factory with its sampling policy. Pass a callable such as
   `partial(HarborSessionFactory, server_url, ...)`; do not configure sampling separately on the factory.
   OpenEnv applies the policy to captured requests.
-- Invalid captures stop the worker. Transport failures remain unscorable; an agent timeout retains
+- Invalid captures stop training. Transport failures remain unscorable; an agent timeout retains
   valid captured turns and the verifier's score.
 
 Execution status and structured tool outcomes are follow-up OpenEnv API work. Today, TRL recognizes
 timeouts through `TimeoutError` and reconstructs conversation and tool diagnostics from captures.
-Set agent turn and time budgets on the session factory; the worker only forwards sampling.
+Set agent turn and time budgets on the session factory; the trainer only forwards sampling.
 
 Rewritten histories can produce multiple training rows. Token retention does not guarantee equal
 rollout weighting or a suitable memory budget for every harness.
