@@ -189,6 +189,10 @@ Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medi
 
 Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
 
+### `muse_spark.jinja`
+
+Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+
 ### `nemotron_3_nano.jinja`
 
 Original Nemotron Nano chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
@@ -256,9 +260,17 @@ Original Qwen3.5 chat templates. The two differ only in the default value of the
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_think.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
 
+### `qwen3_6_v2.jinja`
+
+Qwen3.6 chat template as shipped by `Qwen3.6-27B`, `Qwen3.6-35B-A3B` and their FP8 variants since 2026-11-07 (e.g. [345d467](https://huggingface.co/Qwen/Qwen3.6-35B-A3B/commit/345d467b117d1fd5eda9b879a5988de9ae5f47a7)). Same rendered text as `qwen3_6.jinja`, with the assistant output wrapped in `{% generation %}` / `{% endgeneration %}`. Response parsing reuses `qwen3_5_schema`.
+
 ### `qwen3_8.jinja`
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
+### `qwen3_8_v2.jinja`
+
+Qwen3.8 chat template as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant since 2026-11-07 (e.g. [3756181](https://huggingface.co/Qwen/Qwen3.8-27B/commit/37561816e66b5b9153b1b64c10968c18c1e6f4a0)). Same rendered text as `qwen3_8.jinja`, with the assistant output wrapped in `{% generation %}` / `{% endgeneration %}`. Response parsing reuses `qwen3_5_schema`.
 
 ### `qwen3_coder.jinja`
 
@@ -294,6 +306,7 @@ Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
+- Reads the content with `message.get('content')` instead of `message['content']`, so that a tool-call message without a `content` key renders like one with `content=None` (transformers drops `None`-valued message keys since 5.23). The original crashes on the missing key.
 
 ### `deepseekv3_training.jinja`
 
@@ -302,6 +315,7 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
+- Reads the content with `message.get('content')` instead of `message['content']`, so that a tool-call message without a `content` key renders like one with `content=None` (transformers drops `None`-valued message keys since 5.23). The original crashes on the missing key.
 
 ### `deepseekv3_v2_training.jinja`
 
@@ -310,14 +324,15 @@ Patched DeepSeek-R1-0528 template. Diff vs `deepseekv3_v2.jinja`:
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict`, as in `deepseekv3_training.jinja`.
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs stays outside the markers, since the prompt already ends with it.
+- Reads the content with `message.get('content')` instead of `message['content']`, so that a tool-call message without a `content` key renders like one with `content=None` (transformers drops `None`-valued message keys since 5.23). The original crashes on the missing key.
 
 ### `deepseekv3_v3_training.jinja`
 
-Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja` (which has no `'</think>'` split to remove): `{% generation %}` / `{% endgeneration %}` markers around assistant message output for SFT assistant-only loss, with the `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn left outside them.
+Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja` (which has no `'</think>'` split to remove): `{% generation %}` / `{% endgeneration %}` markers around assistant message output for SFT assistant-only loss, with the `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn left outside them, and `message.get('content')` for the content checks.
 
 ### `deepseekv3_v4_training.jinja`
 
-Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v4.jinja` (which has no `'</think>'` split to remove): `| tojson` on tool-call arguments, and `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs left outside them.
+Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v4.jinja` (which has no `'</think>'` split to remove): `| tojson` on tool-call arguments, and `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs left outside them, and `message.get('content')` for the content check.
 
 ### `diffusion_gemma_training.jinja`
 
@@ -347,7 +362,7 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
 
 ### `idefics3_training.jinja`
 
@@ -391,31 +406,35 @@ Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the ori
 
 Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`:
 
-Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
+Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
+
+### `muse_spark_training.jinja`
+
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
 
 ### `nemotron_3_nano_training.jinja`
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_super_training.jinja`
 
 Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_5_lightning_training.jinja`
 
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `phi3_training.jinja`
 

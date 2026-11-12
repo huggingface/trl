@@ -1,0 +1,7 @@
+{
+  "fsdp_version": 2,
+  "auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+  "cpu_ram_efficient_loading": true,
+  "reshard_after_forward": true,
+  "state_dict_type": "FULL_STATE_DICT"
+}
