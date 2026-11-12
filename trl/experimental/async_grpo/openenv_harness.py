@@ -40,7 +40,7 @@ from openenv.core.harness.capture.upstream import training_sampling
 from openenv.core.llm_client import LLMResponse, ToolCall
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
-from ...chat_template_utils import parse_response
+from ...chat_template_utils import add_response_schema, parse_response
 from .async_grpo_config import AsyncGRPOConfig
 from .async_grpo_trainer import AsyncGRPOTrainer
 from .async_rollout_worker import AsyncRolloutLoop, Rollout, TurnRecord
@@ -136,6 +136,13 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
         else:
             self._factory = harness_session_factory()
+            # TRL parses each sampled turn for the agent's tool calls, so it needs a response parser even though the
+            # trainer has no tools of its own.
+            if (
+                getattr(self.tokenizer, "response_template", None) is None
+                and getattr(self.tokenizer, "response_schema", None) is None
+            ):
+                self.tokenizer = add_response_schema(self.tokenizer)
         self._limits = HarnessRunLimits(
             max_turns=self.config.max_tool_calling_iterations
             if self.config.max_tool_calling_iterations is not None

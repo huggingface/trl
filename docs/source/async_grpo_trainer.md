@@ -138,6 +138,7 @@ While training, we record the following metrics:
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions, whose last turn does not end with an EOS token.
+- `completions/duplicate_frac`: The fraction of rollouts that repeat an earlier rollout of their group token for token. See [Saturation and duplicates](#saturation-and-duplicates).
 - `tools/call_frequency`: The average number of tool calls per completion, over every rollout, including the groups that are then dropped. Logged only when the trainer has tools.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
@@ -145,6 +146,7 @@ While training, we record the following metrics:
 - `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
 - `reward_group_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples. It is what the advantage is divided by, unlike GRPO's `reward_std`, which is taken over the whole batch.
 - `reward_kept`: The average reward of the trained samples, which excludes the dropped groups.
+- `reward_dropped`: The average reward of the groups that were dropped, the reward they are stuck at. See [Saturation and duplicates](#saturation-and-duplicates) to read it with `frac_reward_zero_std` and `reward`.
 - `frac_reward_zero_std`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
 - `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over trained tokens.
 - `sampling/sampling_logp_difference/max`: The largest such absolute difference.
@@ -314,6 +316,37 @@ The last two are mirror images. Read together with the queue size, they tell you
 - queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high: **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
 - both high: the `max_staleness` limit itself is too tight. The rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero: balanced.
+
+### Saturation and duplicates
+
+The policy learns from the differences between the rollouts of a group: each advantage is taken against the group's mean reward. When every rollout of a group gets the same reward, they all get a zero advantage, so the group is dropped (see [Logged metrics](#logged-metrics)) and teaches the policy nothing. As a run saturates, more and more groups end up like this, either because every rollout solves the prompt or because none does. Four metrics tell these cases apart, and each one answers its own question, so you can read them straight off their plots:
+
+| metric | question |
+| --- | --- |
+| `frac_reward_zero_std` | what share of groups carry no signal |
+| `reward_dropped` | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
+| `reward` | how well the policy does over every scored group, dropped ones included |
+| `completions/duplicate_frac` | whether sampling still gives different rollouts for the same prompt |
+
+Read the first three together, against the range of your reward:
+
+| `frac_reward_zero_std` | `reward_dropped` | `reward` | diagnosis | what to do |
+| --- | --- | --- | --- | --- |
+| low | any (noisy over few groups) | any | **healthy**: most groups produce a gradient | nothing |
+| climbing | near the top of the range | climbing | **saturating at the top**: the prompts have become too easy for the policy, which is how a successful run usually ends | stop the run, or move to harder prompts |
+| high | near the bottom of the range | low and flat | **stuck at the bottom**: the prompts are too hard, or the reward function never gives credit | check `completions/clipped_ratio` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them |
+| climbing | falling | falling | **regression**: groups that used to pass now fail together | check `completions/duplicate_frac` and `entropy` for a collapse |
+| high | in the middle | any | **a mix**: with 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts |
+
+`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. Identical rollouts get identical rewards, so duplicates also push `frac_reward_zero_std` up.
+
+| `completions/duplicate_frac` | diagnosis |
+| --- | --- |
+| near 0, with a small baseline on tasks whose completions are short enough to repeat by chance | **healthy**: the rollouts of a group are sampled independently |
+| jumps towards `(num_generations - 1) / num_generations` | **sampling is no longer random**: every group comes back as copies of one rollout. For example, a temperature of 0, or data-parallel vLLM engines decoding the same text because they share a sampling seed (the worker sends a unique seed with every request to prevent this) |
+| climbs slowly, with `entropy` falling | **collapse**: the policy is converging onto one answer per prompt |
+
+These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_reward_zero_std`, but it has no reward, so `reward_dropped` leaves it out.
 
 ### Tree packing
 

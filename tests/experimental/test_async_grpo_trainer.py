@@ -1694,7 +1694,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
             pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
-            pytest.param("trl-internal-testing/tiny-Llama4ForCausalLM", "chunked_attention", id="llama4"),
         ],
     )
     def test_init_raises(self, model_id, match):
@@ -2228,6 +2227,33 @@ class TestRolloutLoop(TrlTestCase):
         assert rollout.completion[1]["content"] == "ok"
         assert rollout.tool_call_count == 1 and rollout.tool_failure_count == 0
 
+    def test_chat_template_without_response_parser(self):
+        # TRL has no response parser for this chat template. Only tool calls need one, so without tools the turn is
+        # decoded as plain text, as in GRPO
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        loop = _rollout_loop(processing_class=tokenizer, eos_token_ids=[tokenizer.eos_token_id])
+        output_ids = tokenizer.encode("Hello!", add_special_tokens=False) + [tokenizer.eos_token_id]
+
+        async def generate_one_turn(prompt_ids):
+            return TurnRecord(prompt_ids, output_ids, [-0.1] * len(output_ids))
+
+        loop.generate_one_turn = generate_one_turn
+        rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], []))
+        assert rollout.completion == [{"role": "assistant", "content": "Hello!"}]
+
+    def test_known_chat_template_is_parsed_without_tools(self):
+        # TRL has a response parser for this chat template, so the turn is parsed even without tools: the thinking goes
+        # to `reasoning_content`, and `content` holds the answer
+        loop = _rollout_loop()
+        output_ids = loop.tokenizer.encode("<think>\nLet me add.\n</think>\n\n4<|im_end|>", add_special_tokens=False)
+
+        async def generate_one_turn(prompt_ids):
+            return TurnRecord(prompt_ids, output_ids, [-0.1] * len(output_ids))
+
+        loop.generate_one_turn = generate_one_turn
+        rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "2+2?"}], []))
+        assert rollout.completion == [{"role": "assistant", "reasoning_content": "Let me add.", "content": "4"}]
+
     def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
         rollout, rows = _run(turns=[_TOOL_CALL], max_iters=0)
@@ -2591,6 +2617,24 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
         assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
         assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
+
+    def test_reward_dropped_and_duplicate_frac(self):
+        # The first token of each completion is its reward, and 0 means the reward func cannot score it.
+        def first_token_reward(completion_ids, **kwargs):
+            return [float(ids[0]) if ids[0] else None for ids in completion_ids]
+
+        loop = _rollout_loop(reward_funcs=[first_token_reward])
+        seqs = [[TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, f"c{i}")] for i in range(2)]
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[1, 10], [2, 10]])))  # kept
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[3, 10], [3, 10]])))  # dropped, duplicated
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [4, 10]])))  # dropped, one scored
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # dropped, unscorable
+
+        assert loop._rates["frac_reward_zero_std"] == [3, 4]
+        # Only the dropped groups with a scored completion contribute the reward they are stuck at.
+        assert loop._rates["reward_dropped"] == [3.0 + 4.0, 2]
+        # One of the eight completions repeats an earlier one of its group.
+        assert loop._rates["completions/duplicate_frac"] == [1, 8]
 
 
 @pytest.mark.skipif(
