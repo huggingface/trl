@@ -1733,6 +1733,12 @@ class SFTTrainer(_BaseTrainer):
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
                 logits, labels = outputs.logits, inputs.get("labels")
+        # Detach the loss (and logits) to ensure tensors returned by `prediction_step` never require gradients, matching
+        # the behavior of `Trainer.prediction_step` in Transformers. `torch.no_grad()` alone does not prevent an
+        # integration (e.g. a checkpointing hook) from re-enabling `requires_grad_` on the tensors returned by
+        # `compute_loss`, which then breaks evaluation when the accumulated losses are converted to NumPy.
+        loss = loss.detach() if loss is not None else None
+        logits = logits.detach() if logits is not None else None
         return loss, logits, labels
 
     # Override training step to add activation offloading context.
