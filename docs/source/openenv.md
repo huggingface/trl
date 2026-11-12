@@ -744,7 +744,7 @@ The harness trainer logs the [tool metrics](async_grpo_trainer#tool-metrics) of 
 - The trainer itself has no tools, so `tools/call_frequency` and `tools/failure_frequency` only count the groups where at least one rollout called a tool.
 - `rollout/correctness_mean` is logged only with a `rollout_reward_fn`: the verifier's `env_reward`, averaged over the rollouts that have one.
 
-The other metrics of [`experimental.async_grpo.AsyncGRPOTrainer`] are logged too, with these differences:
+The other metrics of [`AsyncGRPOTrainer`] are logged too, with these differences:
 
 - The reward of a session is logged as `rewards/rollout/mean` and `rewards/rollout/group_std`, since the trainer has no `reward_funcs`.
 - `rollout/duration_s` covers the whole session, including the sandbox start and the verifier.
