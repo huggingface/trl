@@ -756,9 +756,9 @@ The other metrics of [`AsyncGRPOTrainer`] are logged too, with these differences
 It also logs these metrics about the sessions:
 
 - `harness/create_s`, `harness/run_s`, `harness/verify_s`: The time to create a session, run it and verify it. When the agent owns its loop, the run includes fetching the capture; with a `harness_adapter`, it includes the turns TRL samples.
-- `harness/timeout_frac`: The fraction of sessions whose agent ran out of time. Their captured turns are still trained on. Logged only when the agent owns its loop.
+- `harness/timeout_frac`: The fraction of sessions whose agent ran out of time, over the sessions that didn't fail. Their captured turns are still trained on. Logged only when the agent owns its loop.
 - `harness/session_failure_count`: The number of sessions that were unscorable because they failed to start or run, or their capture was rejected.
-- `harness/{key}`: Each numeric entry of the `metrics` returned by the session's `verify`, averaged over the sessions that report it.
+- `harness/verify/{key}`: Each numeric entry of the `metrics` returned by the session's `verify`, averaged over the sessions that report it.
 
 ### Requirements
 

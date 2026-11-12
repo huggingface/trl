@@ -327,7 +327,11 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                     "create_s": create_s,
                     "run_s": run_s,
                     "verify_s": verify_s,
-                    **{key: float(value) for key, value in verify.metrics.items() if isinstance(value, int | float)},
+                    **{
+                        f"verify/{key}": float(value)
+                        for key, value in verify.metrics.items()
+                        if isinstance(value, int | float)
+                    },
                 },
             )
             if self._adapter is None:
