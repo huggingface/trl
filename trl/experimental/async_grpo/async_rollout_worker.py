@@ -458,19 +458,6 @@ class AsyncRolloutLoop:
             self._dataset_iter = iter(dataset.select(range(self._row_index, len(dataset))))
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
-        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
-        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        has_template = getattr(processing_class, "response_template", None) is not None
-        has_schema = getattr(processing_class, "response_schema", None) is not None
-        if not has_template and not has_schema:
-            processing_class = add_response_schema(processing_class)
-        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
-            warnings.warn(
-                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
-                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
-                "support will eventually be removed. See the Transformers response-parsing docs.",
-                FutureWarning,
-            )
         self.tokenizer = processing_class
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
@@ -545,6 +532,25 @@ class AsyncRolloutLoop:
                 self.reward_func_names.append(env_type.__name__)
         else:
             self.tools = tools
+
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            try:
+                processing_class = add_response_schema(processing_class)
+            except ValueError:
+                # Only tool calls need a parser: without tools, turns of an unknown template are decoded as plain text
+                if self.tools:
+                    raise
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
 
         # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
         # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
@@ -723,7 +729,7 @@ class AsyncRolloutLoop:
         resets the server's caches, which preempts every running request.
         """
         rollouts_at_change = 0
-        preemptions_seen = 0.0
+        preemptions_seen = None
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
@@ -750,6 +756,8 @@ class AsyncRolloutLoop:
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if preemptions_seen is None:
+                preemptions_seen = preemptions
             if usage > 0.8 and self._concurrency <= self._kv_cap:
                 self._kv_cap = max(1, int(self._kv_cap * 0.7))
                 rollouts_at_change = self._total_rollouts
@@ -760,7 +768,7 @@ class AsyncRolloutLoop:
             self._push_metrics(
                 {
                     "rollout/concurrency_cap": float(self._kv_cap),
-                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_kv_cache_usage_frac": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
                     "rollout/vllm_preemption_count": preemptions - preemptions_seen,
@@ -801,10 +809,9 @@ class AsyncRolloutLoop:
                         )
                     # Draw a reusable environment instance for this rollout (creating one only if the pool is
                     # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
-                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
-                    # previously discarded, so an environment_factory whose task lives in the observation (not the
-                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
-                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # prompt and capture its initial observation (e.g. a task instruction), since an environment can
+                    # hold the task in the observation rather than in the dataset prompt. Mirror GRPOTrainer: fold the
+                    # observation into the last prompt message. reset() may be stochastic, so this is done per generation (each
                     # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
                     # field in multi-environment mode, so it is not forwarded to `reset`.
                     environment = None
@@ -1098,14 +1105,23 @@ class AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
-            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         if turns > 1:
             self._rates["rollout/fork_frac"][0] += len(drifts)
             self._rates["rollout/fork_frac"][1] += turns - 1
@@ -1118,6 +1134,7 @@ class AsyncRolloutLoop:
                 "rollout/drift_tokens_max": float(max(drifts, default=0)),
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -1208,7 +1225,15 @@ class AsyncRolloutLoop:
                 **self.chat_template_kwargs,
             )
             turn = await self.generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            # Decode the turn. It's important to use `parse_response` when possible, because it handles tool calls.
+            if (
+                getattr(self.tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self.tokenizer, "response_schema", None) is not None  # old-style
+            ):
+                assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            else:
+                content = self.tokenizer.decode(turn.output_ids, skip_special_tokens=True)
+                assistant_message = {"role": "assistant", "content": content}
             completion.append(assistant_message)
             completion_ids.extend(turn.output_ids)
             messages.append(assistant_message)
@@ -1369,6 +1394,13 @@ class AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        for reward_func_name, rewards in zip(self.reward_func_names, all_rewards, strict=False):
+            if len(rewards) != len(group.completions):
+                raise ValueError(
+                    f"The reward function '{reward_func_name}' returned {len(rewards)} rewards, but "
+                    f"{len(group.completions)} were expected (one per prompt-completion pair). Make sure the reward "
+                    f"function returns exactly one reward per completion."
+                )
         # Each environment that owns its reward contributes one reward column (named after its env class, in
         # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
         # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
@@ -1380,8 +1412,21 @@ class AsyncRolloutLoop:
         all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
-        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        return np.array(all_rewards, dtype=float)
+        all_rewards = np.array(
+            [[r if r is not None else float("nan") for r in row] for row in all_rewards], dtype=float
+        )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if np.isnan(all_rewards).all(axis=0).any():
+            nan_row_idx = int(np.isnan(all_rewards).all(axis=0).nonzero()[0][0])
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in group.reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = group.prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = group.completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        return all_rewards
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """
@@ -1421,28 +1466,31 @@ class AsyncRolloutLoop:
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
+        # Completions that repeat an earlier one of the group token for token; about 0 when sampling is random
+        num_completions = len(group.completions_ids)
+        num_distinct = len({tuple(ids) for ids in group.completions_ids})
+        self._rates["completions/duplicate_frac"][0] += num_completions - num_distinct
+        self._rates["completions/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        if self.tools or any(group.tool_call_counts):
+            self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
+            self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
+            self._rates["tools/failure_frequency"][0] += sum(group.tool_failure_counts)
+            self._rates["tools/failure_frequency"][1] += sum(group.tool_call_counts)
         zero_std = bool(np.all(scored == scored[:1]))
         self._rates["frac_reward_zero_std"][0] += zero_std
         self._rates["frac_reward_zero_std"][1] += 1
         if zero_std:
+            if len(scored):
+                # The reward a dropped group is stuck at: near the top of its range, the prompts are too easy; near the
+                # bottom, too hard. With 0/1 rewards, this is the share of dropped groups whose completions all pass.
+                self._rates["reward_dropped"][0] += reward_mean
+                self._rates["reward_dropped"][1] += 1
             return []
 
-        total_calls = sum(group.tool_call_counts)
-        tool_metrics = (
-            [
-                {
-                    "tools/call_frequency": float(n_calls),
-                    "tools/failure_frequency": (n_failures / n_calls) if n_calls > 0 else 0.0,
-                }
-                for n_calls, n_failures in zip(group.tool_call_counts, group.tool_failure_counts, strict=True)
-            ]
-            if total_calls > 0
-            else [{}] * len(group.completions)
-        )
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
@@ -1452,16 +1500,8 @@ class AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
-            zip(
-                group.prompts,
-                group.completions,
-                group.completions_sequences,
-                advantages,
-                rewards,
-                tool_metrics,
-                strict=True,
-            )
+        for i, (prompt, completion, sequences, advantage, reward) in enumerate(
+            zip(group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True)
         ):
             metrics = {
                 "reward_kept": float(reward),
@@ -1478,7 +1518,6 @@ class AsyncRolloutLoop:
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
-                **tm,
             }
             for seq in sequences:
                 width = max(map(len, seq.sampler_logprobs))
@@ -1584,7 +1623,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # NOTE(@aminediro) Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 

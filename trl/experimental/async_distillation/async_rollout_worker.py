@@ -507,22 +507,32 @@ class _AsyncRolloutLoop:
         self._rates["rollout/score_s"][1] += 1
         if len(self.teacher_server_urls) > 1:
             # MOPD: one slow teacher throttles only the rollouts routed to it, which the blended mean above hides.
-            # Keyed the way the trainer names `teacher_jsd/{teacher_id}`, so the per-teacher series group together.
-            self._rates[f"teacher_score_s/{teacher_id}"][0] += score_s
-            self._rates[f"teacher_score_s/{teacher_id}"][1] += 1
+            # Keyed the way the trainer names `teacher/{teacher_id}/jsd`, so the per-teacher series group together.
+            self._rates[f"teacher/{teacher_id}/score_s"][0] += score_s
+            self._rates[f"teacher/{teacher_id}/score_s"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
-            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         self._push_metrics(
             {
                 "rollout/duration_s": duration_s,
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -747,7 +757,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # NOTE Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 

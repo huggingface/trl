@@ -43,6 +43,8 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
+from ...chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE, supports_tool_calling
+from ...import_utils import is_jmespath_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     add_fused_lm_head,
@@ -66,7 +68,7 @@ from .weight_transfer import WeightTransferClient
 logger = get_logger(__name__)
 
 if is_peft_available():
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
 
 if is_trackio_available():
     import trackio
@@ -218,7 +220,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -319,14 +321,14 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
-            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
             #                                them rather than where the worker filled it
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
             # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
             # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
-            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            self.metrics["rollout/queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
@@ -480,11 +482,10 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     return_tensors: str = "pt"
-    # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
+    # Distinct prompt-group ids: exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
     # The trainer's metric sink, shared by reference (like `groups_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
-    # Per-row token cap of the planner,
     token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -574,7 +575,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         # weights that move once the adapter has been merged into them.
         if not is_peft and not param.requires_grad:
             continue
-        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        # Strip the prefixes DDP/FSDP1 and gradient checkpointing add, so the names match vLLM's
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -840,8 +841,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-              vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
-              models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Training Vision Language
+              Models](async_grpo_trainer#training-vision-language-models)), [`~transformers.AutoModelForCausalLM`]
+              otherwise.
             - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
               tree attention backend for packed training.
 
@@ -870,11 +872,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
-            ignored. The format of the samples can be either:
-
-            - [Standard](dataset_formats#standard): Each sample contains plain text.
-            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
-              and content).
+            ignored. The samples must be in [conversational](dataset_formats#conversational) format: each sample
+            contains structured messages (e.g., role and content).
 
             May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
             generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
@@ -1056,7 +1055,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
+        add_fused_lm_head(
+            model.get_base_model() if is_peft_model(model) else model,
+            temperature=self.temperature,
+            outputs=("log_probs", "entropy"),
+        )
 
         # Processing class
         if processing_class is None:
@@ -1103,6 +1106,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
+        # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) add virtual tokens rather than weights, and
+        # the trainer syncs weights to the vLLM server, so the server would generate without them.
+        if is_peft_model(model) and any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
+            raise ValueError(
+                "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The trainer "
+                "syncs weights to the vLLM server, and these methods add virtual tokens instead, so the server would "
+                "generate without them. Use a weight-based adapter such as LoRA instead."
+            )
+
         # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and the importance ratio is wrong on every token with nothing raised. Checked on
@@ -1118,15 +1130,48 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # NOTE: See https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
+
+        if tools or environment_factory:
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with AsyncGRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
 
         # Reward functions
         if reward_funcs is None:
             reward_funcs = []
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+
+        # At least one reward source is required: either `reward_funcs`, an environment that owns the reward via a
+        # `get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`. Environments are created in the
+        # rollout worker, which checks that they define `get_reward`.
+        if (
+            not reward_funcs
+            and environment_factory is None
+            and self.loop_cls.generate_one is AsyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
 
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
@@ -1148,6 +1193,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
+
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        if "image" in dataset_sample or "images" in dataset_sample:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but `AsyncGRPOTrainer` "
+                "trains on text only, vision-language models included. Please remove the images from your dataset."
+            )
 
         # Initialize the Trainer
         super().__init__(
@@ -1158,6 +1215,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         precision = self.accelerator.mixed_precision
         self.compute_dtype = {
@@ -1286,7 +1346,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 environment_factory=environment_factory,
                 **self._rollout_loop_kwargs,
             )
-            # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
@@ -1364,9 +1423,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     token_budget=self.args.token_budget or 0,
                 ),
                 num_workers=0,
-                # NOTE(@aminediro):
-                # dispatch_batches = True for DataLoader whose underlying dataset is an IterableDataset
-                # dataloader prepared by the Accelerator is only iterated through on the main process a
             )
         )
 
@@ -1463,16 +1519,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
             per_token_loss2 = coef_2 * advantages
             per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
+        # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
+        # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
         loss = per_token_loss.sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
         loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
@@ -1614,29 +1667,32 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self._rollout_dataset.lookahead_tokens = (
                     max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
                 )
+                self._rollout_dataset.token_allowance.value = (
+                    self._rollout_dataset.consumed_tokens + self._rollout_dataset.lookahead_tokens
+                )
             self._rollout_dataset.step_tokens = 0
             metrics["batch/groups_per_step"].append(float(len(self._trained_groups) - self._last_groups_trained))
             self._last_groups_trained = len(self._trained_groups)
 
         # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tokens_per_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            if self._peak_flops_per_device is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
+            if self._peak_flops_per_device is not None and flops_per_token is not None:
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tokens_per_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tokens_per_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                if self._peak_flops_per_device is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
+                if self._peak_flops_per_device is not None and flops_per_token is not None:
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,
@@ -1661,7 +1717,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        # The worker only generates training rollouts, so its metrics always go to the train metrics
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
@@ -1701,7 +1757,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
+        # Total time and its three phases
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)

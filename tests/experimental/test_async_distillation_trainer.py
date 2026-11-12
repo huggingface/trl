@@ -442,14 +442,14 @@ class TestMetricReduction:
             ("perf/maximal_s", [2.0, 4.0], 3.0),
             # Rates reduce as Σnum / Σden. These two windows ran at 1 and 100 tok/s; meaning the ratios would report
             # 50.5, the defect that made `training_tok/s` unusable.
-            ("perf/forwarded_tokens_per_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
+            ("perf/wall_clock_forwarded_tokens_per_s", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
         ],
     )
     def test_reduces_by_shape_and_name(self, key, values, expected):
         assert _reduce_metric(key, values) == pytest.approx(expected)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tokens_per_s_wall_clock", [(0.0, 0.0)]))
+        assert math.isnan(_reduce_metric("perf/wall_clock_forwarded_tokens_per_s", [(0.0, 0.0)]))
 
 
 def _position(*entries):
@@ -633,9 +633,14 @@ class TestWorkerMetrics:
         assert payload["completions/mean_length"] == (3.0, 1.0)
         assert payload["completions/max_length"] == 3.0
         assert payload["completions/clipped_ratio"] == (clipped, 1.0)
+        # Only a completion that ended on EOS counts in the terminated lengths, as in GRPO
+        assert ("completions/mean_terminated_length" in payload) is ends_on_eos
+        if ends_on_eos:
+            assert payload["completions/mean_terminated_length"] == (3.0, 1.0)
+            assert payload["completions/min_terminated_length"] == payload["completions/max_terminated_length"] == 3.0
         assert payload["rollout/score_s"] == (0.25, 1.0)
         # A per-teacher latency series only exists under MOPD; with one teacher the blended mean is the whole story.
-        assert ("teacher_score_s/math" in payload) is per_teacher
+        assert ("teacher/math/score_s" in payload) is per_teacher
 
 
 class TestMultiTeacherRouting:
@@ -951,7 +956,7 @@ class TestSparseGeneralizedJSDMatchesFullVocabReference:
 
 class TestPerTeacherStats:
     """MOPD's per-teacher breakdown: `_chunked_jsd_loss` returns a `(count, jsd_sum, teacher_entropy_sum)` triple per
-    teacher, which `compute_loss` turns into `teacher_jsd/{id}`. Packing concatenates several teachers' tokens into one
+    teacher, which `compute_loss` turns into `teacher/{id}/jsd`. Packing concatenates several teachers' tokens into one
     row and then splits that row into fixed-size chunks, so the partition has to survive a teacher's positions being
     spread across chunk boundaries.
     """
