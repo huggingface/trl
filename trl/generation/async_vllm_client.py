@@ -16,7 +16,7 @@ import time
 
 from accelerate.logging import get_logger
 
-from ...import_utils import is_requests_available
+from ..import_utils import is_requests_available
 
 
 if is_requests_available():

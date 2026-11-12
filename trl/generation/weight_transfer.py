@@ -20,7 +20,7 @@ from collections import Counter
 import torch
 from accelerate.logging import get_logger
 
-from ...import_utils import is_vllm_available
+from ..import_utils import is_vllm_available
 from .async_vllm_client import AsyncVLLMClient
 
 
