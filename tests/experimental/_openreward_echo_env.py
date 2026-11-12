@@ -124,4 +124,7 @@ class EchoEnvironment(Environment):
 if __name__ == "__main__":
     import os
 
-    Server([EchoEnvironment]).run(host="127.0.0.1", port=int(os.environ["PORT"]))
+    import uvicorn
+
+    # Serve on the socket bound by the test fixture
+    uvicorn.run(Server([EchoEnvironment]).app, fd=int(os.environ["FD"]), access_log=False)

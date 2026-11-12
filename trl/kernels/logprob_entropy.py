@@ -143,6 +143,16 @@ def _layout(tensor: torch.Tensor) -> tuple[int, int, int, int]:
     return tensor.shape[0], tensor.shape[1], tensor.stride(0), tensor.stride(1)
 
 
+def _row_strides(tensor: torch.Tensor) -> tuple[int, int]:
+    # Same as `_layout(tensor.unsqueeze(-1))[2:]`, but torch 2.6's Dynamo rejects `stride()` on a tensor created in
+    # an autograd.Function backward.
+    if tensor.ndim == 0:
+        return 0, 0
+    if tensor.ndim == 1:
+        return 0, tensor.stride(0)
+    return tensor.stride(0), tensor.stride(1)
+
+
 class _LogProbEntropyFunction(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -153,13 +163,13 @@ class _LogProbEntropyFunction(torch.autograd.Function):
         row_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = _layout(logits)
-        _, _, index_batch_stride, index_row_stride = _layout(index.unsqueeze(-1))
+        index_batch_stride, index_row_stride = _row_strides(index)
         if row_mask is None:
             row_mask_ptr = index
             mask_batch_stride = mask_row_stride = 0
         else:
             row_mask_ptr = row_mask
-            _, _, mask_batch_stride, mask_row_stride = _layout(row_mask.unsqueeze(-1))
+            mask_batch_stride, mask_row_stride = _row_strides(row_mask)
         n_rows = batch_size * rows_per_batch
         n_cols = logits.shape[-1]
         logprobs = torch.empty(logits.shape[:-1], device=logits.device, dtype=torch.float32)
@@ -167,6 +177,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
         log_z = torch.empty_like(logprobs)
         expected_logit = torch.empty_like(logprobs)
 
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         _forward_kernel[(n_rows,)](
             logits,
             index,
@@ -186,25 +197,29 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             TEMPERATURE=temperature,
             HAS_MASK=row_mask is not None,
             BLOCK_SIZE=_BLOCK_SIZE,
+            enable_fp_fusion=False,
         )
 
         ctx.set_materialize_grads(False)
         ctx.save_for_backward(logits, index, log_z, expected_logit, row_mask)
-        ctx.layout = batch_size, rows_per_batch, logits_batch_stride, logits_row_stride
-        ctx.index_strides = index_batch_stride, index_row_stride
-        ctx.mask_strides = mask_batch_stride, mask_row_stride
         ctx.temperature = temperature
         return logprobs, entropy
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):
         logits, index, log_z, expected_logit, row_mask = ctx.saved_tensors
-        batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = ctx.layout
+        # Read the strides off the unpacked tensors, not forward's: saved-tensor hooks such as activation offloading
+        # can return a sliced view as a contiguous copy.
+        batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = _layout(logits)
         n_rows = batch_size * rows_per_batch
         n_cols = logits.shape[-1]
-        index_batch_stride, index_row_stride = ctx.index_strides
-        mask_batch_stride, mask_row_stride = ctx.mask_strides
-        row_mask_ptr = index if row_mask is None else row_mask
+        index_batch_stride, index_row_stride = _row_strides(index)
+        if row_mask is None:
+            row_mask_ptr = index
+            mask_batch_stride = mask_row_stride = 0
+        else:
+            row_mask_ptr = row_mask
+            mask_batch_stride, mask_row_stride = _row_strides(row_mask)
         grad_logits = torch.empty_like(logits, memory_format=torch.contiguous_format)
         grad_logits_batch_stride, grad_logits_row_stride = rows_per_batch * n_cols, n_cols
 
@@ -218,6 +233,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             grad_entropy = expected_logit
         else:
             grad_entropy = grad_entropy.contiguous()
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         _backward_kernel[(n_rows, triton.cdiv(n_cols, _BLOCK_SIZE))](
             logits,
             index,
@@ -242,6 +258,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             BLOCK_SIZE=_BLOCK_SIZE,
             HAS_LOGPROB_GRAD=has_logprob_grad,
             HAS_ENTROPY_GRAD=has_entropy_grad,
+            enable_fp_fusion=False,
         )
         return grad_logits, None, None, None
 

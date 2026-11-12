@@ -446,6 +446,18 @@ training_args = GRPOConfig(
 )
 ```
 
+In the [`experimental.async_grpo.AsyncGRPOTrainer`], the old log-probabilities are the sampler's, so the ratio is taken directly between the trained policy and the sampler, and tokens outside  \\( [C_{\min}, C_{\max}] \\) are dropped from the loss. It is on by default:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
+)
+```
+
 ### Sequence-level Importance Sampling
 
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
@@ -604,13 +616,26 @@ $$
 \log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
 $$
 
-Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
 
 ```python
 from trl.experimental.async_grpo import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
+    top_p=0.95,
+    top_k=512,
+)
+```
+
+It is also supported in the [`GRPOTrainer`] with vLLM in colocate mode (>= 0.28): with `top_k > 0` and the importance sampling correction enabled (the default), vLLM returns each token's support and the trainer renormalizes over it:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
     top_p=0.95,
     top_k=512,
 )
@@ -697,6 +722,32 @@ training_args = GRPOConfig(
     vespo_lambda_pos=3.0,  # decay factor (c2 in paper Section 3.4) for positive advantages
     vespo_k_neg=3.0,  # power exponent (c1 in paper Section 3.4) for negative advantages
     vespo_lambda_neg=2.0,  # decay factor (c2 in paper Section 3.4) for negative advantages
+)
+```
+
+### Score Centering Stabilizes Off-policy Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2609.20807
+
+Under a training-inference mismatch, the score  \\( \nabla_\theta \log \pi_\theta \\) does not average to zero under the sampler  \\( \mu \\), so every update drifts the policy toward the sampler, by an amount that grows with the advantage. Score centering subtracts that expectation at every position, so a constant advantage no longer moves the policy:
+
+$$
+\nabla_\theta \mathcal{L} = - \mathbb{E}_{o \sim \mu} \left[ \hat{A} \left( f(r_t) \nabla_\theta \log \pi_\theta(o_t) - \mathbb{E}_{v \sim \mu} \left[ f(r_v) \nabla_\theta \log \pi_\theta(v) \right] \right) \right], \quad r_v = \frac{\pi_\theta(v)}{\mu(v)},
+$$
+
+with  \\( f \\) the importance weight of [Masked Importance Sampling](#masked-importance-sampling):  \\( f(r) = r \\) inside  \\( [C_{\min}, C_{\max}] \\) and  \\( 0 \\) outside. The inner expectation is taken over the sampler's most likely tokens at each position, whose log-probabilities it reports; on the rest of the vocabulary the sampler is taken as the trained policy rescaled to the remaining mass.
+
+It is the default objective of the [`experimental.async_grpo.AsyncGRPOTrainer`], whose rollout worker requests the top log-probabilities of every generated token from vLLM:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    score_centering=True,  # default; `False` trains with the clipped objective instead
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
+    num_sampler_logprobs=8,  # tokens per position the expectation is taken over
 )
 ```
 
@@ -1214,6 +1265,33 @@ training_args = DPOConfig(
 )
 ```
 
+### Unbiased Alignment for Large Language Models with Noisy Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2607.03248
+
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the policy trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased DPO (UDPO) loss, called α-UDPO in the paper:
+
+$$
+\mathcal{L}_{\text{UDPO}} = -\alpha \log \frac{e^{z} + a}{e^{z} + 1}, \quad z = \beta \left( \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
+$$
+
+which is the DPO loss for  \\( a = 0 \\). The constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as for DPO. Unlike [Robust DPO](#provably-robust-dpo-aligning-language-models-with-noisy-feedback), the paper shows that the optimum stays unbiased when the true flip probability is lower than the assumed  \\( \varepsilon \\) (Corollary 4.7), so  \\( \varepsilon \\) does not have to be estimated exactly. In TRL,  \\( \varepsilon \\) is set with `label_smoothing`. To use  \\( a = 0.8 \\), the value the paper recommends to practitioners:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="udpo",
+    label_smoothing=4 / 9,  # flip probability ε, for a = ε / (1 - ε) = 0.8 as recommended in Appendix B.1 of the paper
+    beta=0.1,  # 0.1 for HH and UltraFeedback, 0.5 for TL;DR (Appendix B.1 of the paper)
+    learning_rate=5e-6,  # 5e-6 for Llama-3.2-3B and Qwen3-1.7B, 1e-6 for 8B models (Appendix B.1 of the paper)
+    num_train_epochs=3,  # Appendix B.1 of the paper
+    per_device_train_batch_size=16,  # total batch size of 128 on 8 GPUs (Appendix B.1 of the paper)
+    max_grad_norm=10.0,  # Appendix B.1 of the paper
+    warmup_ratio=0.1,  # Appendix B.1 of the paper
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`KTOTrainer`]
@@ -1348,8 +1426,8 @@ $$
 i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
 
 ```bash
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+torchrun --nproc_per_node 8 examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --use_peft \
     --gradient_checkpointing \
     --model_prediction_type mean_loo \
@@ -1528,41 +1606,11 @@ training_args = CPOConfig(
 
 ## Triple Preference Optimization
 
-Papers relating to the [`experimental.tpo.TPOTrainer`]
-
 ### Triple Preference Optimization: Achieving Better Alignment using a Single Step Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2405.16681
 
-Introduces Triple Preference Optimization (TPO), a preference learning method that aligns an LLM with three responses per prompt — a gold (`reference`) completion, a preferred (`chosen`) completion and a dispreferred (`rejected`) completion — in a single optimization step. TPO combines a contrastive objective on the (chosen, rejected) pair with a supervised NLL term on the gold response, removing the need for a separate SFT stage and the reference model used in DPO. Used in TRL via [`experimental.tpo.TPOTrainer`]. To reproduce the paper's setting (Llama-3-Base, 5K), use this configuration:
-
-```python
-from trl.experimental.tpo import TPOConfig
-
-training_args = TPOConfig(
-    loss_type="sigmoid",  # contrastive loss between chosen and rejected (Section 3 of the paper)
-    tpo_alpha=1.0,  # weight of the NLL term on the gold response (Section 3 of the paper)
-    beta=0.01,  # β temperature (Table 6 of the paper)
-    learning_rate=5e-7,  # Table 6 of the paper
-    num_train_epochs=1,
-    max_length=1024,
-)
-```
-
-To use the TPO-L variant (length-normalized log-probabilities with a target reward margin γ), set `loss_type="tpo-l"` and `tpo_l_gamma`:
-
-```python
-from trl.experimental.tpo import TPOConfig
-
-training_args = TPOConfig(
-    loss_type="tpo-l",  # length-normalized variant (Section 3 of the paper)
-    tpo_alpha=1.0,
-    beta=0.01,
-    tpo_l_gamma=0.5,  # γ target reward margin (Table 6 of the paper, Llama-3-Base 5K)
-    learning_rate=5e-7,
-    num_train_epochs=1,
-)
-```
+Introduces Triple Preference Optimization (TPO), a preference learning method that aligns an LLM with three responses per prompt — a gold (`reference`) completion, a preferred (`chosen`) completion and a dispreferred (`rejected`) completion — in a single optimization step. TPO combines a contrastive objective on the (chosen, rejected) pair with a supervised NLL term on the gold response, removing the need for a separate SFT stage and the reference model used in DPO. TRL shipped an implementation as `TPOTrainer` up to v1.16; it is no longer part of the library and remains available in the git history.
 
 ## Nash Learning from Human Feedback
 
@@ -1761,6 +1809,60 @@ training_args = GOLDConfig(
 )
 ```
 
+### X-Token: Projection-Guided Cross-Tokenizer Knowledge Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2605.21699
+
+X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. It is an **off-policy** method (`lmbda=0`): the dataset provides the completion text, both student and teacher run forward passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy student rollouts are needed. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly. Used in TRL via [`experimental.gold.GOLDTrainer`] with `xtoken_loss_type="p_kl"` or `"h_kl"`.
+
+Two loss formulations are provided:
+
+| Variant | `xtoken_loss_type` | Description |
+|---------|-------------------|-------------|
+| P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
+| H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+
+As in the reference implementation, H-KL slices the full-vocabulary log-probabilities to the common set and P-KL averages the teacher log-probabilities over each span without renormalizing, so the KD term can be negative. CE and KD use separate token and aligned-span counts over each accumulation window. Dynamic CE/KD balancing and P-KL top-k selection are computed per microbatch.
+
+This implementation uses a frozen projection matrix. The paper also jointly learns the matrix for P-KL; that variant is not implemented here.
+
+First build the projection matrix with the prep scripts in `examples/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
+
+```bash
+python examples/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+```
+
+Then train with the example script (off-policy, no vLLM needed):
+
+```bash
+python examples/xtoken/xtoken.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen3-4B \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --xtoken_loss_type p_kl \
+    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt \
+    --lmbda 0.0
+```
+
+or pass the path to [`experimental.gold.GOLDConfig`] directly:
+
+```python
+from trl.experimental.gold import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=0.0,  # "off-policy knowledge distillation"
+    xtoken_temperature=1.0,  # "temperature τ=1.0"
+    xtoken_dynamic_scaling=True,  # Eq. (7): stop-gradient CE/KD balance
+    xtoken_loss_type="p_kl",
+    xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt",
+    teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
+)
+```
+
 ### Knowledge Distillation of Large Language Models
 
 **📜 Paper**: https://huggingface.co/papers/2306.08543
@@ -1856,6 +1958,43 @@ Simple Self-Distillation (SSD) improves code generation by sampling completions 
 
 TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
 
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high-confidence predictions and cancellation when student and teacher logits nearly
+agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
+probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
+KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+
+Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
+identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
+TRL's kernels preserve these gradients using stable FP32 formulas.
+
+The separate FSDP2 output-casting issue discussed in Appendix B.1 is addressed by
+[Accelerate #4403](https://github.com/huggingface/accelerate/pull/4403). Older Accelerate versions need a mixed
+precision policy with `output_dtype=None` to retain FP32 kernel outputs.
+
+The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
+student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
+paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
+handled when constructing the models, independently of the config. Other trainer defaults remain unchanged.
+
+```python
+from trl import DistillationConfig
+
+training_args = DistillationConfig(
+    beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
+    temperature=4.0,  # "distillation temperature T=4"
+    learning_rate=2e-3,  # "eta=2 x 10^-3"
+    lr_scheduler_type="constant",
+    optim="adamw_torch",  # AdamW with zero weight decay has the same updates as Adam.
+    weight_decay=0.0,  # "lambda=0"
+    adam_epsilon=1e-8,  # "epsilon=10^-8"
+    max_steps=2000,  # "2,000 steps of Adam"
+)
+```
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
@@ -1866,16 +2005,17 @@ ZeRO (Zero Redundancy Optimizer) eliminates memory redundancies in data- and mod
 
 TRL supports ZeRO via the [DeepSpeed integration](deepspeed_integration). To use it, provide a DeepSpeed configuration file with your desired settings,
 
-```yaml
-# config.yaml
-distributed_type: DEEPSPEED
-num_processes: 2
-deepspeed_config:
-  zero_stage: 3
+```json
+{
+  "zero_optimization": {"stage": 3},
+  "bf16": {"enabled": "auto"},
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto"
+}
 ```
 
-and launch the training script using `accelerate launch --config_file config_file`.
+set `deepspeed="zero3.json"` in the training config, and launch the training script with torchrun.
 
 ```sh
-accelerate launch --config_file config.yaml train.py
+torchrun --nproc_per_node 2 train.py
 ```
