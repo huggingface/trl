@@ -106,24 +106,30 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> None:
+def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> threading.Thread:
     # Daemon thread that translates the parent's mp.Event into the child's
     # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
-        stop_event.wait()
+        # Poll instead of `stop_event.wait()`: a thread still blocked in `wait()` when this process dies is never
+        # woken, and the parent's `stop_event.set()` in `stop()` then waits for it forever
+        while not stop_event.is_set():
+            time.sleep(0.1)
         try:
             rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
         except RuntimeError:
             # Loop already closed (run() returned before stop fired). Nothing to do.
             pass
 
-    threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher").start()
+    watcher = threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher")
+    watcher.start()
+    return watcher
 
 
 def _child_main(
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
+    token_allowance: MPValue,
     stop_event: MPEvent,
     child_ready_event: MPEvent,
     heartbeat_value: MPValue,
@@ -141,18 +147,25 @@ def _child_main(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
+        token_allowance=token_allowance,
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
         metrics_queue=metrics_queue,
     )
     child_ready_event.set()
-    _spawn_stop_watcher(rollout_loop, stop_event)
+    watcher = _spawn_stop_watcher(rollout_loop, stop_event)
     try:
         rollout_loop.run()
     except Exception:
         traceback.print_exc()
         raise
+    finally:
+        # The worker is stopping either way: release the watcher so it does not outlive `run()`
+        stop_event.set()
+        watcher.join(timeout=1.0)
+        if watcher.is_alive():
+            logger.warning("Stop watcher did not exit within 1s.")
 
 
 def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | None) -> tuple[list[int], list[float]]:
@@ -205,12 +218,12 @@ class _AsyncRolloutLoop:
         eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
+        token_allowance: MPValue,
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         metrics_queue: MPQueue,
-        max_concurrent_rollouts: int = 128,
-        queue_maxsize: int = 0,
+        max_concurrent_rollouts: int = 512,
         vllm_server_url: str = "http://localhost:8000",
         lora_name: str | None = None,
         teacher_server_urls: dict[str, str] | None = None,
@@ -241,6 +254,10 @@ class _AsyncRolloutLoop:
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
+        self._token_allowance = token_allowance
+        self._produced_tokens = 0
+        self._rollouts_unqueued = 0
+        self._tokens_per_rollout = 0.0
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
@@ -252,7 +269,6 @@ class _AsyncRolloutLoop:
         self._pushed_at = time.monotonic()
 
         self.max_concurrent_rollouts = max_concurrent_rollouts
-        self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
@@ -346,19 +362,38 @@ class _AsyncRolloutLoop:
             self.teacher_max_model_lens[teacher_id] = models["data"][0].get("max_model_len")
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
+    def _fits_token_allowance(self) -> bool:
+        """Whether a new rollout fits in the token allowance the trainer sets.
+
+        Counts the tokens already queued, plus the rollouts in flight at the mean tokens per rollout. Until a rollout
+        has been scored there is no mean, so rollouts start one at a time.
+        """
+        if self._rollouts_unqueued and not self._tokens_per_rollout:
+            return False
+        expected_tokens = self._produced_tokens + self._rollouts_unqueued * self._tokens_per_rollout
+        return expected_tokens < self._token_allowance.value
+
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         rollout_tasks: dict[asyncio.Task, int] = {}
         free_slots = set(range(self.max_concurrent_rollouts))
         work_iter = self._repeat_iterator()
+        t_gated = None
 
         try:
             while True:
                 self._heartbeat_value.value = time.time()
-                while free_slots and not stop_event.is_set():
+                while free_slots and not stop_event.is_set() and self._fits_token_allowance():
                     prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
                     task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
                     rollout_tasks[task] = slot
+                    self._rollouts_unqueued += 1
+                    if t_gated is not None:
+                        self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_gated})
+                        t_gated = None
+                if t_gated is None and self._tokens_per_rollout and free_slots and not stop_event.is_set():
+                    t_gated = time.monotonic()
+                    logger.info("generation is max_staleness steps ahead, waiting for the trainer to consume...")
 
                 if not rollout_tasks:
                     if stop_event.is_set():
@@ -383,7 +418,7 @@ class _AsyncRolloutLoop:
                         {
                             "rollout/concurrency": float(len(rollout_tasks)),
                             # Windowed, not cumulative. A cumulative average cannot show a generation stall.
-                            "rollout/generated_tok_s": (
+                            "rollout/generated_tokens_per_s": (
                                 float(self._total_completion_tokens - self._pushed_completion_tokens),
                                 now - self._pushed_at,
                             ),
@@ -405,24 +440,14 @@ class _AsyncRolloutLoop:
                             num_samples=self.num_completions_to_print,
                         )
 
-                    t_blocked = None
-                    while True:
-                        try:
-                            sample.enqueued_at = time.time()
-                            self.rollout_buffer.put_nowait(sample)
-                            break
-                        except queue.Full:
-                            if stop_event.is_set():
-                                return
-                            if t_blocked is None:
-                                t_blocked = time.monotonic()
-                                logger.info(
-                                    f"rollout buffer full (maxsize={self.queue_maxsize}), "
-                                    "waiting for trainer to consume..."
-                                )
-                            await asyncio.sleep(0.1)
-                    if t_blocked is not None:
-                        self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
+                    sample.enqueued_at = time.time()
+                    self.rollout_buffer.put_nowait(sample)
+                    tokens = len(sample.input_ids)
+                    self._produced_tokens += tokens
+                    self._rollouts_unqueued -= 1
+                    self._tokens_per_rollout = (
+                        tokens if not self._tokens_per_rollout else 0.9 * self._tokens_per_rollout + 0.1 * tokens
+                    )
         finally:
             for task in rollout_tasks:
                 task.cancel()
@@ -430,7 +455,10 @@ class _AsyncRolloutLoop:
                 await asyncio.gather(*rollout_tasks, return_exceptions=True)
 
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
-        """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
+        """Retry an aiohttp coroutine on transport errors and 5xx responses with bounded exponential backoff, counting the
+        retries.
+
+        A 4xx is raised at once, since sending the same request again gets the same answer.
 
         Ported from [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._retry`]. Every retried call
         in this loop targets a vLLM server — the student's or a teacher's — so the counter is named for the dependency
@@ -440,9 +468,11 @@ class _AsyncRolloutLoop:
             try:
                 return await coro_factory()
             except _RETRYABLE_HTTP_ERRORS as e:
-                if attempt >= max_attempts - 1:
+                if attempt >= max_attempts - 1 or (
+                    isinstance(e, aiohttp.ClientResponseError) and 400 <= e.status < 500
+                ):
                     raise
-                self._counters["rollout/vllm_retry_total"] += 1
+                self._counters["rollout/vllm_retry_count"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
                 logger.warning(
                     f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
@@ -468,7 +498,7 @@ class _AsyncRolloutLoop:
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
         so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
-        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
+        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift or tool metrics to report.
         """
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
@@ -477,22 +507,32 @@ class _AsyncRolloutLoop:
         self._rates["rollout/score_s"][1] += 1
         if len(self.teacher_server_urls) > 1:
             # MOPD: one slow teacher throttles only the rollouts routed to it, which the blended mean above hides.
-            # Keyed the way the trainer names `teacher_jsd/{teacher_id}`, so the per-teacher series group together.
-            self._rates[f"teacher_score_s/{teacher_id}"][0] += score_s
-            self._rates[f"teacher_score_s/{teacher_id}"][1] += 1
+            # Keyed the way the trainer names `teacher/{teacher_id}/jsd`, so the per-teacher series group together.
+            self._rates[f"teacher/{teacher_id}/score_s"][0] += score_s
+            self._rates[f"teacher/{teacher_id}/score_s"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
-            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         self._push_metrics(
             {
                 "rollout/duration_s": duration_s,
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -662,7 +702,10 @@ class _AsyncRolloutLoop:
 
         async def _do_post():
             async with self.session.post(f"{base_url}{path}", json=payload, timeout=client_timeout) as response:
-                response.raise_for_status()
+                if response.status >= 400:
+                    raise aiohttp.ClientResponseError(
+                        response.request_info, response.history, status=response.status, message=await response.text()
+                    )
                 content = await response.json()
                 return content if content else {}
 
@@ -681,7 +724,6 @@ class AsyncRolloutWorker:
     def __init__(
         self,
         *,
-        queue_maxsize: int = 0,
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
@@ -691,8 +733,9 @@ class AsyncRolloutWorker:
             raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
-        self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
+        self.rollout_buffer = ctx.Queue()
         self._model_version_value = ctx.Value("i", 0)
+        self.token_allowance = ctx.Value("q", 2**62)
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
@@ -702,9 +745,7 @@ class AsyncRolloutWorker:
         # Metrics the child measures, drained by the trainer in `log()`. Bounded and dropped-on-full in the child, so a
         # trainer that stops draining can never block generation.
         self.metrics_queue = ctx.Queue(maxsize=4096)
-        # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
-        # forwarded, the child reads it for "rollout buffer full" log lines.
-        loop_kwargs["queue_maxsize"] = queue_maxsize
+        # Forwarded verbatim to _AsyncRolloutLoop in the child.
         loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
@@ -716,7 +757,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # NOTE Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 
@@ -743,6 +784,7 @@ class AsyncRolloutWorker:
                 self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,
+                self.token_allowance,
                 self._stop_event_mp,
                 self._child_ready_event,
                 self._heartbeat_value,

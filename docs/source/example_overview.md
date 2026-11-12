@@ -6,7 +6,8 @@ Basic single-trainer training scripts are not examples: they live in [`trl/scrip
 
 Shared resources sit at the root of `examples/`:
 
-- [`examples/accelerate_configs`](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs): 🤗 Accelerate configuration files for multi-GPU, DeepSpeed ZeRO, FSDP, and context-parallel setups, used by many examples.
+- [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs): DeepSpeed ZeRO configuration files, passed with `--deepspeed`, used by many examples.
+- [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs): FSDP configuration files, passed with `--fsdp --fsdp_config` (a bare `--fsdp` on the command line needs transformers 5.10 or later; with older versions, set `fsdp=True` in the training config).
 - [`examples/datasets`](https://github.com/huggingface/trl/tree/main/examples/datasets): the scripts used to generate the `trl-lib` datasets used across the examples.
 
 **Getting Started**
@@ -58,6 +59,7 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 | [`rloo_visual_math`](https://github.com/huggingface/trl/tree/main/examples/rloo_visual_math) | RLOO fine-tuning of a multimodal model for reasoning using the [lmms-lab/multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset. | |
 | [`sdft_privileged_context`](https://github.com/huggingface/trl/tree/main/examples/sdft_privileged_context) | Self-distillation fine-tuning with [`experimental.sdft.SDFTTrainer`], distilling privileged (teacher-only) context into the model. | |
 | [`sdpo_math`](https://github.com/huggingface/trl/tree/main/examples/sdpo_math) | SDPO with [`experimental.sdpo.SDPOTrainer`] using verifiable math rewards and optional environment feedback on [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k). | |
+| [`sft_agent_traces`](https://github.com/huggingface/trl/tree/main/examples/sft_agent_traces) | SFT of Qwen3.5-2B on agent traces: Qwen3.5-397B-A17B works through data-analysis [Harbor](harbor) tasks as an OpenCode agent in Hugging Face Sandboxes, recorded by [OpenEnv](openenv), and the student trains on the solved conversations with assistant-only loss. On tasks whose data no trace touched, about 500 traces take it from 7.6% to 33.3% (rollout, dataset and training scripts, and README with the results). | |
 | [`sft_beam`](https://github.com/huggingface/trl/tree/main/examples/sft_beam) | LoRA SFT of reflection/Beam-1.0-501B-A23B on one 8xB300 node with [`SFTTrainer`], sharded at load time by transformers' `DistributedConfig` (expert parallelism with token dispatch). | |
 | [`sft_diffusion_gemma`](https://github.com/huggingface/trl/tree/main/examples/sft_diffusion_gemma) | SFT of the DiffusionGemma block-diffusion language model on GSM8K by extending the [`SFTTrainer`] with a block-diffusion objective. | |
 | [`sft_gemma3`](https://github.com/huggingface/trl/tree/main/examples/sft_gemma3) | SFT of Gemma 3 on the Codeforces COTS dataset. | |
@@ -77,16 +79,16 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 
 ## Distributed Training
 
-You can run the example scripts on multiple GPUs with 🤗 Accelerate:
+You can run the example scripts on multiple GPUs with torchrun:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
 ```
 
 For DeepSpeed ZeRO-{1,2,3}:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero{1,2,3}.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --deepspeed examples/deepspeed_configs/zero{1,2,3}.json --all_arguments_of_the_script
 ```
 
 Adjust `NUM_GPUS` and `--all_arguments_of_the_script` as needed.

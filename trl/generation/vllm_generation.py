@@ -21,11 +21,14 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import torch
+import transformers
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_npu_available,
@@ -38,6 +41,9 @@ from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
+
+if is_peft_available():
+    from peft.utils import ModulesToSaveWrapper
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
@@ -286,12 +292,37 @@ class VLLMGeneration:
         if isinstance(processing_class, ProcessorMixin):
             # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
             self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                self.generation_kwargs["logit_bias"][model.config.vision_start_token_id] = -100
         self.generation_kwargs.update(generation_kwargs or {})
         self.return_sampling_mask = return_sampling_mask
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
         # it requires gathering the parameters, and constant afterwards.
         self._weight_metadata = None
+
+        if is_peft_model(model):
+            # vLLM holds tied word embeddings as one tensor, so PEFT must not train separate copies of them: #7955
+            base_model = model.get_base_model()
+            embeddings = [base_model.get_input_embeddings(), base_model.get_output_embeddings()]
+            originals = [m.original_module if isinstance(m, ModulesToSaveWrapper) else m for m in embeddings]
+            if originals[0].weight is originals[1].weight and embeddings[0].weight is not embeddings[1].weight:
+                names = {module: name.rsplit(".", 1)[-1] for name, module in base_model.named_modules()}
+                copies = " and ".join(f"`{names[m]}`" for m in embeddings if isinstance(m, ModulesToSaveWrapper))
+                raise ValueError(
+                    "The model ties its input embeddings and output layer, but PEFT's `modules_to_save` trains them "
+                    "as separate copies, which vLLM cannot hold. Set `ensure_weight_tying=True` in the PEFT config "
+                    f"(PEFT >= 0.18) to train a single copy, or remove {copies} from `modules_to_save`."
+                )
 
         self._init_vllm()
 
