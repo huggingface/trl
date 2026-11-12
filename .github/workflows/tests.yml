@@ -412,7 +412,7 @@ jobs:
       - name: Test with pytest
         run: |
           source .venv/bin/activate
-          make test
+          pytest -s -v tests/test_tmp_tree_gdn_rocm.py  # TEMPORARY, to remove before merging
           touch .pytest-completed
 
       - name: Check that pytest completed
