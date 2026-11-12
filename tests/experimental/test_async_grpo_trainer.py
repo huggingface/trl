@@ -911,6 +911,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 args=training_args,
             )
 
+    def test_remove_unused_columns_raises(self):
+        # Every dataset column is passed to the reward functions, so unneeded columns are removed from the dataset,
+        # not by the trainer
+        with pytest.raises(ValueError, match="remove_unused_columns"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, remove_unused_columns=True)
+
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
         # training length. The guard fires before the rollout worker is built, so no worker/dataset is needed.

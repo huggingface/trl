@@ -151,6 +151,7 @@ class AsyncGRPOConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
+    > - `remove_unused_columns`: Defaults to `False` instead of `True`, and must stay `False`: every dataset column is passed to the reward functions.
 
     > [!NOTE]
     > Training duration and learning rate under message-mode reconciliation:
@@ -231,6 +232,13 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Always `True` for AsyncGRPO; the base Trainer's skip-and-replay loop does not apply to a live "
             "rollout queue."
+        },
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={
+            "help": "Must be `False` for AsyncGRPO: every dataset column is passed to the reward functions. Remove the "
+            "columns you don't need from the dataset instead."
         },
     )
 
@@ -390,6 +398,13 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.remove_unused_columns:
+            raise ValueError(
+                "`remove_unused_columns=True` is not supported: AsyncGRPO passes every dataset column to the reward "
+                "functions. Remove the columns you don't need from the dataset before passing it to the trainer, for "
+                "example with `dataset.remove_columns(...)`."
+            )
 
         if self.score_centering and self.num_sampler_logprobs < 1:
             raise ValueError("`score_centering=True` needs `num_sampler_logprobs >= 1`.")
