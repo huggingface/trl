@@ -40,7 +40,7 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.decision import DecisionConfig as TransformersDecisionConfig
-from transformers.decision import Question, read_marks
+from transformers.decision import Question
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -139,13 +139,12 @@ def _tokenize_decision(
     request = (
         example["request"] if "request" in example else {"state": example["state"], "questions": example["questions"]}
     )
-    prompts = decision_config.chat_template_kwargs(request, tokenizer)
-    if len(prompts) != 1 or len(prompts[0]["decision_questions"]) != 1:
+    prompts = decision_config.prepare_inputs(request, tokenizer)
+    if len(prompts) != 1 or len(prompts[0][1]) != 1:
         raise ValueError("Each training row must contain exactly one decision question")
-    kwargs = prompts[0]
-    question = kwargs.pop("decision_questions")[0]
-    inputs = tokenizer.apply_chat_template(**kwargs, tokenize=True, return_dict=True, return_tensors="pt")
-    inputs, marks = read_marks(dict(inputs), decision_config._sentinel_ids)
+    inputs, questions = prompts[0]
+    question = questions[0]
+    marks = inputs["marks"]
     if len(marks) != len(question.options) + 1:
         raise ValueError("The decision template must mark one state span and one span per option")
     segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
