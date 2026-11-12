@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`] graduates to the stable API. It runs GRPO with generation decoupled from training: a vLLM server streams rollouts while the trainer updates the model.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`] graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Taxonomy
 

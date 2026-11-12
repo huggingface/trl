@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) graduates to the stable API. It runs GRPO with generation decoupled from training: a vLLM server streams rollouts while the trainer updates the model.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Overview
 
@@ -110,7 +110,7 @@ trainer.train()
 
 ### `AsyncGRPOTrainer`
 
-[`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) runs the same algorithm as [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) with generation decoupled from training: a vLLM server streams rollouts while the trainer updates the model, so the two overlap instead of alternating. The trainer needs vLLM and kernels, and `accuracy_reward` needs math-verify, which you can install with `pip install trl[vllm,kernels,math_verify]`.
+[`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) runs the same algorithm as [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), much faster: a vLLM server streams rollouts while the trainer updates the model, so generation and training overlap instead of alternating. The trainer needs vLLM and kernels, and `accuracy_reward` needs math-verify, which you can install with `pip install trl[vllm,kernels,math_verify]`.
 
 ```python
 # train_async_grpo.py
