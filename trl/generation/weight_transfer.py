@@ -20,8 +20,8 @@ from collections import Counter
 import torch
 from accelerate.logging import get_logger
 
-from ...import_utils import is_vllm_available
-from .vllm_client import VLLMClient
+from ..import_utils import is_vllm_available
+from .async_vllm_client import AsyncVLLMClient
 
 
 if is_vllm_available():
@@ -49,7 +49,7 @@ class WeightTransferClient:
     and the abandoned thread dies with the process.
 
     Args:
-        vllm_client ([`VLLMClient`]):
+        vllm_client ([`AsyncVLLMClient`]):
             Client for the vLLM server that receives the weights.
         weight_update_info (`dict`):
             Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
@@ -61,7 +61,7 @@ class WeightTransferClient:
 
     def __init__(
         self,
-        vllm_client: VLLMClient,
+        vllm_client: AsyncVLLMClient,
         weight_update_info: dict,
         compute_dtype: str | None = None,
     ):

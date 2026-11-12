@@ -1360,7 +1360,7 @@ class TestRLOOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="ensure_weight_tying"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
@@ -1631,7 +1631,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         def reward_func(completions, **kwargs):
             """Reward function with rewards on both sides of the clip range."""
-            return [float(i) - 1.5 for i in range(len(completions))]
+            return [2.0 * i - 2.0 for i in range(len(completions))]
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,

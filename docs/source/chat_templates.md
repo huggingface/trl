@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528 and DeepSeek-V3-0324), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528 and DeepSeek-V3-0324), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -128,7 +128,7 @@ Wrap assistant message output (both `content` and `tool_calls`) with `{% generat
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
 
 ### `idefics3_training.jinja`
 
@@ -171,23 +171,27 @@ Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the ori
 
 ### `muse_glimmer_training.jinja`
 
-Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
+
+### `muse_spark_training.jinja`
+
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
 
 ### `nemotron_3_nano_training.jinja`
 
-Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`: the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`: the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_super_training.jinja`
 
-Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_ultra_training.jinja`
 
-Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `nemotron_3_5_lightning_training.jinja`
 
-Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the only change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`: same as `nemotron_3_nano_training.jinja` — the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
 
 ### `phi3_training.jinja`
 
