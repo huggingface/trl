@@ -996,6 +996,7 @@ def stub_weight_transfer(monkeypatch):
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward function and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -4204,6 +4205,7 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
 
 
 @require_torch_accelerator
+@pytest.mark.usefixtures("stub_weight_transfer")
 @pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
@@ -5077,6 +5079,7 @@ class TestCustomRolloutLoop(TrlTestCase):
         not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
         reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_trainer_loop_cls_runs_in_the_rollout_process(self):
         class FixedTrainer(AsyncGRPOTrainer):
             loop_cls = _FixedRolloutLoop
