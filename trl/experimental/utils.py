@@ -827,9 +827,6 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
         model, "hqq_quantized", False
     )
 
-    if gradient_checkpointing_kwargs is None:
-        gradient_checkpointing_kwargs = {}
-
     for _, param in model.named_parameters():
         # freeze all parameters
         param.requires_grad = False
@@ -913,7 +910,7 @@ def prepare_peft_model(
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=args.gradient_checkpointing,
-            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
+            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs,
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
         args.gradient_checkpointing = False
