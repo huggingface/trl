@@ -128,7 +128,9 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 "top_p": self.config.top_p,
                 "top_k": self.config.top_k,
                 "min_p": self.config.min_p,
-                "repetition_penalty": self.config.repetition_penalty,
+                # Explicit: vLLM fills an omitted penalty from the model's generation config (1.05 for
+                # Qwen2.5-Instruct), and the trainer's log-probs carry none
+                "repetition_penalty": 1.0,
             }
             sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
             self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
@@ -160,9 +162,9 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
             for name, count in metrics.pop("tool_calls_by_name").items():
-                self._counters[f"tools/{name}/call_total"] += count
+                self._counters[f"tools/{name}/call_count"] += count
             for name, count in metrics.pop("tool_failures_by_name").items():
-                self._counters[f"tools/{name}/failure_total"] += count
+                self._counters[f"tools/{name}/failure_count"] += count
             for name, elapsed in metrics.pop("tool_latency"):
                 self._rates["tools/latency_s"][0] += elapsed
                 self._rates["tools/latency_s"][1] += 1
