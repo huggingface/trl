@@ -68,7 +68,9 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
+    @pytest.mark.parametrize(
+        "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
+    )
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file):
         run_command(
             [
@@ -77,7 +79,7 @@ class TestDistributed(TrlTestCase):
                 "2",
                 "-m",
                 "pytest",
-                f"tests/experimental/{test_file}.py",
+                f"tests/{test_file}",
                 "-k",
                 "test_fsdp_checkpoint_body",
                 "-x",

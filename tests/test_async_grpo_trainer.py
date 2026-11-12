@@ -45,9 +45,11 @@ from transformers.testing_utils import torch_device
 
 pytest.importorskip("transformers", minversion="5.2.0")
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
-from trl.experimental.async_grpo.async_grpo_trainer import (
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.generation import weight_transfer as weight_transfer_module
+from trl.generation.weight_transfer import WeightTransferClient
+from trl.trainer import async_grpo_trainer as async_grpo_trainer_module
+from trl.trainer.async_grpo_trainer import (
     TREE_ATTENTION,
     AsyncRolloutLoop,
     AsyncRolloutWorker,
@@ -69,11 +71,9 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     select_adapter_sync,
     validate_lora_for_vllm_sync,
 )
-from trl.generation import weight_transfer as weight_transfer_module
-from trl.generation.weight_transfer import WeightTransferClient
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import (
+from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     is_bf16_supported,
@@ -1942,7 +1942,7 @@ class TestTreePackingParity(TrlTestCase):
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
         model.set_attn_implementation(reference)
-        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+        with patch("trl.trainer.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
