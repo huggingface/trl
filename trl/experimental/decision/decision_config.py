@@ -36,8 +36,3 @@ class DecisionConfig(_BaseConfig):
 
     model_init_kwargs: dict[str, Any] | None = field(default=None, metadata={"help": "Model loading arguments."})
     remove_unused_columns: bool = field(default=False, metadata={"help": "Keep raw decision fields."})
-
-    def __post_init__(self):
-        super().__post_init__()
-        if self.gradient_checkpointing_kwargs is None:
-            self.gradient_checkpointing_kwargs = {"use_reentrant": False}

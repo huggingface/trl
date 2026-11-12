@@ -1966,8 +1966,6 @@ Identifies softmax collapse at high-confidence predictions and cancellation when
 agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
 probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
 KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
-Jeva's Transformers model uses stable log-softmax and signed softplus coverage loss to preserve gradients for
-confident decisions when training with [`experimental.decision.DecisionTrainer`].
 
 Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
 identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.

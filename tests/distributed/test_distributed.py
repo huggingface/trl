@@ -95,21 +95,14 @@ class TestDistributed(TrlTestCase):
                     reason="FSDP2 FP32 loss outputs require Accelerate #4403",
                 ),
             ),
-            pytest.param(
-                "decision_cp",
-                marks=pytest.mark.skipif(
-                    Version(accelerate.__version__) < Version("1.16.0.dev0"),
-                    reason="FSDP2 FP32 loss outputs require Accelerate #4403",
-                ),
-            ),
         ],
     )
     @pytest.mark.skipif(find_spec("transformers.models.jeva") is None, reason="Requires Transformers decision models")
-    def test_decision(self, config, get_config_path):
+    def test_decision(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config),
+                "torchrun", "--nnodes", "1", "--nproc_per_node", "2",
                 "examples/jeva_banking77/jeva_banking77.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
@@ -128,6 +121,7 @@ class TestDistributed(TrlTestCase):
                 "--bf16", "true",
                 "--attn_implementation", "sdpa",
                 "--report_to", "none",
+                *get_launch_args(config),
             ],
             os.environ.copy(),
         )

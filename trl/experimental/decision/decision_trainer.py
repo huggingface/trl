@@ -15,21 +15,15 @@
 # Jeva: System One Models from First Principles
 # Copyright 2026 Qi Li and Xinchao Wang.
 
-import contextlib
-import math
 from collections import defaultdict
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from functools import partial
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import torch.nn.functional as F
 from accelerate.utils import recursively_apply
 from datasets import Dataset, IterableDataset
-from packaging.version import Version
 from transformers import (
     AutoModelForDecision,
     AutoTokenizer,
@@ -38,9 +32,6 @@ from transformers import (
     TrainerCallback,
     set_seed,
 )
-from transformers.data.data_collator import DataCollatorMixin
-from transformers.decision import DecisionConfig as TransformersDecisionConfig
-from transformers.decision import Question
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -51,294 +42,12 @@ if is_peft_available():
     from peft import get_peft_model
 
 
-def _finite(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a finite number")
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be a finite number")
-    return value
-
-
-def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float, ...]:
-    kind = question.type
-    k = len(question.options)
-    allow_null = question.allow_null
-    supplied = [
-        name
-        for name in ("target_index", "target_probs", "p_true", "score")
-        if name in row and (row[name] is not None or name == "target_index")
-    ]
-    if len(supplied) > 1 and row.get("target_index") is None:
-        supplied.remove("target_index")
-    if len(supplied) != 1:
-        raise ValueError("provide exactly one of target_index, target_probs, p_true, or score")
-    label = supplied[0]
-    values, positive_index = None, None
-    if kind == "noul":
-        positive_index = question.options.index("true")
-    if kind == "score":
-        values = tuple(range(k)) if question.values is None else tuple(question.values)
-    probs = [0.0] * (k + 1)
-    if label == "target_probs":
-        raw_probs = row[label]
-        if not isinstance(raw_probs, (list, tuple)) or len(raw_probs) != k + 1:
-            raise ValueError("target_probs must contain null probability followed by one per option")
-        probs = [_finite(value, "target_probs") for value in raw_probs]
-        if min(probs) < 0 or not math.isclose(sum(probs), 1.0, rel_tol=0, abs_tol=1e-5):
-            raise ValueError("target_probs must be nonnegative and sum to one")
-        total = sum(probs)
-        probs = [value / total for value in probs]
-    elif label == "target_index":
-        index = row[label]
-        if index is None:
-            if not allow_null:
-                raise ValueError("a null target requires allow_null=true")
-            probs[0] = 1.0
-        elif type(index) is not int or not 0 <= index < k:
-            raise ValueError("target_index must be a zero-based option index or null")
-        else:
-            probs[index + 1] = 1.0
-    elif label == "p_true":
-        if kind != "noul":
-            raise ValueError("p_true is only valid for noul")
-        probability = _finite(row[label], label)
-        if not 0 <= probability <= 1:
-            raise ValueError("p_true must be between zero and one")
-        probs[positive_index + 1] = probability
-        probs[2 - positive_index] = 1.0 - probability
-    else:
-        if kind != "score":
-            raise ValueError("score is only valid for score records")
-        score = _finite(row[label], label)
-        if not values[0] <= score <= values[-1]:
-            raise ValueError("score must fall within the supplied rubric values")
-        for index, value in enumerate(values):
-            if score <= value:
-                if index == 0:
-                    probs[1] = 1.0
-                else:
-                    fraction = (score - values[index - 1]) / (value - values[index - 1])
-                    probs[index] = 1.0 - fraction
-                    probs[index + 1] = fraction
-                break
-    if not allow_null and probs[0] != 0:
-        raise ValueError("null target mass requires allow_null=true")
-    return tuple(probs)
-
-
-def _tokenize_decision(
-    example: dict[str, Any],
-    tokenizer: PreTrainedTokenizerBase,
-    decision_config: TransformersDecisionConfig,
-    max_state_length: int,
-    max_option_length: int,
-    truncation: str,
-) -> dict[str, Any]:
-    """Render one decision and prepare unpadded inputs and targets for dataset preprocessing."""
-    request = (
-        example["request"] if "request" in example else {"state": example["state"], "questions": example["questions"]}
-    )
-    prompts = decision_config.prepare_inputs(request, tokenizer)
-    if len(prompts) != 1 or len(prompts[0][1]) != 1:
-        raise ValueError("Each training row must contain exactly one decision question")
-    inputs, questions = prompts[0]
-    question = questions[0]
-    marks = inputs["marks"]
-    if len(marks) != len(question.options) + 1:
-        raise ValueError("The decision template must mark one state span and one span per option")
-    segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
-    sequences = []
-    for index, segment in enumerate(segments):
-        limit = max_state_length if index == 0 else max_option_length
-        if truncation == "error" and len(segment) > limit:
-            raise ValueError(f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'")
-        segment = segment[-limit:] if tokenizer.truncation_side == "left" else segment[:limit]
-        sequences.append(segment.tolist())
-    return {
-        "input_ids": sequences[0],
-        "option_input_ids": sequences[1:],
-        "labels": list(normalize_target(example, question)),
-        "allow_null": question.allow_null,
-        "is_choice": question.type == "choice",
-    }
-
-
-@dataclass
-class DataCollatorForJeva(DataCollatorMixin):
-    """
-    Batch typed decisions with separate state and option tokenization.
-
-    Each example contains a `request` (a dictionary or JSON string), or `state` and `questions`, with one question.
-    Supply one of `target_index`, `target_probs`, `p_true`, or `score` as the target. The collator returns padded state
-    inputs, flattened option inputs, an option mask, and target distributions with null probability first.
-
-    For repeated training or evaluation, preprocess once with `dataset.map(collator.tokenize)`. The collator also
-    accepts these prepared examples and only pads them when building batches.
-
-    Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            Tokenizer used by the shared encoder. Padding is applied on the right.
-        decision_config ([`~transformers.DecisionConfig`]):
-            Decision settings and template from the model.
-        max_state_length (`int`, *optional*, defaults to `9000`):
-            Maximum length of the state and question text.
-        max_option_length (`int`, *optional*, defaults to `8192`):
-            Maximum length of each option text.
-        truncation (`str`, *optional*, defaults to `"error"`):
-            Reject overflowing text (`"error"`) or truncate it (`"truncate"`).
-        option_chunk_size (`int`, *optional*):
-            Number of options encoded in one forward pass.
-        return_tensors (`str`, *optional*, defaults to `"pt"`):
-            Type of tensor to return. Only `"pt"` is supported.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    decision_config: TransformersDecisionConfig
-    max_state_length: int = 9000
-    max_option_length: int = 8192
-    truncation: str = "error"
-    option_chunk_size: int | None = None
-    return_tensors: str = "pt"
-
-    def __post_init__(self):
-        if self.max_state_length < 1 or self.max_option_length < 1:
-            raise ValueError("max_state_length and max_option_length must be positive")
-        if self.option_chunk_size is not None and self.option_chunk_size < 1:
-            raise ValueError("option_chunk_size must be positive or None")
-        if self.truncation not in {"error", "truncate"}:
-            raise ValueError("truncation must be error or truncate")
-
-    def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
-        """Render one decision and prepare unpadded inputs and targets for dataset preprocessing."""
-        return _tokenize_decision(
-            example,
-            self.tokenizer,
-            self.decision_config,
-            self.max_state_length,
-            self.max_option_length,
-            self.truncation,
-        )
-
-    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        if "input_ids" not in features[0]:
-            features = [self.tokenize(example) for example in features]
-        states = [example["input_ids"] for example in features]
-        options = [option for example in features for option in example["option_input_ids"]]
-        encoded = [
-            dict(self.tokenizer.pad({"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"))
-            for sequences in (states, options)
-        ]
-        counts = torch.tensor([len(example["option_input_ids"]) for example in features])
-        option_mask = torch.arange(counts.max())[None, :] < counts[:, None]
-        labels = torch.zeros(len(features), option_mask.shape[1] + 1)
-        for index, example in enumerate(features):
-            labels[index, : len(example["labels"])] = torch.tensor(example["labels"])
-        return {
-            "option_chunk_size": self.option_chunk_size,
-            **encoded[0],
-            **{f"option_{key}": value for key, value in encoded[1].items()},
-            "num_options": counts,
-            "option_mask": option_mask,
-            "labels": labels,
-            "allow_null": torch.tensor([example["allow_null"] for example in features]),
-            "is_choice": torch.tensor([example["is_choice"] for example in features]),
-        }
-
-
-@dataclass
-class DataCollatorForClm(DataCollatorMixin):
-    """
-    Pack CLM questions with a shared pool of distinct candidates for contrastive training.
-
-    Accepts the shared decision request schema with one question per row. Nullable decisions are unsupported.
-    Preprocess with `dataset.map(collator.tokenize)` to render and tokenize each question once. Batching packs the
-    states and unique candidates into one prompt and builds soft targets over the candidate pool. `option_mask`
-    restricts reported probabilities to each question's own candidates; the model's contrastive loss uses the full
-    pool. Candidate identity is determined by its token IDs after truncation.
-
-
-    Args:
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            Tokenizer used to render and encode states and candidates.
-        decision_config ([`~transformers.DecisionConfig`]):
-            Decision settings and template from the model.
-        max_state_length (`int`, *optional*, defaults to `2047`):
-            Maximum state and question token length.
-        max_option_length (`int`, *optional*, defaults to `2047`):
-            Maximum candidate token length.
-        truncation (`str`, *optional*, defaults to `"error"`):
-            Reject overflowing text (`"error"`) or truncate it (`"truncate"`) using the tokenizer's truncation side.
-        return_tensors (`str`, *optional*, defaults to `"pt"`):
-            Type of tensor to return. Only `"pt"` is supported.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    decision_config: TransformersDecisionConfig
-    max_state_length: int = 2047
-    max_option_length: int = 2047
-    truncation: str = "error"
-    return_tensors: str = "pt"
-
-    def __post_init__(self):
-        if self.max_state_length < 1 or self.max_option_length < 1:
-            raise ValueError("max_state_length and max_option_length must be positive")
-        if self.truncation not in {"error", "truncate"}:
-            raise ValueError("truncation must be error or truncate")
-
-    def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
-        """Render one decision and prepare its candidate targets for dataset preprocessing."""
-        features = _tokenize_decision(
-            example,
-            self.tokenizer,
-            self.decision_config,
-            self.max_state_length,
-            self.max_option_length,
-            self.truncation,
-        )
-        if features["allow_null"]:
-            raise ValueError("CLM does not support nullable decisions")
-        features["labels"] = features["labels"][1:]
-        return features
-
-    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        if "input_ids" not in features[0]:
-            features = [self.tokenize(example) for example in features]
-        pool, columns, sequences, counts = {}, [], [], []
-        for example in features:
-            sequences.append(example["input_ids"])
-            row_columns, count = [], 0
-            for ids in example["option_input_ids"]:
-                key = tuple(ids)
-                if key not in pool:
-                    pool[key] = len(pool)
-                    sequences.append(ids)
-                    count += 1
-                row_columns.append(pool[key])
-            columns.append(row_columns)
-            counts.append(count)
-        labels = torch.zeros(len(features), len(pool))
-        option_mask = torch.zeros_like(labels, dtype=torch.bool)
-        for index, (example, row_columns) in enumerate(zip(features, columns, strict=True)):
-            indices = torch.tensor(row_columns)
-            labels[index].scatter_add_(0, indices, torch.tensor(example["labels"]))
-            option_mask[index, indices] = True
-        return {
-            "input_ids": torch.tensor([[token for sequence in sequences for token in sequence]]),
-            "marks": torch.tensor([[len(sequence) for sequence in sequences]]).cumsum(-1),
-            "num_options": torch.tensor([counts]),
-            "labels": labels,
-            "option_mask": option_mask,
-            "is_choice": torch.tensor([example["is_choice"] for example in features]),
-        }
-
-
 class DecisionTrainer(_BaseTrainer):
     """
     Trainer for models that return a supervised decision loss.
 
     Models return a mean `loss` and candidate `logits`. Labels may be class indices or target distributions. Coverage
-    and MoE auxiliary outputs are optional. Optimization, distributed wrapping, checkpointing, and callbacks use
+    outputs are optional. Optimization, distributed wrapping, checkpointing, and callbacks use
     [`~transformers.Trainer`].
 
     Args:
@@ -416,7 +125,6 @@ class DecisionTrainer(_BaseTrainer):
             if not is_peft_available():
                 raise ImportError("Install `trl[peft]` to use peft_config")
             model = get_peft_model(model, peft_config)
-        text_config = model.config.get_text_config()
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         super().__init__(
             model=model,
@@ -432,61 +140,19 @@ class DecisionTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
         self.model_accepts_loss_kwargs = False
-        self._cp_group = None
         parallelism_config = self.accelerator.parallelism_config
-        if parallelism_config is not None and parallelism_config.cp_enabled:
-            if parallelism_config.cp_backend != "torch":
-                raise ValueError("Decision context parallelism requires the torch backend with FSDP2")
-            if not model.base_model.supports_context_parallel:
-                raise ValueError(
-                    "Context parallelism requires a full causal attention encoder without recurrent layers"
-                )
-            if text_config._attn_implementation != "sdpa":
-                raise ValueError("Context parallelism requires an encoder loaded with attn_implementation='sdpa'")
-            self._cp_group = self.accelerator.torch_device_mesh["cp"].get_group()
-        if (
-            Version(accelerate.__version__) >= Version("1.12.0")
-            and parallelism_config is not None
-            and parallelism_config.sp_enabled
-        ):
-            raise ValueError(
-                "DecisionTrainer does not support DeepSpeed sequence parallelism; use torch context parallelism"
-            )
+        if parallelism_config is not None and (parallelism_config.cp_enabled or parallelism_config.sp_enabled):
+            raise ValueError("DecisionTrainer does not support context or sequence parallelism")
 
     def _get_num_items_in_batch(self, batch_samples, device):
         count = torch.tensor(sum(batch["labels"].shape[0] for batch in batch_samples), device=device)
         return self.accelerator.gather(count).sum()
 
-    def _prepare_context_parallel_inputs(self, model, inputs):
-        if self._cp_group is None:
-            return contextlib.nullcontext, inputs
-        cp_size = self.accelerator.parallelism_config.cp_size
-        prefixes = ("", "option_") if "option_input_ids" in inputs else ("",)
-        length = max(inputs[f"{prefix}input_ids"].shape[1] for prefix in prefixes)
-        padded_length = length + (-length) % (2 * cp_size)
-        buffers = []
-        for prefix in prefixes:
-            if "option_input_ids" in inputs:
-                inputs[f"{prefix}sequence_lengths"] = inputs[f"{prefix}attention_mask"].sum(-1)
-            length = inputs[f"{prefix}input_ids"].shape[1]
-            pad_length = padded_length - length
-            inputs[f"{prefix}input_ids"] = F.pad(
-                inputs[f"{prefix}input_ids"], (0, pad_length), value=self.processing_class.pad_token_id
-            )
-            inputs[f"{prefix}attention_mask"] = F.pad(inputs[f"{prefix}attention_mask"], (0, pad_length))
-            inputs[f"{prefix}position_ids"] = (
-                torch.arange(padded_length, device=inputs[f"{prefix}input_ids"].device)[None, :]
-                .expand(inputs[f"{prefix}input_ids"].shape[0], -1)
-                .clone()
-            )
-            buffers.extend(inputs[f"{prefix}{key}"] for key in ("input_ids", "attention_mask", "position_ids"))
-        return partial(
-            self.accelerator.maybe_context_parallel, buffers=buffers, buffer_seq_dims=[1] * len(buffers)
-        ), inputs
-
     @staticmethod
     def _get_decision_probabilities(outputs, inputs):
         logits = outputs.logits.float()
+        if logits.ndim == 1:
+            logits = logits[None]
         mask = inputs.get("option_mask", torch.ones_like(logits, dtype=torch.bool))
         probabilities = logits.masked_fill(~mask, -torch.inf).softmax(-1)
         allow_null = inputs.get("allow_null")
@@ -512,12 +178,10 @@ class DecisionTrainer(_BaseTrainer):
         if self.accelerator.num_processes > 1 and inputs.get("option_chunk_size") is not None:
             count = inputs["option_input_ids"].new_tensor([inputs["option_input_ids"].shape[0]])
             padding = self.accelerator.gather(count).max().item() - count.item()
-            for key in ("option_input_ids", "option_attention_mask", "option_position_ids", "option_sequence_lengths"):
+            for key in ("option_input_ids", "option_attention_mask"):
                 if key in model_inputs:
                     value = model_inputs[key]
                     model_inputs[key] = torch.cat([value, value[:1].expand(padding, *value.shape[1:])])
-        if self._cp_group is not None and "option_input_ids" in inputs:
-            model_inputs["cp_group"] = self._cp_group
         loss, outputs = super().compute_loss(model, model_inputs, return_outputs=True)
         loss = loss.float()
         if num_items_in_batch is not None:
@@ -529,7 +193,10 @@ class DecisionTrainer(_BaseTrainer):
             has_null = "allow_null" in inputs
             candidates = targets[:, 1:] if has_null else targets
             option_mask = mask[:, 1:] if has_null else mask
-            log_q = outputs.logits.float().masked_fill(~option_mask, -torch.inf).log_softmax(-1)
+            logits = outputs.logits.float()
+            if logits.ndim == 1:
+                logits = logits[None]
+            log_q = logits.masked_fill(~option_mask, -torch.inf).log_softmax(-1)
             candidate_loss = -(candidates * log_q.masked_fill((~option_mask) | (candidates == 0), 0.0)).sum(-1)
             predicted = probabilities.argmax(-1)
             target = targets.argmax(-1)
@@ -576,7 +243,7 @@ class DecisionTrainer(_BaseTrainer):
         return (loss, outputs) if return_outputs else loss
 
     def _gather_for_metrics(self, values):
-        replicas = self.get_tp_size() * self.get_cp_size()
+        replicas = self.get_tp_size()
         if replicas == 1:
             if self.model.training:
                 return self.accelerator.gather(values)
@@ -596,11 +263,10 @@ class DecisionTrainer(_BaseTrainer):
         return recursively_apply(remove_replicas, self.accelerator.gather(values))
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        if self.get_tp_size() * self.get_cp_size() > 1:
+        if self.get_tp_size() > 1:
             self.gather_function = self._gather_for_metrics
         inputs = self._prepare_inputs(inputs)
-        cp_context, inputs = self._prepare_context_parallel_inputs(model, inputs)
-        with torch.no_grad(), self.compute_loss_context_manager(), cp_context():
+        with torch.no_grad(), self.compute_loss_context_manager():
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
         if prediction_loss_only:
             return loss.detach(), None, None

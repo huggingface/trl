@@ -18,7 +18,7 @@
 # /// script
 # dependencies = [
 #     "trl[peft]",
-#     "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/50203/head",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/50614/head",
 #     "accelerate @ git+https://github.com/huggingface/accelerate.git",
 # ]
 # ///
@@ -28,25 +28,22 @@ Train a Qwen decision model to select banking intents, including requests with n
 
 python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
 
-accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
+torchrun --nproc_per_node=2 \
     examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
 """
 
 import json
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
+from collator import DataCollatorForJeva
 from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer, JevaConfig, JevaForDecision, set_seed
-from transformers.utils import is_peft_available
 
 from trl import ModelConfig, ScriptArguments, TrlParser, get_peft_config
-from trl.experimental.decision import DataCollatorForJeva, DecisionConfig, DecisionTrainer
-
-
-if is_peft_available():
-    from peft import get_peft_model
+from trl.experimental.decision import DecisionConfig, DecisionTrainer
 
 
 @dataclass
@@ -74,7 +71,6 @@ class JevaScriptArguments(ScriptArguments):
     max_option_length: int = field(default=8192, metadata={"help": "Maximum option token length."})
     truncation: str = field(default="error", metadata={"help": "Overflow policy: error or truncate."})
     option_chunk_size: int | None = field(default=8, metadata={"help": "Options per encoder forward."})
-    router_aux_loss_coef: float | None = field(default=None, metadata={"help": "MoE auxiliary-loss coefficient."})
 
 
 @dataclass
@@ -139,23 +135,19 @@ def main(script_args, training_args, model_args):
         model=encoder,
     )
     model.base_model.requires_grad_(script_args.mode == "full")
-    model.freeze_backbone = script_args.mode == "head"
+    peft_config = None
     if script_args.mode == "lora":
         peft_config = get_peft_config(model_args)
         if peft_config is None:
             raise ValueError("mode='lora' requires use_peft=True")
-        model.model = get_peft_model(model.base_model, peft_config)
-        model.config.adapter_config = {
-            key: list(value) if isinstance(value, set) else value for key, value in peft_config.to_dict().items()
-        }
-        model.base_model.enable_input_require_grads()
-    coef = script_args.router_aux_loss_coef
-    if coef is None:
-        coef = model.config.text_config.to_dict().get("router_aux_loss_coef", 0.0)
-    if coef and "output_router_logits" not in model.config.text_config.to_dict():
-        raise ValueError("router_aux_loss_coef requires an MoE encoder that returns router logits")
-    model.router_aux_loss_coef = 0.0 if model.freeze_backbone else coef
-    model.config.router_aux_loss_coef = model.router_aux_loss_coef
+        peft_config.modules_to_save = ["context_proj", "option_proj", "core"]
+        peft_config.exclude_modules = r"(?:context_proj|option_proj|core)(?:\..*)?"
+        # A freshly initialized Jeva head needs a native base checkpoint for adapter reloads.
+        base_path = str(Path(training_args.output_dir).resolve() / "base_model")
+        if training_args.should_save:
+            model.save_pretrained(base_path)
+        training_args.distributed_state.wait_for_everyone()
+        model.config._name_or_path = base_path
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     train_dataset = dataset[script_args.dataset_train_split]
@@ -197,6 +189,7 @@ def main(script_args, training_args, model_args):
         processing_class=tokenizer,
         data_collator=collator,
         compute_metrics=compute_metrics,
+        peft_config=peft_config,
     )
     # Keep encoder adapters separate from the fully trainable projections and decision core.
     # Trainer creates the optimizer after distributed setup and clips all groups together.

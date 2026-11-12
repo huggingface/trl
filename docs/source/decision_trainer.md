@@ -1,6 +1,6 @@
 # DecisionTrainer
 
-`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective; TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. Tokenization and batching belong to the model's collator.
+`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective; TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. Model-specific token layouts and batching live in example collators. The library provides `DataCollatorForDecision` for shared request preparation and target normalization.
 
 ## Usage
 
@@ -21,7 +21,7 @@ trainer.save_model()
 trainer.end()
 ```
 
-The trainer preserves which parameters are trainable. Freeze the backbone or prepare adapters before constructing it. Alternatively, pass `peft_config` to wrap the whole model through PEFT; configure `modules_to_save` for any head that should remain trainable. Resume with the same model and adapter setup.
+The trainer preserves which parameters are trainable. Freeze the backbone or prepare adapters before constructing it. Alternatively, pass `peft_config` to wrap the whole model through PEFT; configure `modules_to_save` for any head that should remain trainable. Resume with the same model and adapter setup. The Jeva example saves a native base checkpoint before wrapping it with PEFT, so the adapter can be reloaded with its decision head.
 
 ## Jeva example
 
@@ -32,7 +32,7 @@ python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking7
 ```
 
 > [!TIP]
-> This example currently requires [Transformers #50203](https://github.com/huggingface/transformers/pull/50203). Other decision heads need supervised-loss support before they can train through this API.
+> This example currently requires [Transformers #50614](https://github.com/huggingface/transformers/pull/50614). CLM and JEV use their own Transformers PRs linked below.
 
 Jeva's `--mode` selects head, LoRA, or full training. Its token limits, truncation policy, and option chunk size are example arguments, rather than trainer settings.
 
@@ -45,37 +45,55 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 | `p_true` | Probability of true for a `noul` question. |
 | `score` | Numeric score, interpolated between rubric levels. |
 
-Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The library's `DataCollatorForJeva` renders the model's decision template, splits state and option spans, and converts targets to tensors. Import it from `trl.experimental.decision` and pass `tokenizer` and `model.decision_config`. Models using the same input layout can reuse it; other layouts need their own collator. Preprocess once with `dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so training and evaluation batches only need padding, as in the example.
+Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and
+may supply numeric `values`. The [Jeva example collator](https://github.com/huggingface/trl/blob/main/examples/jeva_banking77/collator.py)
+uses Transformers' template to prepare separate state and option spans. It subclasses `DataCollatorForDecision`,
+which delegates request rendering to `model.decision_config.prepare_inputs`. Preprocess once with
+`dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so batches only need padding.
+
 
 ## CLM example
 
 The [typed-decisions example](https://github.com/huggingface/trl/tree/main/examples/clm_typed_decisions) trains
-CLM projection heads on a frozen SmolLM2-135M encoder. It requires [Transformers #50246](https://github.com/huggingface/transformers/pull/50246).
+CLM projection heads on a frozen SmolLM2-135M encoder. It requires [Transformers #50649](https://github.com/huggingface/transformers/pull/50649).
 
 ```bash
 python examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
 ```
 
-`DataCollatorForClm` reuses the request schema above and packs each batch into one prompt with a pool of distinct
+The [CLM example collator](https://github.com/huggingface/trl/blob/main/examples/clm_typed_decisions/collator.py) reuses the request schema above and packs each batch into one prompt with a pool of distinct
 candidates. Soft targets supervise a bidirectional contrastive loss. Validation holds out source-row IDs before
 expanding their questions. `eval_accuracy` uses each question's own candidates; contrastive negatives are local
 to each device's batch. Context parallelism is unsupported for this example.
+
+## JEV
+
+JEV uses [Transformers #50586](https://github.com/huggingface/transformers/pull/50586). Use the
+[JEV example collator](https://github.com/huggingface/trl/blob/main/examples/jev_typed_decisions/collator.py) with the model's tokenizer and `decision_config`, and set both `per_device_train_batch_size` and
+`per_device_eval_batch_size` to `1`. Disable gradient checkpointing for the current JEV implementation. Each row contains one question; use accumulation for more decisions per update.
+The collator returns packed option targets for JEV's native KL and ordinal RPS loss. Predictions are padded per-question
+probabilities, like the other collators. Nullable decisions are unsupported.
 
 ## Labels and metrics
 
 Collators may return integer class labels or soft target distributions. Pass `option_mask` when padding candidate sets. With `allow_null`, target distributions contain null first and the model may return `coverage_logits`. Nullable decisions require a coverage output. `is_choice` can exclude binary and score rows from choice accuracy.
 
-The trainer logs candidate loss, choice and candidate accuracy, Brier score, and entropy. Null and coverage metrics are logged when present; MoE auxiliary loss is logged when returned by the model. Metrics aggregate across ranks and accumulation steps, and evaluation removes padded examples. `compute_metrics` receives predicted probabilities and the original labels, with `-100` marking padded candidate columns.
+The trainer logs candidate loss, choice and candidate accuracy, Brier score, and entropy. `loss` and `eval_loss` are the native training objective; the reported candidate cross-entropy can differ from it. Null and coverage metrics are logged when present; auxiliary loss is logged only when returned by the model. Metrics aggregate across ranks and accumulation steps, and evaluation removes padded examples. `compute_metrics` receives predicted probabilities and the original labels, with `-100` marking padded candidate columns.
 
 ## Distributed training
 
-DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. FSDP2 currently requires Accelerate main, included in the example script dependencies. Context parallelism also requires a model readout that supports sharded sequences; the Jeva example is tested with full causal encoders, FSDP2, and SDPA. Recurrent encoders and DeepSpeed Ulysses are unsupported.
+DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. FSDP2 currently requires Accelerate main,
+included in the example script dependencies. Context and sequence parallelism are unsupported: the current model
+readouts need complete sequences. Tensor and masked expert parallelism use Transformers' `distributed_config`
+when loading a complete checkpoint. Token-dispatch expert parallelism is not supported by Trainer.
 
-Tensor and masked expert parallelism use Transformers' `distributed_config` when loading a complete checkpoint. Token-dispatch expert parallelism is not supported by Trainer. Models compute their own auxiliary loss; the trainer normalizes the total mean loss by the number of decisions across ranks and accumulation steps.
+The trainer normalizes the native mean loss by decision count across ranks and accumulation steps. It does not
+add MoE router regularization; auxiliary losses must come from the model itself. CLM's contrastive negatives remain
+local to each microbatch.
 
 ## Inference
 
-Use the model's Transformers inference API. Saved Jeva checkpoints work with the decision pipeline:
+Use the model's Transformers inference API. For the LoRA example, load the saved native `base_model` and its adapter with PEFT, then call `merge_and_unload()` before creating the decision pipeline. Saved Jeva checkpoints work with the decision pipeline:
 
 ```python
 from transformers import AutoModelForDecision, AutoTokenizer, pipeline
@@ -94,10 +112,7 @@ answers = decide(request)
 
 [[autodoc]] experimental.decision.DecisionTrainer
 
-## DataCollatorForJeva
+## DataCollatorForDecision
 
-[[autodoc]] experimental.decision.DataCollatorForJeva
-
-## DataCollatorForClm
-
-[[autodoc]] experimental.decision.DataCollatorForClm
+[[autodoc]] experimental.decision.DataCollatorForDecision
+    - prepare_example

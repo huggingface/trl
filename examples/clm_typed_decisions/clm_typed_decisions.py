@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/50246/head",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/50649/head",
 #     "accelerate @ git+https://github.com/huggingface/accelerate.git",
 # ]
 # ///
@@ -25,7 +25,7 @@ Train CLM projection heads on typed decisions with a frozen SmolLM2 encoder.
 
 python examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
 
-accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
+torchrun --nproc_per_node=2 \
     examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
 """
 
@@ -36,12 +36,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
+from collator import DataCollatorForClm
 from datasets import Dataset, load_dataset
 from transformers import AutoModel, AutoTokenizer, ClmConfig, ClmForDecision, EarlyStoppingCallback, set_seed
 from transformers.decision import parse_questions
 
 from trl import ModelConfig, ScriptArguments, TrlParser
-from trl.experimental.decision import DataCollatorForClm, DecisionConfig, DecisionTrainer
+from trl.experimental.decision import DecisionConfig, DecisionTrainer
 
 
 @dataclass
@@ -162,8 +163,6 @@ def main(script_args, training_args, model_args):
         compute_metrics=compute_metrics,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
     )
-    if trainer.get_cp_size() > 1:
-        raise ValueError("This CLM example does not support context parallelism")
     steps = training_args.max_steps
     if steps < 0:
         updates_per_epoch = math.ceil(len(trainer.get_train_dataloader()) / training_args.gradient_accumulation_steps)

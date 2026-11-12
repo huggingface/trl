@@ -2,7 +2,7 @@
 
 Train new CLM projection heads on a frozen SmolLM2-135M encoder using
 [`LocalLLaMA/typed-decisions`](https://huggingface.co/datasets/LocalLLaMA/typed-decisions).
-Requires [Transformers #50246](https://github.com/huggingface/transformers/pull/50246).
+Requires [Transformers #50649](https://github.com/huggingface/transformers/pull/50649).
 
 ```bash
 python examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
