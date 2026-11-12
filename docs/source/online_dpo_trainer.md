@@ -170,10 +170,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --push_to_hub
 ```
 
-Checkpoints and experiment tracking are available at:
-
-* [🤗 Model checkpoints](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
-* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/reports/Online-DPO-experiments-for-TL-DR-summarisation--Vmlldzo5MTczMDU0)
+The experiment is tracked in this [🐝 W&B report](https://wandb.ai/huggingface/trl/reports/Online-DPO-experiments-for-TL-DR-summarisation--Vmlldzo5MTczMDU0).
 
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
 
