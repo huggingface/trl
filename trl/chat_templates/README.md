@@ -256,9 +256,17 @@ Original Qwen3.5 chat templates. The two differ only in the default value of the
 
 Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, and their FP8 variants). Differs from `qwen3_5_think.jinja` by adding a `preserve_thinking` flag and tweaking how non-string tool-call argument values are stringified.
 
+### `qwen3_6_v2.jinja`
+
+Qwen3.6 chat template as shipped by `Qwen3.6-27B`, `Qwen3.6-35B-A3B` and their FP8 variants since 2026-11-07 (e.g. [345d467](https://huggingface.co/Qwen/Qwen3.6-35B-A3B/commit/345d467b117d1fd5eda9b879a5988de9ae5f47a7)). Same rendered text as `qwen3_6.jinja`, with the assistant output wrapped in `{% generation %}` / `{% endgeneration %}`. Response parsing reuses `qwen3_5_schema`.
+
 ### `qwen3_8.jinja`
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
+### `qwen3_8_v2.jinja`
+
+Qwen3.8 chat template as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant since 2026-11-07 (e.g. [3756181](https://huggingface.co/Qwen/Qwen3.8-27B/commit/37561816e66b5b9153b1b64c10968c18c1e6f4a0)). Same rendered text as `qwen3_8.jinja`, with the assistant output wrapped in `{% generation %}` / `{% endgeneration %}`. Response parsing reuses `qwen3_5_schema`.
 
 ### `qwen3_coder.jinja`
 
