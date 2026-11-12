@@ -751,6 +751,8 @@ mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.ji
 
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
+muse_spark_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")

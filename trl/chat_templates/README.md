@@ -189,6 +189,10 @@ Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medi
 
 Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
 
+### `muse_spark.jinja`
+
+Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+
 ### `nemotron_3_nano.jinja`
 
 Original Nemotron Nano chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-Nano-*` checkpoints). Renders tool calls in the same Hermes-style `<function=...>` / `<parameter=...>` format as Qwen3.5, so it reuses `qwen3_5_schema` for response parsing.
