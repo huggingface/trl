@@ -834,12 +834,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
         )
-        previous = {n: p.full_tensor().clone() for n, p in trainer.model.named_parameters() if p.requires_grad}
+        previous = {n: p.clone() for n, p in trainer.model.named_parameters() if p.requires_grad}
 
         trainer.train()
 
         for name, param in previous.items():
-            assert not torch.equal(param, trainer.model.get_parameter(name).full_tensor()), f"{name} has not changed."
+            assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
     @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_model(self):
