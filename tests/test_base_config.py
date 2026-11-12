@@ -21,6 +21,9 @@ from packaging.version import Version
 from trl import SFTConfig
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.23.0"), reason="`gradient_checkpointing` is deprecated from 5.23"
+)
 def test_checkpointing_default_does_not_warn(tmp_path):
     # TRL enables checkpointing by default. transformers 5.23 deprecated `gradient_checkpointing` in favor of
     # `activation_checkpointing`, and the default must not trip the deprecation warning on every run.
@@ -28,8 +31,7 @@ def test_checkpointing_default_does_not_warn(tmp_path):
         warnings.simplefilter("error", FutureWarning)
         args = SFTConfig(output_dir=tmp_path, report_to="none")
     assert args.gradient_checkpointing is True
-    if Version(transformers.__version__) >= Version("5.23.0"):
-        assert args.activation_checkpointing is True
+    assert args.activation_checkpointing is True
 
 
 @pytest.mark.skipif(
