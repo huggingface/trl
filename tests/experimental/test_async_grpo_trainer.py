@@ -2591,6 +2591,24 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
         assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
 
+    def test_reward_dropped_and_duplicate_frac(self):
+        # The first token of each completion is its reward, and 0 means the reward func cannot score it.
+        def first_token_reward(completion_ids, **kwargs):
+            return [float(ids[0]) if ids[0] else None for ids in completion_ids]
+
+        loop = _rollout_loop(reward_funcs=[first_token_reward])
+        seqs = [[TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, f"c{i}")] for i in range(2)]
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[1, 10], [2, 10]])))  # kept
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[3, 10], [3, 10]])))  # dropped, duplicated
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [4, 10]])))  # dropped, one scored
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # dropped, unscorable
+
+        assert loop._rates["frac_reward_zero_std"] == [3, 4]
+        # Only the dropped groups with a scored completion contribute the reward they are stuck at.
+        assert loop._rates["reward_dropped"] == [3.0 + 4.0, 2]
+        # One of the eight completions repeats an earlier one of its group.
+        assert loop._rates["completions/duplicate_frac"] == [1, 8]
+
 
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,

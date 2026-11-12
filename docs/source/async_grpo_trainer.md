@@ -419,6 +419,37 @@ The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mi
 - both high → the `max_staleness` limit itself is too tight: the rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero → balanced !
 
+### Saturation and duplicates
+
+The policy learns from the differences between the rollouts of a group: each advantage is taken against the group's mean reward. When every rollout of a group gets the same reward, they all get a zero advantage, so the group is dropped (see [rewards and off-policyness](#rewards-and-off-policyness)) and teaches the policy nothing. As a run saturates, more and more groups end up like this, either because every rollout solves the prompt or because none does. Four metrics tell these cases apart, and each one answers its own question, so you can read them straight off their plots:
+
+| metric | question |
+| --- | --- |
+| `frac_reward_zero_std` | what share of groups carry no signal |
+| `reward_dropped` | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
+| `reward` | how well the policy does over every scored group, dropped ones included |
+| `completions/duplicate_frac` | whether sampling still gives different rollouts for the same prompt |
+
+Read the first three together, against the range of your reward:
+
+| `frac_reward_zero_std` | `reward_dropped` | `reward` | diagnosis | what to do |
+| --- | --- | --- | --- | --- |
+| low | any (noisy over few groups) | any | **healthy**: most groups produce a gradient | nothing |
+| climbing | near the top of the range | climbing | **saturating at the top**: the prompts have become too easy for the policy, which is how a successful run usually ends | stop the run, or move to harder prompts |
+| high | near the bottom of the range | low and flat | **stuck at the bottom**: the prompts are too hard, or the reward function never gives credit | check `completions/clipped_ratio` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them |
+| climbing | falling | falling | **regression**: groups that used to pass now fail together | check `completions/duplicate_frac` and `entropy` for a collapse |
+| high | in the middle | any | **a mix**: with 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts |
+
+`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. Identical rollouts get identical rewards, so duplicates also push `frac_reward_zero_std` up.
+
+| `completions/duplicate_frac` | diagnosis |
+| --- | --- |
+| near 0, with a small baseline on tasks whose completions are short enough to repeat by chance | **healthy**: the rollouts of a group are sampled independently |
+| jumps towards `(num_generations - 1) / num_generations` | **sampling is no longer random**: every group comes back as copies of one rollout. For example, a temperature of 0, or data-parallel vLLM engines decoding the same text because they share a sampling seed (the worker sends a unique seed with every request to prevent this) |
+| climbs slowly, with `entropy` falling | **collapse**: the policy is converging onto one answer per prompt |
+
+These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_reward_zero_std`, but it has no reward, so `reward_dropped` leaves it out.
+
 ### Completions
 
 A **completion** is what vLLM generated for one prompt, counted across _every turn_ of the rollout.
@@ -429,6 +460,7 @@ A **completion** is what vLLM generated for one prompt, counted across _every tu
 | `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
 | `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
 | `completions/mean_terminated_length`, `completions/min_terminated_length`, `completions/max_terminated_length` | the same lengths, over the rollouts whose last turn ended on EOS |
+| `completions/duplicate_frac`                       | fraction of rollouts that repeat an earlier rollout of their group token for token. See [saturation and duplicates](#saturation-and-duplicates) |
 
 ### Rollouts
 
@@ -510,6 +542,7 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `reward` | mean reward over every scored rollout, including groups that are then dropped. This is the reward to track |
 | `frac_reward_zero_std` | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case) |
 | `reward_kept` | mean reward of the samples that were trained on |
+| `reward_dropped` | mean reward of the groups that were dropped, i.e. the reward they are stuck at. See [saturation and duplicates](#saturation-and-duplicates) for reading it with `frac_reward_zero_std` and `reward` |
 | `reward_group_std` | std of the reward within each sample's group, averaged over the samples that were trained on. This is what the default `compute_advantages` divides by. GRPO's `reward_std` is the std over the whole batch, a different quantity: a batch of easy prompts all at 1 and hard prompts all at 0 has a batch std of 0.5 but a group std of 0 |
 | `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
 | `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
