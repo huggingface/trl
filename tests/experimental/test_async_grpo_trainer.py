@@ -2075,10 +2075,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.xfail(
-        reason="A step holds partial groups, so its tool-call rate is not the group's, and `tools/failure_frequency` averages per completion where GRPO divides the failures by the calls (#7838)",
-        strict=False,  # a step can hold whole groups by chance
-    )
     @require_response_parsing
     @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
     def test_train_with_tools(self, tools: list[Callable], make_vllm_server):
@@ -2121,11 +2117,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] is not None
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 3)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] is not None
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] is not None
+        assert logged["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert logged["tools/failure_frequency"] is not None
+        assert logged["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2195,12 +2193,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 tools=[multiply_tool],
             )
 
-    @pytest.mark.xfail(
-        raises=AssertionError,
-        reason="The metrics average over samples, so a rollout that forks counts once per sample, and since #8159 every "
-        "tool-calling rollout of this model forks (#7838)",
-        strict=True,
-    )
     @require_response_parsing
     def test_train_with_multiple_environments(self, make_vllm_server, monkeypatch):
         # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
@@ -2257,10 +2249,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         records = recorded(record_path)
         assert records["increment"]
         assert records["shout"]
-        # Half of the rollouts issued a tool call, and every call succeeded. Metrics are logged at every step: the last
-        # entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 4)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Half of the rollouts issued a tool call, and every call succeeded. Tool metrics are logged only by the steps
+        # that scored a group. The first one comes before a repeated prompt can shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
         # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
         assert records["reset_counter"] and records["reset_echo"]
         assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
@@ -2343,11 +2336,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             trainer.train()
         assert "not among the environments" in str(excinfo.value.__cause__)
 
-    @pytest.mark.xfail(
-        reason="A step holds partial groups, so its tool-call rate is not the group's, and `tools/failure_frequency` "
-        "averages per completion where GRPO divides the failures by the calls (#7838)",
-        strict=False,  # a step can hold whole groups by chance
-    )
     @require_response_parsing
     def test_train_with_environment_factory(self, make_vllm_server):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
@@ -2385,11 +2373,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] is not None
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 3)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] is not None
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] is not None
+        assert logged["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert logged["tools/failure_frequency"] is not None
+        assert logged["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2431,8 +2421,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @pytest.mark.xfail(
-        reason="`rewards/<func>/mean` averages over training samples (#7835), and `tools/failure_frequency` per "
-        "completion where GRPO divides the failures by the calls (#7838)",
+        reason="`rewards/<func>/mean` averages over training samples, so a rollout that forks counts once per sample (#8250)",
         strict=False,  # a window can average to the expected values by chance
     )
     @require_response_parsing
@@ -2472,12 +2461,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer.train()
 
         # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
-        # -> rewards 1.0, 0.0, 0.0. It is the sole reward source, with weight 1. Metrics are logged at every step: the
-        # last entry is the run's summary
-        assert trainer.state.log_history[-2]["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
-        assert trainer.state.log_history[-2]["reward"] == pytest.approx(1 / 3)
+        # -> rewards 1.0, 0.0, 0.0. It is the sole reward source, with weight 1. Reward metrics are logged only by the
+        # steps that scored a group. The first one comes before a repeated prompt can shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "reward" in log)
+        assert logged["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+        assert logged["reward"] == pytest.approx(1 / 3)
         # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        assert logged["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2562,9 +2552,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
         assert logged["rewards/ScoredEnvironment/mean"] == 1.0
 
-    @pytest.mark.xfail(
-        reason="The reward sources are checked in the rollout worker at train start, not at init", strict=True
-    )
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
         # environment-owned `get_reward`, construction fails fast instead of training on an all-zero reward.
@@ -2624,11 +2611,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 environment_factory={"a": EnvA, "b": EnvB},
             )
 
-    @pytest.mark.xfail(
-        raises=RuntimeError,
-        reason="The rollout worker parses every completion with a response schema, and this chat template has none (#5742)",
-        strict=True,
-    )
     @require_response_parsing
     def test_train_with_environment_owned_data(self, make_vllm_server):
         # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
@@ -3081,15 +3063,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                marks=pytest.mark.xfail(
-                    raises=RuntimeError,
-                    reason="The rollout worker parses every completion with a response schema, and transformers has "
-                    "none for this chat template (#5742)",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ],
     )
@@ -3228,9 +3202,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         # With num_generations=2: 1 out of 2 completions is a tool call (1/2), and it succeeds (0 failures).
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -3274,9 +3250,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
@@ -3347,11 +3325,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         assert any(name.startswith("model.language_model.") for name in streamed)
         assert not any(".visual." in name or ".vision_tower." in name for name in streamed)
 
-    @pytest.mark.xfail(
-        raises=AssertionError,
-        reason="`tools/call_frequency` is averaged over training samples, not completions as in GRPO (#7838)",
-        strict=True,
-    )
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
@@ -3394,20 +3367,21 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
         # Both completions end on one of Gemma 4's eos ids, so none is clipped
-        assert trainer.state.log_history[-2]["completions/clipped_ratio"] == 0.0
+        assert logged["completions/clipped_ratio"] == 0.0
 
-        # The vision tower is frozen, since the dataset carries no images
-        vision = _vision_parameter_names(trainer.model)
+        # Only the text model trains: the rest (vision tower, multimodal embedder) is frozen
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in vision:
-                assert torch.equal(param, new_param), f"Vision-tower parameter {n} has changed."
-            else:
+            if new_param.requires_grad:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                assert torch.equal(param, new_param), f"Frozen parameter {n} has changed."
 
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
@@ -3458,9 +3432,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # Metrics are logged at every step: the last entry is the run's summary
-        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
-        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Tool metrics are logged only by the steps that scored a group. The first one comes before a repeated prompt can
+        # shift the scripted turns
+        logged = next(log for log in trainer.state.log_history if "tools/call_frequency" in log)
+        assert logged["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
