@@ -36,9 +36,7 @@ class AsyncGRPOConfig(_BaseConfig):
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
-            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked through for this
-            trainer in [Defeating the trainer-generator precision mismatch in
-            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
+            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788)) is sensitive to the
             trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
             dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
             `model_init_kwargs` takes precedence.
@@ -125,17 +123,14 @@ class AsyncGRPOConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_concurrent_rollouts (`int`, *optional*):
-            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to
-            `max(max_staleness, 1)
-            * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
-            this is wasteful, since they are dropped as stale before the trainer can consume them. If using tool-use
-            environments, you may want to set this manually based on how many parallel environments you can run.
+        max_concurrent_rollouts (`int`, *optional*, defaults to `512`):
+            Maximum number of rollouts running at once. Each one holds an environment, may run synchronous tool calls,
+            and keeps a connection to the vLLM server, so set it to what those resources can take. Below it, the number
+            of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped.
-        queue_maxsize (`int`, *optional*, defaults to `1024`):
-            Maximum number of rollout samples to buffer in the rollout queue.
+            being dropped. Generation is held to it: a new group of rollouts starts only while the tokens queued and in
+            flight fit in what the trainer consumes in `max(max_staleness, 1)` steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -352,26 +347,21 @@ class AsyncGRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_concurrent_rollouts: int | None = field(
-        default=None,
+    max_concurrent_rollouts: int = field(
+        default=512,
         metadata={
-            "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
-            "`max(max_staleness, 1) * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: "
-            "generating more samples than this is wasteful, since they are dropped as stale before the trainer can "
-            "consume them. If using tool-use environments, you may want to set this manually based on how many "
-            "parallel environments you can run."
+            "help": "Maximum number of rollouts running at once. Each one holds an environment, may run synchronous "
+            "tool calls, and keeps a connection to the vLLM server, so set it to what those resources can take. Below "
+            "it, the number of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being dropped."
+            "before being dropped. Generation is held to it: a new group of rollouts starts only while the tokens "
+            "queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
         },
-    )
-    queue_maxsize: int = field(
-        default=1024,
-        metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
     )
     weight_sync_steps: int = field(
         default=1,
@@ -430,11 +420,5 @@ class AsyncGRPOConfig(_BaseConfig):
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
         # and batches are broadcast to other processes rather than each process pulling independently.
-        if not hasattr(self, "accelerator_config") or self.accelerator_config is None:
-            self.accelerator_config = {"split_batches": True, "dispatch_batches": True}
-        elif isinstance(self.accelerator_config, dict):
-            self.accelerator_config["split_batches"] = True
-            self.accelerator_config["dispatch_batches"] = True
-        else:
-            self.accelerator_config.split_batches = True
-            self.accelerator_config.dispatch_batches = True
+        self.accelerator_config.split_batches = True
+        self.accelerator_config.dispatch_batches = True

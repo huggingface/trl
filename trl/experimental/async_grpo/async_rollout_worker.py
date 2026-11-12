@@ -366,6 +366,7 @@ def _child_main(
     loop_kwargs: dict[str, Any],
     samples_queue: MPQueue,
     model_version_value: MPValue,
+    token_allowance: MPValue,
     stop_event: MPEvent,
     child_ready_event: MPEvent,
     heartbeat_value: MPValue,
@@ -383,6 +384,7 @@ def _child_main(
         **loop_kwargs,
         rollout_buffer=samples_queue,
         model_version_value=model_version_value,
+        token_allowance=token_allowance,
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
@@ -434,6 +436,7 @@ class AsyncRolloutLoop:
         eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
+        token_allowance: MPValue,
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
@@ -472,6 +475,10 @@ class AsyncRolloutLoop:
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
+        self._token_allowance = token_allowance
+        self._produced_tokens = 0
+        self._rollouts_unqueued = 0
+        self._tokens_per_rollout = 0.0
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
@@ -557,7 +564,7 @@ class AsyncRolloutLoop:
             max_workers=max(1, config.max_concurrent_rollouts), thread_name_prefix="grpo-tool"
         )
 
-        self._concurrency_cap = config.max_concurrent_rollouts
+        self._kv_cap = config.max_concurrent_rollouts
         self._total_rollouts = 0
         self._metrics_poll_s = 5.0
 
@@ -660,10 +667,10 @@ class AsyncRolloutLoop:
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             self.session = session
             await self._check_sampling_replay()
-            await self._init_concurrency_cap()
+            await self._init_kv_cap()
             logger.info(
                 f"vllm worker started: num_generations={self.config.num_generations}, "
-                f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
+                f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, kv_cap={self._kv_cap}, "
                 f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}, min_p={self.config.min_p}"
             )
             await self.setup()
@@ -676,7 +683,18 @@ class AsyncRolloutLoop:
             finally:
                 await self.close()
 
-    async def _init_concurrency_cap(self) -> None:
+    def _fits_token_allowance(self) -> bool:
+        """Whether a new group of rollouts fits in the token allowance the trainer sets.
+
+        Counts the tokens already queued, plus the rollouts in flight at the mean tokens per rollout. Until a group has
+        been scored there is no mean, so groups start one at a time.
+        """
+        if self._rollouts_unqueued and not self._tokens_per_rollout:
+            return False
+        expected_tokens = self._produced_tokens + self._rollouts_unqueued * self._tokens_per_rollout
+        return expected_tokens < self._token_allowance.value
+
+    async def _init_kv_cap(self) -> None:
         """Start the cap at `KV cache tokens / max_model_len`: as many requests as fit at full length."""
         try:
             async with self.session.get(f"{self.vllm_server_url}/metrics") as response:
@@ -694,10 +712,10 @@ class AsyncRolloutLoop:
             return
         kv_tokens = sum(map(int, kv_matches))
         max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
-        self._concurrency_cap = max(1, min(self.config.max_concurrent_rollouts, kv_tokens // max_model_len))
+        self._kv_cap = max(1, min(self.config.max_concurrent_rollouts, kv_tokens // max_model_len))
 
     async def _control_loop(self, stop_event: asyncio.Event) -> None:
-        """Size the concurrency cap from the vLLM server's load, polled from `/metrics`.
+        """Size the KV cap from the vLLM server's load, polled from `/metrics`.
 
         Cut the cap by 30% when the server's KV cache usage passes 0.8, once the pool has drained below the previous
         cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while usage stays under
@@ -705,7 +723,7 @@ class AsyncRolloutLoop:
         resets the server's caches, which preempts every running request.
         """
         rollouts_at_change = 0
-        preemptions_seen = 0.0
+        preemptions_seen = None
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
@@ -718,7 +736,7 @@ class AsyncRolloutLoop:
                     response.raise_for_status()
                     text = await response.text()
             except Exception as e:
-                logger.warning(f"vLLM /metrics poll failed, concurrency cap unchanged: {e!r}")
+                logger.warning(f"vLLM /metrics poll failed, KV cap unchanged: {e!r}")
                 continue
             usage_matches = re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)
             queued_matches = re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)
@@ -726,28 +744,28 @@ class AsyncRolloutLoop:
                 # An empty match looks identical to a genuinely idle server (usage=0.0, queued=0), which is exactly
                 # the condition that grows the cap -- so a metrics rename/reformat must not fall through to that
                 # arithmetic silently.
-                logger.warning("vLLM /metrics missing KV usage or queue depth, concurrency cap unchanged")
+                logger.warning("vLLM /metrics missing KV usage or queue depth, KV cap unchanged")
                 continue
             usage = max(map(float, usage_matches))
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
-            if usage > 0.8 and self._concurrency <= self._concurrency_cap:
-                self._concurrency_cap = max(1, int(self._concurrency_cap * 0.7))
+            if preemptions_seen is None:
+                preemptions_seen = preemptions
+            if usage > 0.8 and self._concurrency <= self._kv_cap:
+                self._kv_cap = max(1, int(self._kv_cap * 0.7))
                 rollouts_at_change = self._total_rollouts
-                logger.info(f"[control] cut concurrency cap to {self._concurrency_cap} (kv cache usage {usage:.2f})")
-            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._concurrency_cap:
-                self._concurrency_cap = min(
-                    math.ceil(self._concurrency_cap * 1.25), self.config.max_concurrent_rollouts
-                )
+                logger.info(f"[control] cut KV cap to {self._kv_cap} (kv cache usage {usage:.2f})")
+            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._kv_cap:
+                self._kv_cap = min(math.ceil(self._kv_cap * 1.25), self.config.max_concurrent_rollouts)
                 rollouts_at_change = self._total_rollouts
             self._push_metrics(
                 {
-                    "rollout/concurrency_cap": float(self._concurrency_cap),
-                    "rollout/kv_cache_usage": usage,
+                    "rollout/concurrency_cap": float(self._kv_cap),
+                    "rollout/vllm_kv_cache_usage_frac": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
-                    "rollout/vllm_preemptions_total": preemptions - preemptions_seen,
+                    "rollout/vllm_preemption_count": preemptions - preemptions_seen,
                 }
             )
             preemptions_seen = preemptions
@@ -758,16 +776,21 @@ class AsyncRolloutLoop:
         rollout_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages, float]] = {}
         work_iter = self._repeat_iterator()
         loop = asyncio.get_running_loop()
+        t_gated = None
+        dispatched = 0
 
         try:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
-                while len(rollout_tasks) < self._concurrency_cap and not stop_event.is_set():
+                while len(rollout_tasks) < self._kv_cap and not stop_event.is_set():
+                    starts_group = dispatched % self.config.num_generations == 0
+                    if starts_group and not self._fits_token_allowance():
+                        break
                     group_id, row_index, row = next(work_iter)
                     if row is None:  # rejected by filter_prompt: the trainer counts it as consumed
-                        if not await self._put_in_buffer(group_id, stop_event):
-                            return
+                        self._put_in_buffer(group_id)
+                        await asyncio.sleep(0)
                         continue
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
@@ -780,10 +803,9 @@ class AsyncRolloutLoop:
                         )
                     # Draw a reusable environment instance for this rollout (creating one only if the pool is
                     # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
-                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
-                    # previously discarded, so an environment_factory whose task lives in the observation (not the
-                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
-                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # prompt and capture its initial observation (e.g. a task instruction), since an environment can
+                    # hold the task in the observation rather than in the dataset prompt. Mirror GRPOTrainer: fold the
+                    # observation into the last prompt message. reset() may be stochastic, so this is done per generation (each
                     # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
                     # field in multi-environment mode, so it is not forwarded to `reset`.
                     environment = None
@@ -852,7 +874,20 @@ class AsyncRolloutLoop:
 
                     task = asyncio.create_task(self.generate_one(prompt, tools, group_id=group_id))
                     rollout_tasks[task] = (group_id, name, environment, prompt, time.monotonic())
+                    self._rollouts_unqueued += 1
+                    dispatched += 1
+                    if t_gated is not None:
+                        self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_gated})
+                        t_gated = None
 
+                if (
+                    t_gated is None
+                    and self._tokens_per_rollout
+                    and len(rollout_tasks) < self._kv_cap
+                    and not stop_event.is_set()
+                ):
+                    t_gated = time.monotonic()
+                    logger.info("generation is max_staleness steps ahead, waiting for the trainer to consume...")
                 self._concurrency = len(rollout_tasks)  # gauge, reported by the score loop's push
                 if not rollout_tasks:
                     if stop_event.is_set():
@@ -973,7 +1008,7 @@ class AsyncRolloutLoop:
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
                     "rollout/concurrency": float(self._concurrency),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
-                    "rollout/generated_tok_s": (
+                    "rollout/generated_tokens_per_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),
                         now - self._pushed_at,
                     ),
@@ -994,32 +1029,22 @@ class AsyncRolloutLoop:
             self._total_groups_scored += 1
 
             for item in samples or [group.group_id]:
-                if not await self._put_in_buffer(item, stop_event):
-                    return
+                self._put_in_buffer(item)
+            self._rollouts_unqueued -= self.config.num_generations
+            tokens = sum(len(seq.input_ids) for seqs in group.completions_sequences for seq in seqs)
+            tokens /= self.config.num_generations
+            self._tokens_per_rollout = (
+                tokens if not self._tokens_per_rollout else 0.9 * self._tokens_per_rollout + 0.1 * tokens
+            )
 
             t_idle_start = time.monotonic()
 
-    async def _put_in_buffer(self, item: RolloutSample | int, stop_event: asyncio.Event) -> bool:
-        """Put `item` in the rollout buffer, waiting while it is full. Returns `False` if `stop_event` is set first."""
-        t_blocked = None
-        while True:
-            try:
-                if isinstance(item, RolloutSample):
-                    item.enqueued_at = time.time()
-                self.rollout_buffer.put_nowait(item)
-                break
-            except queue.Full:
-                if stop_event.is_set():
-                    return False
-                if t_blocked is None:
-                    t_blocked = time.monotonic()
-                    logger.info(
-                        f"rollout buffer full (maxsize={self.config.queue_maxsize}), waiting for trainer to consume..."
-                    )
-                await asyncio.sleep(0.1)
-        if t_blocked is not None:
-            self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
-        return True
+    def _put_in_buffer(self, item: RolloutSample | int) -> None:
+        """Put `item` in the rollout buffer and count its tokens toward the token allowance."""
+        if isinstance(item, RolloutSample):
+            item.enqueued_at = time.time()
+            self._produced_tokens += len(item.input_ids)
+        self.rollout_buffer.put_nowait(item)
 
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
         """Retry an aiohttp coroutine on transport errors and 5xx responses with bounded exponential backoff, counting the
@@ -1038,7 +1063,7 @@ class AsyncRolloutLoop:
                     isinstance(e, aiohttp.ClientResponseError) and 400 <= e.status < 500
                 ):
                     raise
-                self._counters["rollout/vllm_retry_total"] += 1
+                self._counters["rollout/vllm_retry_count"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
                 logger.warning(
                     f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
@@ -1074,14 +1099,23 @@ class AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
-            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         if turns > 1:
             self._rates["rollout/fork_frac"][0] += len(drifts)
             self._rates["rollout/fork_frac"][1] += turns - 1
@@ -1094,6 +1128,7 @@ class AsyncRolloutLoop:
                 "rollout/drift_tokens_max": float(max(drifts, default=0)),
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -1221,14 +1256,14 @@ class AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
-            self._counters[f"tools/{name}/call_total"] += 1
+            self._counters[f"tools/{name}/call_count"] += 1
             tool = tool_dict.get(name)
             if tool is None:
                 # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
                 # and raised — which is an environment problem. Counted apart so the two are not one number.
                 n_failures += 1
-                self._counters["tools/unknown_name_total"] += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters["tools/unknown_name_count"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             t0 = time.monotonic()
@@ -1240,7 +1275,7 @@ class AsyncRolloutLoop:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 result = {"error": str(error)}
             elapsed = time.monotonic() - t0
             self._rates["tools/latency_s"][0] += elapsed
@@ -1345,6 +1380,13 @@ class AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        for reward_func_name, rewards in zip(self.reward_func_names, all_rewards, strict=False):
+            if len(rewards) != len(group.completions):
+                raise ValueError(
+                    f"The reward function '{reward_func_name}' returned {len(rewards)} rewards, but "
+                    f"{len(group.completions)} were expected (one per prompt-completion pair). Make sure the reward "
+                    f"function returns exactly one reward per completion."
+                )
         # Each environment that owns its reward contributes one reward column (named after its env class, in
         # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
         # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
@@ -1356,8 +1398,21 @@ class AsyncRolloutLoop:
         all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
-        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        return np.array(all_rewards, dtype=float)
+        all_rewards = np.array(
+            [[r if r is not None else float("nan") for r in row] for row in all_rewards], dtype=float
+        )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if np.isnan(all_rewards).all(axis=0).any():
+            nan_row_idx = int(np.isnan(all_rewards).all(axis=0).nonzero()[0][0])
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in group.reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = group.prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = group.completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        return all_rewards
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """
@@ -1401,24 +1456,17 @@ class AsyncRolloutLoop:
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        if self.tools or any(group.tool_call_counts):
+            self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
+            self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
+            self._rates["tools/failure_frequency"][0] += sum(group.tool_failure_counts)
+            self._rates["tools/failure_frequency"][1] += sum(group.tool_call_counts)
         zero_std = bool(np.all(scored == scored[:1]))
         self._rates["frac_reward_zero_std"][0] += zero_std
         self._rates["frac_reward_zero_std"][1] += 1
         if zero_std:
             return []
 
-        total_calls = sum(group.tool_call_counts)
-        tool_metrics = (
-            [
-                {
-                    "tools/call_frequency": float(n_calls),
-                    "tools/failure_frequency": (n_failures / n_calls) if n_calls > 0 else 0.0,
-                }
-                for n_calls, n_failures in zip(group.tool_call_counts, group.tool_failure_counts, strict=True)
-            ]
-            if total_calls > 0
-            else [{}] * len(group.completions)
-        )
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
@@ -1428,16 +1476,8 @@ class AsyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
-            zip(
-                group.prompts,
-                group.completions,
-                group.completions_sequences,
-                advantages,
-                rewards,
-                tool_metrics,
-                strict=True,
-            )
+        for i, (prompt, completion, sequences, advantage, reward) in enumerate(
+            zip(group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True)
         ):
             metrics = {
                 "reward_kept": float(reward),
@@ -1454,7 +1494,6 @@ class AsyncRolloutLoop:
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
-                **tm,
             }
             for seq in sequences:
                 width = max(map(len, seq.sampler_logprobs))
@@ -1534,8 +1573,9 @@ class AsyncRolloutWorker:
             raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
-        self.rollout_buffer = ctx.Queue(maxsize=config.queue_maxsize)
+        self.rollout_buffer = ctx.Queue()
         self._model_version_value = ctx.Value("i", 0)
+        self.token_allowance = ctx.Value("q", 2**62)
         self._stop_event_mp = ctx.Event()
         self._child_ready_event = ctx.Event()
         # Liveness state shared with the child. Wall-clock seconds because monotonic() is per-process.
@@ -1559,7 +1599,7 @@ class AsyncRolloutWorker:
 
     @model_version.setter
     def model_version(self, value: int) -> None:
-        # NOTE(@aminediro) Read/write ops like += are not atomic with mp.Value
+        # mp.Value reads and writes aren't atomic, so hold its lock
         with self._model_version_value.get_lock():
             self._model_version_value.value = int(value)
 
@@ -1589,6 +1629,7 @@ class AsyncRolloutWorker:
                 self._loop_kwargs,
                 self.rollout_buffer,
                 self._model_version_value,
+                self.token_allowance,
                 self._stop_event_mp,
                 self._child_ready_event,
                 self._heartbeat_value,
