@@ -131,8 +131,10 @@ def check_shared_mem(arch="ampere", device=None):
         return False
     required = {"ampere": 163840, "ada": 101376, "hopper": 232448}[arch]
     # Read through Triton, as flash-linear-attention does: torch only exposes it on CUDA, not ROCm
-    device = torch.cuda.current_device() if device is None else device
-    return triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"] >= required
+    driver = triton.runtime.driver.active
+    if device is None:
+        device = driver.get_current_device()
+    return driver.utils.get_device_properties(device)["max_shared_mem"] >= required
 
 
 @triton.jit
