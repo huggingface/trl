@@ -1893,6 +1893,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         reason="The loss is normalized by each micro-batch's token count, not by `num_items_in_batch` (#7249)",
         strict=True,
     )
+    @pytest.mark.usefixtures("stub_weight_transfer")
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the loss must be reduced as
         # sum / num_items_in_batch rather than the local per-microbatch mean.
