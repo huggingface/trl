@@ -54,7 +54,7 @@ Messages: TypeAlias = list[dict[str, str]]
 class RolloutSample:
     """One training row: a student on-policy completion plus the teacher's sparse per-position scoring.
 
-    Unlike [`~trl.experimental.async_grpo.async_rollout_worker.RolloutSample`], there is no `advantage` (no
+    Unlike [`~trl.experimental.async_grpo.async_grpo_trainer.RolloutSample`], there is no `advantage` (no
     group-relative baseline: distillation has no policy-gradient term), no reward metrics, and no student-side
     generation-time logprobs (nothing in `compute_loss` reads them today; the student side of the divergence is
     computed fresh from the live model). `teacher_topk_ids` / `teacher_topk_logprobs` carry, per completion position,
@@ -193,7 +193,7 @@ def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | Non
 class _AsyncRolloutLoop:
     """Asyncio generate-and-score loop. Lives entirely inside the spawned child process.
 
-    Structurally this is [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop`] with the
+    Structurally this is [`~trl.experimental.async_grpo.async_grpo_trainer.AsyncRolloutLoop`] with the
     group-relative-advantage machinery removed (distillation has no group baseline: each prompt yields exactly one
     on-policy sample) and the reward scoring step replaced by a teacher-scoring HTTP call. Because there is no
     grouping, generation and scoring happen in a single task per sample (`_generate_and_score_one`) rather than two
@@ -460,8 +460,8 @@ class _AsyncRolloutLoop:
 
         A 4xx is raised at once, since sending the same request again gets the same answer.
 
-        Ported from [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._retry`]. Every retried call
-        in this loop targets a vLLM server — the student's or a teacher's — so the counter is named for the dependency
+        Ported from [`~trl.experimental.async_grpo.async_grpo_trainer.AsyncRolloutLoop._retry`]. Every retried call in
+        this loop targets a vLLM server — the student's or a teacher's — so the counter is named for the dependency
         rather than for the transport.
         """
         for attempt in range(max_attempts):
@@ -497,7 +497,7 @@ class _AsyncRolloutLoop:
         """One rollout: what the student generated, and the teacher call that scored it.
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
-        so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
+        so unlike [`~trl.experimental.async_grpo.async_grpo_trainer.AsyncRolloutLoop._push_rollout_metrics`] there is
         no `rollout/samples_per_rollout`, `rollout/turns_*`, drift or tool metrics to report.
         """
         completion_tokens = len(completion_ids)
@@ -715,7 +715,7 @@ class _AsyncRolloutLoop:
 class AsyncRolloutWorker:
     """Parent-side controller: spawns a child process running `_AsyncRolloutLoop`.
 
-    Ported from [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutWorker`], same lifecycle contract
+    Ported from [`~trl.experimental.async_grpo.async_grpo_trainer.AsyncRolloutWorker`], same lifecycle contract
     (start/stop/check_health/update_model_version), same picklability validation, same `CUDA_VISIBLE_DEVICES=""` child
     isolation. No `reward_funcs`/`tools`/`environment_factory` to forward: distillation's only external calls are the
     vLLM servers already carried by `loop_kwargs` (`vllm_server_url`, `teacher_server_urls`).

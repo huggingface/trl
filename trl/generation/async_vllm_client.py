@@ -26,7 +26,7 @@ if is_requests_available():
 logger = get_logger(__name__)
 
 
-class VLLMClient:
+class AsyncVLLMClient:
     """Synchronous HTTP client for the vLLM server used by async GRPO.
 
     The trainer and [`WeightTransferClient`] both talk to the same `vllm serve` instance, so this client is the single

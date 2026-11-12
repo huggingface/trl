@@ -42,8 +42,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainerCallba
 
 from ...chat_template_utils import parse_response
 from .async_grpo_config import AsyncGRPOConfig
-from .async_grpo_trainer import AsyncGRPOTrainer
-from .async_rollout_worker import AsyncRolloutLoop, Rollout, TurnRecord
+from .async_grpo_trainer import AsyncGRPOTrainer, AsyncRolloutLoop, Rollout, TurnRecord
 
 
 if TYPE_CHECKING:
