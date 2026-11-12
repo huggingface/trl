@@ -974,12 +974,13 @@ class SFTTrainer(_BaseTrainer):
         # (huggingface/transformers#50185)
         text_config = model.config.get_text_config()
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
-        self.padding_free = args.padding_free or (
-            args.packing and args.packing_strategy in {"bfd", "bfd_split"} and bool(layer_types)
-        )
+        bfd_packing = args.packing and args.packing_strategy in {"bfd", "bfd_split"}
+        self.padding_free = args.padding_free or (bfd_packing and bool(layer_types))
+        # Only this collator gives the sequences of a BFD-packed row their own position IDs; any other would let them
+        # attend to each other
+        if data_collator is not None and (self.padding_free or bfd_packing):
+            raise ValueError("Passing a custom data collator is not supported when using padding-free or BFD packing.")
         if self.padding_free:
-            if data_collator is not None:
-                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if args.packing and args.packing_strategy == "wrapped":
                 logger.warning(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
