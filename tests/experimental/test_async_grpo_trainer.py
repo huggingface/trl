@@ -47,31 +47,30 @@ pytest.importorskip("transformers", minversion="5.2.0")
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
-from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
+    TREE_ATTENTION,
+    AsyncRolloutLoop,
+    AsyncRolloutWorker,
     DataCollatorForRollout,
+    Rollout,
+    RolloutGroup,
+    RolloutSample,
     TokenBudgetBatcher,
+    TrainingSequence,
+    TreeRow,
+    TurnRecord,
+    _chain_to_sequences,
+    _common_prefix_len,
     _iter_vllm_named_params,
     _reduce_metric,
+    _spawn_stop_watcher,
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
     validate_lora_for_vllm_sync,
 )
-from trl.experimental.async_grpo.async_rollout_worker import (
-    AsyncRolloutLoop,
-    AsyncRolloutWorker,
-    Rollout,
-    RolloutGroup,
-    RolloutSample,
-    TrainingSequence,
-    TurnRecord,
-    _chain_to_sequences,
-    _common_prefix_len,
-    _spawn_stop_watcher,
-)
-from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
-from trl.experimental.async_grpo.weight_transfer import WeightTransferClient
+from trl.generation import weight_transfer as weight_transfer_module
+from trl.generation.weight_transfer import WeightTransferClient
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import (
@@ -242,7 +241,7 @@ class _StubWeightTransfer:
 
 
 class FakeVLLMServer:
-    """The state a vLLM server has and a mocked dict does not, behind the eight paths [`VLLMClient`] uses.
+    """The state a vLLM server has and a mocked dict does not, behind the eight paths [`AsyncVLLMClient`] uses.
 
     Configure it after construction (`fake.lora_config = ...`) and before the trainer is built; the trainer probes
     `/server_info` in its constructor. Read `loaded`, `evicted` and `paused` afterwards to see what the trainer did
@@ -3228,10 +3227,11 @@ class TestSelectAdapterSync(TrlTestCase):
 )
 @require_peft
 class TestAsyncGRPOTrainerPeft(TrlTestCase):
-    """The trainer against a `FakeVLLMServer`: its real `VLLMClient` sends real requests, the wire is faked.
+    """The trainer against a `FakeVLLMServer`: its real `AsyncVLLMClient` sends real requests, the wire is faked.
 
-    Nothing here is patched. The trainer probes, loads, pauses, resumes and unloads through `VLLMClient` exactly as it
-    does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`, `fake.paused`.
+    Nothing here is patched. The trainer probes, loads, pauses, resumes and unloads through `AsyncVLLMClient` exactly
+    as it does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`,
+    `fake.paused`.
     """
 
     model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"

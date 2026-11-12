@@ -998,9 +998,9 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, ...) can be trained on **tex
 
 ## TurnRecord
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.TurnRecord
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.TurnRecord
 
 ## RolloutGroup
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutGroup
 
