@@ -3407,34 +3407,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
         )
 
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        if self._signature_columns is None:
-            self._signature_columns = [
-                "input_ids",
-                "attention_mask",
-                "position_ids",
-                "shift_labels",
-                "token_index",
-                "old_log_probs",
-                "sampling_mask",
-                "sampling_mask_counts",
-                "sampler_ids",
-                "sampler_log_probs",
-                "advantages",
-                "segment_id",
-                "global_n_tokens",
-                "global_n_forward_tokens",
-                "mean_seq_len",
-                "tree_kv_index",
-                "tree_cu_seqlens_q",
-                "tree_cu_seqlens_k",
-                "tree_segment_parents",
-                "tree_segment_depths",
-                "tree_sizes",
-            ]
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mask_bool = inputs["attention_mask"].bool()
         selected = inputs["token_index"] >= 0
