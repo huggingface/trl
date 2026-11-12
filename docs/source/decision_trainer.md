@@ -25,10 +25,10 @@ The trainer preserves which parameters are trainable. Freeze the backbone or pre
 
 ## Jeva example
 
-The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77) provides Jeva's model construction and a 1,000-step LoRA configuration with a stratified validation split:
+The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/decisions) provides Jeva's model construction and a 1,000-step LoRA configuration with a stratified validation split:
 
 ```bash
-python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
+python examples/decisions/jeva_banking77.py --config examples/decisions/jeva_banking77.yaml
 ```
 
 > [!TIP]
@@ -46,7 +46,7 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 | `score` | Numeric score, interpolated between rubric levels. |
 
 Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and
-may supply numeric `values`. The [Jeva example collator](https://github.com/huggingface/trl/blob/main/examples/jeva_banking77/collator.py)
+may supply numeric `values`. The [Jeva example collator](https://github.com/huggingface/trl/blob/main/examples/decisions/jeva_banking77.py)
 uses Transformers' template to prepare separate state and option spans. It subclasses `DataCollatorForDecision`,
 which delegates request rendering to `model.decision_config.prepare_inputs`. Preprocess once with
 `dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so batches only need padding.
@@ -54,14 +54,14 @@ which delegates request rendering to `model.decision_config.prepare_inputs`. Pre
 
 ## CLM example
 
-The [typed-decisions example](https://github.com/huggingface/trl/tree/main/examples/clm_typed_decisions) trains
+The [typed-decisions example](https://github.com/huggingface/trl/tree/main/examples/decisions) trains
 CLM projection heads on a frozen SmolLM2-135M encoder. It requires [Transformers #50649](https://github.com/huggingface/transformers/pull/50649).
 
 ```bash
-python examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
+python examples/decisions/clm_typed_decisions.py --config examples/decisions/clm_typed_decisions.yaml
 ```
 
-The [CLM example collator](https://github.com/huggingface/trl/blob/main/examples/clm_typed_decisions/collator.py) reuses the request schema above and packs each batch into one prompt with a pool of distinct
+The [CLM example collator](https://github.com/huggingface/trl/blob/main/examples/decisions/clm_typed_decisions.py) reuses the request schema above and packs each batch into one prompt with a pool of distinct
 candidates. Soft targets supervise a bidirectional contrastive loss. Validation holds out source-row IDs before
 expanding their questions. `eval_accuracy` uses each question's own candidates; contrastive negatives are local
 to each device's batch. Context parallelism is unsupported for this example.
@@ -69,9 +69,9 @@ to each device's batch. Context parallelism is unsupported for this example.
 ## JEV
 
 JEV uses [Transformers #50586](https://github.com/huggingface/transformers/pull/50586). Use the
-[JEV example collator](https://github.com/huggingface/trl/blob/main/examples/jev_typed_decisions/collator.py) with the model's tokenizer and `decision_config`, and set both `per_device_train_batch_size` and
+[JEV training script](https://github.com/huggingface/trl/blob/main/examples/decisions/jev.py) with the model's tokenizer and `decision_config`, and set both `per_device_train_batch_size` and
 `per_device_eval_batch_size` to `1`. Disable gradient checkpointing for the current JEV implementation. Each row contains one question; use accumulation for more decisions per update.
-The collator returns packed option targets for JEV's native KL and ordinal RPS loss. Predictions are padded per-question
+The script prepares packed option targets and uses Transformers' `default_data_collator` for JEV's native KL and ordinal RPS loss. Predictions are padded per-question
 probabilities, like the other collators. Nullable decisions are unsupported.
 
 ## Labels and metrics

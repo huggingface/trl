@@ -2,12 +2,8 @@
 
 Each example lives in its own self-contained folder. The full index and layout conventions are documented at https://huggingface.co/docs/trl/example_overview.
 
-For a small decision-model training run, see [`jeva_banking77`](jeva_banking77). It trains Qwen to choose a banking
-intent from candidate descriptions, including requests where none of the candidates apply.
-Its [training config](jeva_banking77/config.yaml) runs 1,000 LoRA steps with a stratified validation holdout.
-
-For a small contrastive decision-model run, see [`clm_typed_decisions`](clm_typed_decisions). It trains CLM heads
-on a frozen SmolLM2-135M encoder with soft targets from typed decisions.
+For decision-model training, see [`decisions`](decisions). It contains JEV, Jeva BANKING77, and CLM typed-decision
+examples using native Transformers losses and `DecisionTrainer`. Model-specific collators live in their scripts.
 
 ## Adding a new example
 

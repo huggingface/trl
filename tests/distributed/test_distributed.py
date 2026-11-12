@@ -103,7 +103,7 @@ class TestDistributed(TrlTestCase):
         run_command(
             [
                 "torchrun", "--nnodes", "1", "--nproc_per_node", "2",
-                "examples/jeva_banking77/jeva_banking77.py",
+                "examples/decisions/jeva_banking77.py",
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 "--mode", "full",

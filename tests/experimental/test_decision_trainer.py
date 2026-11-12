@@ -14,6 +14,7 @@
 
 import json
 import os
+from functools import partial
 
 import numpy as np
 import pytest
@@ -24,20 +25,21 @@ from datasets import Dataset
 
 pytest.importorskip("transformers.decision")
 
-from examples.clm_typed_decisions.collator import DataCollatorForClm
-from examples.jev_typed_decisions.collator import DataCollatorForJev
-from examples.jeva_banking77.collator import DataCollatorForJeva
+from examples.decisions.clm_typed_decisions import DataCollatorForClm
+from examples.decisions.jev import tokenize as tokenize_jev
+from examples.decisions.jeva_banking77 import DataCollatorForJeva
 from transformers import (
     AutoModel,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
+    default_data_collator,
     set_seed,
 )
 from transformers.loss.loss_utils import LOSS_MAPPING
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
-from trl.experimental.decision import DecisionConfig, DecisionTrainer
+from trl.experimental.decision import DataCollatorForDecision, DecisionConfig, DecisionTrainer
 
 from ..testing_utils import TrlTestCase, require_peft
 
@@ -625,14 +627,14 @@ class TestDataCollatorForClm(TrlTestCase):
 
 
 @pytest.mark.skipif(not HAS_JEV_LOSS, reason="Requires Transformers #50586")
-class TestDataCollatorForJev(TrlTestCase):
+class TestDecisionTrainerJev(TrlTestCase):
     def test_training_and_predictions(self, tokenizer):
         from transformers import JevConfig, JevForDecision
 
         encoder = AutoModel.from_pretrained(MODEL_ID, dtype=torch.float32)
         model = JevForDecision(JevConfig(text_config=encoder.config, hidden_size=encoder.config.hidden_size))
         model.model = encoder
-        collator = DataCollatorForJev(tokenizer, model.decision_config)
+        collator = DataCollatorForDecision(tokenizer, model.decision_config)
         rows = [
             (
                 "An invoice",
@@ -654,8 +656,8 @@ class TestDataCollatorForJev(TrlTestCase):
                 for state, question, target in rows
             ]
         )
-        prepared = dataset.map(collator.tokenize, remove_columns=dataset.column_names)
-        batch = collator([prepared[0]])
+        prepared = dataset.map(partial(tokenize_jev, collator=collator), remove_columns=dataset.column_names)
+        batch = default_data_collator([prepared[0]])
         with torch.no_grad():
             expected = model(**{key: value for key, value in batch.items() if key != "is_choice"}).loss.item()
         trainer = DecisionTrainer(
@@ -673,7 +675,7 @@ class TestDataCollatorForJev(TrlTestCase):
             train_dataset=prepared,
             eval_dataset=prepared,
             processing_class=tokenizer,
-            data_collator=collator,
+            data_collator=default_data_collator,
         )
         assert trainer.evaluate(prepared.select([0]))["eval_loss"] == pytest.approx(expected)
         before = model.proj.weight.detach().clone()
