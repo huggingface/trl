@@ -219,7 +219,7 @@ class VLLMGeneration:
         return_sampling_mask (`bool`, *optional*, defaults to `False`):
             Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k, top-p
             and min-p filtering. Requires vLLM >= 0.28 and `top_k > 0`, and in server mode a server started with
-            `--return-sampling-mask`.
+            `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30).
 
     """
 

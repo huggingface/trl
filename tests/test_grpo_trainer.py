@@ -2356,7 +2356,19 @@ class TestGRPOTrainer(TrlTestCase):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
 
     @require_vllm
-    @pytest.mark.parametrize("server_returns_sampling_mask", [False, True])
+    @pytest.mark.parametrize(
+        "server_returns_sampling_mask",
+        [
+            False,
+            pytest.param(
+                True,
+                marks=pytest.mark.skipif(
+                    not is_vllm_available(min_version="0.28.0"),
+                    reason="returning the candidate set of each sampled token requires vLLM >= 0.28",
+                ),
+            ),
+        ],
+    )
     def test_vllm_server_structured_outputs_needs_sampling_mask(self, server_returns_sampling_mask):
         # Without the candidate sets the grammar leaves, the importance ratio would be ~0
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

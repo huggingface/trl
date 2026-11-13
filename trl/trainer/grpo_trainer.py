@@ -1160,12 +1160,12 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm:
             # vLLM normalizes its log-probs over the top-k/top-p/min-p candidate set, so the trainer must too
             filtered_sampling = self.top_p < 1.0 or self.top_k > 0 or (self.min_p or 0.0) > 0.0
-            # In server mode, the server's version and flags decide, checked below
+            # In server mode, the server's `--return-sampling-mask` flag also decides, checked below
             return_sampling_mask = (
                 self.vllm_importance_sampling_correction
                 and filtered_sampling
                 and self.temperature > 0
-                and (self.vllm_mode == "server" or is_vllm_available(min_version="0.28.0"))
+                and is_vllm_available(min_version="0.28.0")
             )
             # Initialize vLLM generation backend
             self.vllm_generation = VLLMGeneration(
@@ -1216,8 +1216,8 @@ class GRPOTrainer(_BaseTrainer):
                         "the importance sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or "
                         "set `vllm_importance_sampling_correction=False`."
                     )
-                # Only a vLLM server (>= 0.28) started with `--return-sampling-mask` returns the candidate sets
-                if not model_config.get("return_sampling_mask"):
+                # Only a server started with `--return-sampling-mask` returns the candidate sets
+                if self.vllm_generation.return_sampling_mask and not model_config["return_sampling_mask"]:
                     self.vllm_generation.return_sampling_mask = False
             if self.vllm_mode == "server":
                 # Only the main process queries the server, so the other processes take its answer
@@ -1236,7 +1236,8 @@ class GRPOTrainer(_BaseTrainer):
                 raise ValueError(
                     "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
                     "sampled token, which takes vLLM >= 0.28 and, in server mode, a server started with "
-                    "`--return-sampling-mask`. Alternatively, set `vllm_importance_sampling_correction=False`."
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30). Alternatively, set "
+                    "`vllm_importance_sampling_correction=False`."
                 )
             if (
                 self.vllm_importance_sampling_correction
@@ -1246,7 +1247,8 @@ class GRPOTrainer(_BaseTrainer):
                 logger.warning(
                     "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
                     "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
-                    "takes vLLM >= 0.28 and, in server mode, a server started with `--return-sampling-mask`."
+                    "takes vLLM >= 0.28 and, in server mode, a server started with "
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30)."
                 )
         else:
             generation_kwargs = {
