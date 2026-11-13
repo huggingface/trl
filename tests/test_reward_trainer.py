@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import math
 import pathlib
 
 import pytest
@@ -1142,6 +1143,61 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_urm_loss(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.2, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_urm_loss_value(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
+
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.2, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"].select(range(1)),
+        )
+        metrics = trainer.evaluate()
+
+        # With a single eval example, the eval loss is the normalized URM loss -α·log((e^Δ + a) / (e^Δ + 1)) at the
+        # logged reward margin Δ, with a = ε / (1 - ε) and α = (1 + √a) / (1 - √a). The log is written as
+        # log(1 - (1 - a) / (e^Δ + 1)) for precision.
+        delta = metrics["eval_margin"]
+        a = 0.2 / (1 - 0.2)
+        alpha = (1 + math.sqrt(a)) / (1 - math.sqrt(a))
+        assert delta != 0.0
+        assert metrics["eval_loss"] == pytest.approx(-alpha * math.log1p(-(1 - a) / (math.exp(delta) + 1)), rel=1e-4)
+
+    def test_urm_label_smoothing_out_of_range_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # `label_smoothing` is the flip probability ε, not the paper's a = ε / (1 - ε), so a = 0.8 passed as is fails
+        training_args = RewardConfig(output_dir=self.tmp_dir, loss_type="urm", label_smoothing=0.8, report_to="none")
+
+        with pytest.raises(ValueError, match=r"must lie in \[0.0, 0.5\) for the 'urm' loss"):
+            RewardTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_eos_token_id_synced_with_model_config(self):
         # The trainer sets the requested eos token on the tokenizer. The model config must follow: otherwise

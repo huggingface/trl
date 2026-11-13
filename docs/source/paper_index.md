@@ -1670,6 +1670,32 @@ def add_margin(example):
 dataset = dataset.map(add_margin)
 ```
 
+### Unbiased Alignment for Large Language Models with Noisy Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2607.03248
+
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the reward model trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased Reward Model (URM) loss, called α-URM in the paper:
+
+$$
+\mathcal{L}(\theta) = - \textcolor{red}{\alpha} \, \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \frac{e^{\Delta_\theta} \textcolor{red}{+ a}}{e^{\Delta_\theta} + 1} \right], \quad \Delta_\theta = r_\theta(x, y^+) - r_\theta(x, y^-), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
+$$
+
+which is the Bradley-Terry loss for  \\( a = 0 \\). The constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as for the Bradley-Terry loss. The paper shows that the optimum stays unbiased when the true flip probability is lower than the assumed  \\( \varepsilon \\) (Corollary 4.7), so  \\( \varepsilon \\) does not have to be estimated exactly. In TRL,  \\( \varepsilon \\) is set with `label_smoothing`. To use  \\( a = 0.8 \\), the value the paper recommends to practitioners:
+
+```python
+from trl import RewardConfig
+
+training_args = RewardConfig(
+    loss_type="urm",
+    label_smoothing=4 / 9,  # flip probability ε, for a = ε / (1 - ε) = 0.8 as recommended in Appendix B.1 of the paper
+    learning_rate=1e-5,  # Appendix B.1 of the paper
+    num_train_epochs=3,  # Appendix B.1 of the paper
+    per_device_train_batch_size=16,  # total batch size of 128 on 8 GPUs (Appendix B.1 of the paper)
+    max_grad_norm=10.0,  # Appendix B.1 of the paper
+    warmup_ratio=0.1,  # Appendix B.1 of the paper
+)
+```
+
 ## Online Direct Preference Optimization
 
 Papers relating to the [`experimental.online_dpo.OnlineDPOTrainer`]
