@@ -1592,6 +1592,7 @@ class GOLDTrainer(SFTTrainer):
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
+                lora_sync_output_dir=args.output_dir,
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
