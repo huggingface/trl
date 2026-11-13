@@ -1833,10 +1833,13 @@ class GRPOTrainer(_BaseTrainer):
                         **self.chat_template_kwargs,
                     )
                     prompt_ids.append(tokenized["input_ids"][0])
-                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-                    for k, v in tokenized.items():
-                        if k not in ("input_ids", "attention_mask"):
-                            multimodal_fields.setdefault(k, []).append(v)
+                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.). A
+                    # tokenizer's extra fields, like the `token_type_ids` of a `PreTrainedTokenizerFast` before
+                    # transformers 5.0, are dropped
+                    if isinstance(self.processing_class, ProcessorMixin):
+                        for k, v in tokenized.items():
+                            if k not in ("input_ids", "attention_mask"):
+                                multimodal_fields.setdefault(k, []).append(v)
                 # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
                 # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
                 # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
@@ -1868,8 +1871,11 @@ class GRPOTrainer(_BaseTrainer):
                 ]
             else:
                 prompt_ids = tokenized["input_ids"]
-            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.). A tokenizer's
+            # extra fields, like the `token_type_ids` of a `PreTrainedTokenizerFast` before transformers 5.0, are dropped
+            multimodal_fields = {}
+            if isinstance(self.processing_class, ProcessorMixin):
+                multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None

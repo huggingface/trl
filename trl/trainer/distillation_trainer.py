@@ -1057,8 +1057,11 @@ class DistillationTrainer(_BaseTrainer):
                 ]
             else:
                 prompt_ids = tokenized["input_ids"]
-            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
-            multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
+            # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.). A tokenizer's
+            # extra fields, like the `token_type_ids` of a `PreTrainedTokenizerFast` before transformers 5.0, are dropped
+            multimodal_fields = {}
+            if isinstance(self.processing_class, ProcessorMixin):
+                multimodal_fields = {k: v for k, v in tokenized.items() if k not in ("input_ids", "attention_mask")}
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
             images = None

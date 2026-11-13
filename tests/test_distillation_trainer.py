@@ -21,7 +21,7 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -905,6 +905,30 @@ class TestDistillationTrainer(TrlTestCase):
             teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
             args=training_args,
             train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_with_tokenizer_returning_token_type_ids(self):
+        # Before transformers 5.0, a `PreTrainedTokenizerFast` returns `token_type_ids`, which are not model inputs
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.model_input_names = ["input_ids", "token_type_ids", "attention_mask"]
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
         )
 
         trainer.train()
