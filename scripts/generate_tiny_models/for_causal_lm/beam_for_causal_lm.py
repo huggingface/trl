@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+
 import torch
+from datasets import load_dataset
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
 from transformers.models.beam import BeamConfig, BeamForCausalLM
+
+from trl import SFTConfig, SFTTrainer
 
 from .._common import (
     check_dtype_pattern,
@@ -66,6 +71,29 @@ init_weights_tiny_model(model)
 for name, module in model.named_modules():
     if name.endswith("mlp.gate"):
         module.float()
+
+# Train on reasoning traces so that generations follow Beam's channel format, which the GRPO tests parse into messages
+dataset = load_dataset("HuggingFaceH4/Multilingual-Thinking", split="train")
+dataset = dataset.map(
+    lambda example: {
+        "prompt": [{"role": "user", "content": example["user"]}],
+        "completion": [{"role": "assistant", "thinking": example["analysis"], "content": example["final"]}],
+    },
+    remove_columns=dataset.column_names,
+)
+training_args = SFTConfig(
+    num_train_epochs=100,
+    learning_rate=1e-2,
+    per_device_train_batch_size=32,
+    max_length=512,
+    save_strategy="no",
+    report_to="none",
+)
+# Train a copy, so that what the trainer sets on the config (`use_cache`, `pad_token_id`) stays out of the pushed model
+trainer = SFTTrainer(model=copy.deepcopy(model), args=training_args, train_dataset=dataset, processing_class=tokenizer)
+trainer.train()
+model.load_state_dict(trainer.model.state_dict())
+
 smoke_test(model, tokenizer)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)

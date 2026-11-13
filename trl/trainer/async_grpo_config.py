@@ -15,13 +15,13 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...trainer.base_config import _BaseConfig
+from .base_config import _BaseConfig
 
 
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`experimental.async_grpo.AsyncGRPOTrainer`].
+    Configuration class for the [`AsyncGRPOTrainer`].
 
     This class includes only the parameters that are specific to asynchronous GRPO training. For a full list of
     training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values

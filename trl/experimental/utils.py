@@ -847,23 +847,28 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-            inspect.signature(model.gradient_checkpointing_enable).parameters
-        )
-        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
-        model.gradient_checkpointing_enable(**gc_kwargs)
+        # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            model.activation_checkpointing_enable(gradient_checkpointing_kwargs)
+        else:
+            supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
+                inspect.signature(model.gradient_checkpointing_enable).parameters
+            )
+            gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
+            model.gradient_checkpointing_enable(**gc_kwargs)
 
     return model
 
 
 def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
-    # Enable gradient checkpointing on the base model for PEFT
-    if is_peft_model(model):
-        model.base_model.gradient_checkpointing_enable()
-    # Enable gradient checkpointing for non-PEFT models
+    # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
+    checkpointed_model = model.base_model if is_peft_model(model) else model
+    # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        checkpointed_model.activation_checkpointing_enable()
     else:
-        model.gradient_checkpointing_enable()
+        checkpointed_model.gradient_checkpointing_enable()
 
     # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
     if Version(transformers.__version__) < Version("5.0.0"):

@@ -21,6 +21,7 @@ import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -60,6 +61,7 @@ if is_peft_available():
 _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
     reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
     strict=True,
+    run=Version(torch.__version__) >= Version("2.13.0"),  # torch<2.13 leaks checkpoint hooks into later tests (#8302)
 )
 
 
@@ -302,12 +304,12 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
 class TestSFTTrainer(TrlTestCase):
     def test_init_with_training_arguments(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
 
     def test_init_auto_processing_class_uses_model_revision(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=SFTConfig(
@@ -379,7 +381,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_train(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -428,7 +430,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_trust_remote_code(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
         with pytest.raises(ValueError, match="custom code"):
@@ -490,7 +492,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_model(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -507,7 +509,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_dft_loss_matches_reference(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -529,7 +531,7 @@ class TestSFTTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("num_items_in_batch", [None, 0])
     def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -548,7 +550,7 @@ class TestSFTTrainer(TrlTestCase):
         assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
 
     def test_train_dft_loss(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -604,7 +606,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_model_dtype(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -636,7 +638,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     def test_peft_init_is_seeded(self):
         # Two trainers with the same seed start from the same adapter weights
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         adapters = []
         for global_seed in range(2):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
@@ -658,7 +660,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
@@ -697,7 +699,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
         training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
@@ -754,7 +756,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
@@ -780,12 +782,15 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    @pytest.mark.skipif(
+    # peft main has the #7767 fix, but no release has it yet: strict, so a release with the fix fails loudly
+    @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.0.0")
         and is_peft_available()
-        and Version(peft.__version__) < Version("0.21.3"),
-        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.21.3 the dense and shared "
+        and Version(peft.__version__) < Version("0.22.0")
+        and not Version(peft.__version__).is_devrelease,
+        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.22 the dense and shared "
         "expert layers (#7767)",
+        strict=True,
     )
     def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
         # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
@@ -793,7 +798,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         previous_params = {n: param.clone() for n, param in model.named_parameters()}
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
@@ -834,7 +839,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
 
@@ -858,10 +863,10 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.0.0")
         or not is_peft_available()
-        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3"),
-        reason="Only transformers v5 with peft 0.19 to 0.21.2 skips the dense and shared expert layers (#7767)",
+        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0"),
+        reason="Only transformers v5 with peft 0.19 to 0.21 skips the dense and shared expert layers (#7767)",
     )
-    # peft 0.21.0 to 0.21.2 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
+    # peft 0.21.0 to 0.21.3 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
     @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
     @pytest.mark.parametrize(
         "model_id, target_modules, expect_warning",
@@ -875,7 +880,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
         self, model_id, target_modules, expect_warning, caplog
     ):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
         with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
@@ -917,7 +922,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train[:2]")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
@@ -925,7 +930,7 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.aux_loss_enabled == expect_aux_loss
 
     def test_router_aux_loss_coef_fails_without_router_logits(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train[:2]")
         training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
 
         # Dense model: no `output_router_logits` on its config, so there is nothing to compute the term from
@@ -935,7 +940,7 @@ class TestSFTTrainer(TrlTestCase):
             )
 
     def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train[:2]")
         training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
 
         trainer = SFTTrainer(
@@ -947,7 +952,9 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_aux_loss_does_not_scale_with_gradient_accumulation(self):
         # Four copies of one example: every micro-batch has the same aux loss as the full batch
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train").select([0] * 4)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
+            [0] * 4
+        )
 
         def router_update(batch_size, gradient_accumulation_steps, router_aux_loss_coef):
             training_args = SFTConfig(
@@ -974,6 +981,28 @@ class TestSFTTrainer(TrlTestCase):
         accumulated_aux_update = router_update(2, 2, 1.0) - router_update(2, 2, 0.0)
         torch.testing.assert_close(accumulated_aux_update, aux_update, rtol=1e-3, atol=1e-6)
 
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
+
     @require_peft
     def test_train_peft_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -984,7 +1013,7 @@ class TestSFTTrainer(TrlTestCase):
         lora_config = LoraConfig()
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -1012,7 +1041,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
 
@@ -1044,7 +1073,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -1143,7 +1172,9 @@ class TestSFTTrainer(TrlTestCase):
             )
 
     def test_train_with_iterable_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_language_modeling", split="train", streaming=True
+        )
 
         training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
         trainer = SFTTrainer(
@@ -1167,7 +1198,7 @@ class TestSFTTrainer(TrlTestCase):
         reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -1199,7 +1230,7 @@ class TestSFTTrainer(TrlTestCase):
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_train_packing(self, packing_strategy):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
@@ -1222,12 +1253,12 @@ class TestSFTTrainer(TrlTestCase):
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_eval_packing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             packing=True,
-            max_length=64,
+            max_length=256,
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1244,8 +1275,8 @@ class TestSFTTrainer(TrlTestCase):
         assert num_eval_seqs == 2  # we should still have 2 seqs
 
         # Check that all sequences are shorter than the max length
-        assert all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"])
-        assert all(sum(x) <= 64 for x in trainer.eval_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.train_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.eval_dataset["seq_lengths"])
 
         # Check the number of sequences in train and eval datasets
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
@@ -1254,13 +1285,13 @@ class TestSFTTrainer(TrlTestCase):
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_only_train_packing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             packing=True,
             eval_packing=False,
-            max_length=64,
+            max_length=256,
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -1278,7 +1309,7 @@ class TestSFTTrainer(TrlTestCase):
         assert "seq_lengths" not in trainer.eval_dataset
 
         # Check that all sequences are shorter than the max length
-        assert all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"])
+        assert all(sum(x) <= 256 for x in trainer.train_dataset["seq_lengths"])
 
         # Check the number of sequences in train and eval datasets
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
@@ -1479,7 +1510,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize("padding_free", [False, True])
     def test_dataset_truncated_to_max_length(self, padding_free):
         """Dataset preparation truncates every example to `max_length`, with or without padding-free."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, padding_free=padding_free, report_to="none")
         trainer = SFTTrainer(
@@ -1507,10 +1538,11 @@ class TestSFTTrainer(TrlTestCase):
             assert example["input_ids"][-1] == eos_token_id
             assert example["labels"][-1] == eos_token_id  # EOS is trained on
 
-    def test_dataset_preparation_builds_labels_for_completion_only(self):
+    @pytest.mark.parametrize("config_name", ["standard_prompt_completion", "conversational_prompt_completion"])
+    def test_dataset_preparation_builds_labels_for_completion_only(self, config_name):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
         resolves to True (the default for prompt-completion datasets)."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
@@ -1560,7 +1592,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_packing_carries_labels(self):
         """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=64, report_to="none")
         trainer = SFTTrainer(
@@ -1788,7 +1820,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = SFTTrainer(
@@ -1816,10 +1848,10 @@ class TestSFTTrainer(TrlTestCase):
     def test_evaluate_with_eval_dataset(self, eval_dataset_type):
         # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
         # at init. See https://github.com/huggingface/trl/issues/6115.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+            "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
         )
         if eval_dataset_type in ("dataset", "iterable_dataset"):
             eval_dataset = eval_split
@@ -1842,7 +1874,7 @@ class TestSFTTrainer(TrlTestCase):
             assert metrics["eval_data2_loss"] is not None
 
     def test_train_with_metric_for_best_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -1863,7 +1895,7 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
     def test_train_with_multiple_eval_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = SFTTrainer(
@@ -1884,7 +1916,7 @@ class TestSFTTrainer(TrlTestCase):
             train_dataset = None
         else:
             train_dataset = load_dataset(
-                "trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=streaming
+                "trl-internal-testing/zen", "conversational_language_modeling", split="train", streaming=streaming
             )
             if train_dataset_type == "unsupported_dataset_dict":
                 # `DatasetDict` is representative of any unsupported type here; not exhaustive
@@ -1926,14 +1958,14 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "standard_language_modeling", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -1962,7 +1994,7 @@ class TestSFTTrainer(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         def dummy_compute_metrics(eval_pred):
             # The logits are the full-vocabulary logits, as before the fused LM head
@@ -1989,7 +2021,7 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     def test_train_with_compute_loss_func(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         vocab_sizes = []
 
         def compute_loss_func(outputs, labels, num_items_in_batch=None):
@@ -2018,7 +2050,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_predict_returns_logits(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="test")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="test")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -2036,7 +2068,7 @@ class TestSFTTrainer(TrlTestCase):
 
     def test_label_smoothing(self):
         # Label smoothing goes through `Trainer`'s label smoother, on the full logits
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, label_smoothing_factor=0.1, report_to="none")
         with pytest.warns(FutureWarning, match="`label_smoothing_factor` is deprecated"):
             trainer = SFTTrainer(
@@ -2055,7 +2087,7 @@ class TestSFTTrainer(TrlTestCase):
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
         trainer = SFTTrainer(
@@ -2083,7 +2115,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -2108,7 +2140,7 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_torch_accelerator
     def test_train_with_fp16(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, fp16=True, report_to="none")
         trainer = SFTTrainer(
@@ -2128,7 +2160,7 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_torch_accelerator
     def test_train_with_activation_offloading(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, activation_offloading=True, report_to="none")
         trainer = SFTTrainer(
@@ -2147,7 +2179,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_tag_added(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -2159,7 +2191,7 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     def test_tag_added_peft(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -2576,7 +2608,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     def test_prompt_tuning(self):
         """Test that SFT works with Prompt Tuning."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
@@ -2606,7 +2638,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -2645,7 +2677,7 @@ class TestSFTTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_dora_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -2692,7 +2724,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         model = get_peft_model(model, PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8))
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -2717,7 +2749,7 @@ class TestSFTTrainer(TrlTestCase):
     def test_pad_token_id_synced_with_model_config(self):
         # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
@@ -2762,7 +2794,7 @@ class TestSFTTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         model.generation_config.eos_token_id = generation_eos_token_id
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -2787,7 +2819,7 @@ class TestSFTTrainer(TrlTestCase):
         monkeypatch.delenv("CI", raising=False)
         sent = []
         monkeypatch.setattr("trl.trainer.base_trainer.send_telemetry", lambda **kwargs: sent.append(kwargs))
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer_cls(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset)
 
