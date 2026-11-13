@@ -502,7 +502,7 @@ class GRPOTrainer(_BaseTrainer):
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.4")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.4.dev0")
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and any(
                     isinstance(module, torch.nn.Linear)
