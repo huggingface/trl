@@ -43,6 +43,8 @@ from .vllm_client import VLLMClient
 
 
 if is_peft_available():
+    from peft import LoraConfig
+    from peft.tuners.lora import LoraLayer, ParamWrapper
     from peft.utils import ModulesToSaveWrapper
 
 if is_vllm_available():
@@ -103,6 +105,33 @@ def extract_logprobs(all_outputs: list["RequestOutput"]):
             all_logprobs.append(seq_logprobs)
             all_token_ids.append(seq_token_ids)
     return all_logprobs, all_token_ids
+
+
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
 
 
 if TYPE_CHECKING:
@@ -312,6 +341,13 @@ class VLLMGeneration:
         self._weight_metadata = None
 
         if is_peft_model(model):
+            # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if any(not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()):
+                raise ValueError(
+                    "vLLM generation with a PEFT model supports LoRA adapters without `lora_bias` only: the weight "
+                    "sync sends vLLM the base weights with the LoRA deltas merged in."
+                )
             # vLLM holds tied word embeddings as one tensor, so PEFT must not train separate copies of them: #7955
             base_model = model.get_base_model()
             embeddings = [base_model.get_input_embeddings(), base_model.get_output_embeddings()]
@@ -375,13 +411,9 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            quantization = None
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
-                    if isinstance(module, bnb.nn.Linear4bit):
-                        quantization = "bitsandbytes"
-                        break
-                    elif isinstance(module, bnb.nn.Linear8bitLt):
+                    if isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
@@ -400,7 +432,6 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
-                quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
                 # Not passed otherwise: vLLM < 0.28 doesn't accept it
                 **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
@@ -448,13 +479,13 @@ class VLLMGeneration:
 
                     yield full_name, param.data
 
-    def _iter_fsdp2_params(self, module: nn.Module):
+    def _iter_fsdp2_params(self, module: nn.Module, lora_layers: dict):
         """FSDP2-specific parameter iteration."""
         # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
         for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-            # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+            # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
@@ -463,18 +494,20 @@ class VLLMGeneration:
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
+            if param in lora_layers:
+                param = _merge_lora(lora_layers[param], param)
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             yield name, param
 
-    def _iter_fsdp_params(self, model: nn.Module):
+    def _iter_fsdp_params(self, model: nn.Module, lora_layers: dict):
         """Dispatch FSDP parameter iteration to the version-appropriate method."""
         if self._dist.fsdp_version == 1:
             yield from self._iter_fsdp1_params(model)
         elif self._dist.fsdp_version == 2:
-            yield from self._iter_fsdp2_params(model)
+            yield from self._iter_fsdp2_params(model, lora_layers)
 
     def _iter_named_params(self):
         """Iterate over the model parameters, materialized one at a time under the name vLLM expects.
@@ -485,22 +518,25 @@ class VLLMGeneration:
         model = self.model
 
         if is_peft_model(model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in model.modules()
+                if isinstance(module, LoraLayer)
+            }
+            # With DeepSpeed ZeRO Stage 3, the full model is gathered at once, so that the adapters of each LoRA layer
+            # are gathered along with the weight they adapt.
             with self._dist.gather_params(list(model.parameters())):
-                model.merge_adapter()
-
                 # Read the vLLM weights while parameters are gathered
                 if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    yield from self._iter_fsdp_params(model)
+                    yield from self._iter_fsdp_params(model, lora_layers)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
                         if model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -511,14 +547,18 @@ class VLLMGeneration:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        yield name, param.data
-                # Unmerge adapters while parameters are still gathered
-                model.unmerge_adapter()
+                        weight = param.data
+                        # vLLM holds the model unquantized, so bitsandbytes 4-bit weights are sent dequantized
+                        if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
+                            weight = bnb.functional.dequantize_4bit(param.data, param.quant_state)
+                        if param in lora_layers:
+                            weight = _merge_lora(lora_layers[param], weight)
+                        yield name, weight
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and read each parameter individually.
             if self._dist.is_fsdp:
-                yield from self._iter_fsdp_params(model)
+                yield from self._iter_fsdp_params(model, {})
             else:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)

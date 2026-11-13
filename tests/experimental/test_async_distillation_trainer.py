@@ -1446,12 +1446,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             if "lora_" in name:
                 assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
             else:
-                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
-                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
-                # learning rate would move them by orders of magnitude more.
-                torch.testing.assert_close(
-                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
-                )
+                assert torch.equal(param, new_param), f"Base parameter {name} has changed."
 
     @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
     def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
@@ -1573,28 +1568,6 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
-
-    def test_adapters_are_unmerged_when_the_send_raises(self, fake_vllm):
-        merged_during_send = []
-
-        class _RaisingWeightTransfer(_StubWeightTransfer):
-            def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
-
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
-
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
 
 
 def _tensors_handed_to_producer(info, stream):
