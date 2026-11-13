@@ -422,6 +422,7 @@ class VLLMClient:
         logprobs: int | None = 0,
         structured_outputs_regex: str | None = None,
         generation_kwargs: dict | None = None,
+        return_sampling_mask: bool = False,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided prompts.
@@ -456,6 +457,11 @@ class VLLMClient:
                 Additional generation parameters, passed as-is in the request body. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
+            return_sampling_mask (`bool`, *optional*, defaults to `False`):
+                Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k,
+                top-p, min-p and structured outputs filtering. Requires token ID prompts and a vLLM server (>= 0.28)
+                started with `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30), which then rejects
+                requests with `top_k=0`.
 
         Returns:
             `dict` with keys:
@@ -468,6 +474,8 @@ class VLLMClient:
                     probability.
                 - `logprob_token_ids` (`list[list[list[int]]]`):
                     Token IDs corresponding to each logprob, same shape as `logprobs`.
+                - `sampling_mask` (`list[list[list[int]]]`):
+                    For each completion token, the tokens it was sampled from. Only with `return_sampling_mask=True`.
         """
         sampling_params = {
             "n": n,
@@ -483,8 +491,9 @@ class VLLMClient:
             sampling_params["structured_outputs"] = {"regex": structured_outputs_regex}
         sampling_params.update(generation_kwargs or {})
 
-        if features is not None:
-            return self._generate_from_features(prompts, features, sampling_params)
+        # Only `/inference/v1/generate` returns the candidate set of each token
+        if features is not None or return_sampling_mask:
+            return self._generate_from_token_ids(prompts, features, sampling_params, return_sampling_mask)
 
         payload = {
             "model": self.model,
@@ -506,14 +515,15 @@ class VLLMClient:
             "logprob_token_ids": logprob_token_ids,
         }
 
-    def _generate_from_features(
+    def _generate_from_token_ids(
         self,
         prompts: list[list[int]],
-        features: list[dict | None],
+        features: list[dict | None] | None,
         sampling_params: dict,
+        return_sampling_mask: bool,
         max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY,
     ) -> dict[str, list[list[int]]]:
-        """Generate from token IDs paired with multimodal features, one request per prompt."""
+        """Generate from token IDs, optionally paired with multimodal features, one request per prompt."""
         # The server leaves the default output kind on non-streaming requests, under which it returns only the
         # sequences that finished last, silently dropping the others when n > 1. See vLLM PR #52399.
         sampling_params = {**sampling_params, "output_kind": 2}  # FINAL_ONLY
@@ -525,7 +535,7 @@ class VLLMClient:
                     "request_id": f"trl-{uuid.uuid4().hex}",
                     "model": self.model,
                     "token_ids": prompts[index],
-                    "features": features[index],
+                    "features": features[index] if features is not None else None,
                     "sampling_params": sampling_params,
                 },
             )
@@ -538,12 +548,15 @@ class VLLMClient:
             logprobs, logprob_token_ids = parse_generate_logprobs([choice["logprobs"] for choice in choices])
         else:
             logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
-        return {
+        output = {
             "prompt_ids": list(prompts),  # the server generates from what it was given, so it echoes back unchanged
             "completion_ids": [choice["token_ids"] for choice in choices],
             "logprobs": logprobs,
             "logprob_token_ids": logprob_token_ids,
         }
+        if return_sampling_mask:
+            output["sampling_mask"] = [choice["sampling_mask"] for choice in choices]
+        return output
 
     def chat(
         self,

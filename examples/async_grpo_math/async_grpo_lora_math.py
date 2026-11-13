@@ -48,7 +48,7 @@ import os
 from datasets import load_dataset
 from peft import LoraConfig
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
 

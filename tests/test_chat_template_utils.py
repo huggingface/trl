@@ -64,6 +64,7 @@ from trl.chat_template_utils import (
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
+    smolvlm_v2_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -995,6 +996,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
+            pytest.param(
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+                id="smolvlm_v2",
+            ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
@@ -1470,6 +1475,11 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+            id="smolvlm_v2",
+            marks=require_vision,
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
             id="muse_spark",
             marks=[
@@ -1766,8 +1776,6 @@ class TestGetTrainingChatTemplate:
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
@@ -1833,8 +1841,6 @@ class TestGetTrainingChatTemplate:
             )
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
         ]
@@ -1922,50 +1928,14 @@ class TestDeepseekTrainingChatTemplates:
     @pytest.mark.parametrize(
         "tokenizer_name",
         [
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
-                id="r1_distill",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template), id="deepseekv3-v3"
             ),
             pytest.param(
-                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-                id="deepseekv3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-                id="deepseekv3-0528",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template),
-                id="deepseekv3-v3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
-            ),
-            pytest.param(
-                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
-                id="deepseekv3-v4",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) >= Version("5.23.0.dev0"),
-                    reason="transformers>=5.23.0.dev0 drops `content=None`, which the template checks (see #8214)",
-                    strict=True,
-                ),
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
             ),
         ],
     )
