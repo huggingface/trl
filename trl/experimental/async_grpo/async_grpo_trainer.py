@@ -1682,6 +1682,7 @@ class AsyncRolloutLoop:
                 "prompt": prompt_ids,
                 "return_token_ids": True,
                 "return_tokens_as_token_ids": True,
+                "cache_salt": f"v{self.model_version}",
                 **sampling_params,
             }
             output = await self._retry(
@@ -1697,7 +1698,12 @@ class AsyncRolloutLoop:
                 choice["logprobs"]["token_logprobs"],
                 output_sampler_logprobs=sampler_logprobs,
             )
-        payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
+        payload = {
+            "model": self._request_model,
+            "token_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "cache_salt": f"v{self.model_version}",
+        }
         output = await self._retry(
             lambda: self._post("/inference/v1/generate", payload, self.config.vllm_server_timeout),
             max_attempts=30,

@@ -2348,6 +2348,14 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][1]["prompt"] == [1, 2, 3]
         assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
 
+    def test_prefix_cache_is_salted_by_model_version(self):
+        loop = _rollout_loop()
+        response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+        requests, _ = self._generate(loop, response)
+        loop._model_version_value.value = 3
+        requests += self._generate(loop, response)[0]
+        assert [payload["cache_salt"] for _, payload in requests] == ["v0", "v3"]
+
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)
         response = {
