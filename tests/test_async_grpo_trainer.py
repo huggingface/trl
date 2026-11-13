@@ -2330,6 +2330,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_steps=5,  # required with environment_factory
+            # Without a dataset, every rollout has the same prompt: run one group at a time, so that each group gets
+            # the 3 scripted first turns
+            max_concurrent_rollouts=3,
             vllm_server_base_url=server.url,
             report_to="none",
         )
@@ -2414,6 +2417,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_steps=5,  # required with environment_factory
+            # Without a dataset, every rollout has the same prompt: run one group at a time, so that each group gets
+            # the 3 scripted first turns
+            max_concurrent_rollouts=3,
             vllm_server_base_url=server.url,
             report_to="none",
         )
