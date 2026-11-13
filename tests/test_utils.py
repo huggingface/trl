@@ -2325,10 +2325,29 @@ class TestComputeFlopsPerToken(TrlTestCase):
         f_lo = compute_flops_per_token(cfg, 16384)
         cfg.num_experts_per_tok = 2
         f_hi = compute_flops_per_token(cfg, 16384)
-        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if i % cfg.decoder_sparse_step == 0)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if (i + 1) % cfg.decoder_sparse_step == 0)
         per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
         expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
         assert f_hi - f_lo == expected_delta
+
+    def test_moe_sparse_layer_placement(self):
+        # transformers puts the sparse block on layer i when (i + 1) % decoder_sparse_step == 0 and i is not in
+        # `mlp_only_layers`. With 4 layers and step 2 that is layers 1 and 3, minus any mlp-only layer.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_hidden_layers = 4
+        cfg.decoder_sparse_step = 2
+        cfg.mlp_only_layers = []
+        h = cfg.hidden_size
+        moe_extra = 2 * 3 * h * (cfg.num_experts_per_tok * cfg.moe_intermediate_size - cfg.intermediate_size)
+        moe_extra += 2 * h * cfg.num_experts
+        f_two_sparse = compute_flops_per_token(cfg, 16384)
+        cfg.mlp_only_layers = [3]
+        f_one_sparse = compute_flops_per_token(cfg, 16384)
+        assert f_two_sparse - f_one_sparse == 3 * moe_extra
+        cfg.decoder_sparse_step = 4  # only layer 3 is sparse, and it is mlp-only
+        f_none_sparse = compute_flops_per_token(cfg, 16384)
+        cfg.mlp_only_layers = []
+        assert compute_flops_per_token(cfg, 16384) - f_none_sparse == 3 * moe_extra
 
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
