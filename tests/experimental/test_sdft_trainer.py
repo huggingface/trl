@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
+
 import pytest
 import torch
 from datasets import Dataset, DatasetDict
@@ -24,7 +26,7 @@ from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, get_peft_model_state_dict
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -351,7 +353,8 @@ class TestSDFTTrainer(TrlTestCase):
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
     @require_peft
-    def test_train_with_peft_model_and_ema_teacher_sync(self):
+    @pytest.mark.parametrize("gradient_checkpointing", [False, True])
+    def test_train_with_peft_model_and_ema_teacher_sync(self, gradient_checkpointing):
         dataset = Dataset.from_dict(
             {
                 "prompt": ["Solve 2+2.", "Name the capital of France."],
@@ -370,8 +373,10 @@ class TestSDFTTrainer(TrlTestCase):
             max_steps=2,
             num_generations=1,
             teacher_model_kind="ema",
-            teacher_update_rate=0.05,
+            teacher_update_rate=1.0,
             teacher_sync_steps=1,
+            gradient_checkpointing=gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
             report_to="none",
         )
 
@@ -385,11 +390,33 @@ class TestSDFTTrainer(TrlTestCase):
             ),
         )
         previous_trainable_params = self._trainable_param_snapshot(trainer.model)
+        assert "teacher" in trainer.model.peft_config
+        assert all(
+            torch.count_nonzero(value) == 0
+            for value in get_peft_model_state_dict(trainer.model, adapter_name="teacher").values()
+        )
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+        model = trainer.accelerator.unwrap_model(trainer.model_wrapped)
+        deepspeed_plugin = trainer.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
+            gather_context = deepspeed.zero.GatheredParameters(list(model.parameters()))
+        else:
+            gather_context = nullcontext()
+
+        with gather_context:
+            student_state = get_peft_model_state_dict(model, adapter_name="default")
+            teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+            assert student_state.keys() == teacher_state.keys()
+            assert any(torch.count_nonzero(value) > 0 for value in teacher_state.values())
+            for key, value in student_state.items():
+                torch.testing.assert_close(teacher_state[key], value.to(teacher_state[key].dtype), rtol=0, atol=0)
+        assert model.active_adapter == "default"
 
     def test_train_populates_old_log_probs_for_distillation_clipping_when_misaligned(self):
         dataset = Dataset.from_dict(

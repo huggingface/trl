@@ -43,7 +43,7 @@ from trl import (
 )
 from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_peft, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -177,6 +177,32 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    @require_peft
+    @pytest.mark.parametrize(
+        "trainer, test_name",
+        [
+            ("sdpo", "test_train_with_peft_ema_teacher[False-1.0-2]"),
+            ("sdft", "test_train_with_peft_model_and_ema_teacher_sync[False]"),
+        ],
+    )
+    def test_peft_ema_teacher_zero3(self, trainer, test_name, get_launch_args):
+        env = os.environ.copy()
+        env["ACCELERATE_USE_DEEPSPEED"] = "true"
+        env["ACCELERATE_DEEPSPEED_CONFIG_FILE"] = get_launch_args("zero3")[1]
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "--module",
+                "pytest",
+                f"tests/experimental/test_{trainer}_trainer.py::Test{trainer.upper()}Trainer::{test_name}",
+                "-q",
+                "--maxfail=1",
+            ],
+            env,
+        )
 
     @pytest.mark.parametrize(
         "config",

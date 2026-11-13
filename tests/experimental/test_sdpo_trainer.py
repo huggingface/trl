@@ -13,15 +13,21 @@
 # limitations under the License.
 
 import logging
+from contextlib import nullcontext
 
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, HfArgumentParser, TrainerCallback
+from transformers.utils import is_peft_available
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_peft
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model_state_dict
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -73,6 +79,73 @@ class RecordingTeacherClient:
 
 
 class TestSDPOTrainer(TrlTestCase):
+    @require_peft
+    @pytest.mark.parametrize("teacher_update_rate, max_steps", [(0.5, 1), (1.0, 2)])
+    @pytest.mark.parametrize("gradient_checkpointing", [False, True])
+    def test_train_with_peft_ema_teacher(self, teacher_update_rate, max_steps, gradient_checkpointing):
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                teacher_model_kind="ema",
+                teacher_update_rate=teacher_update_rate,
+                teacher_sync_steps=1,
+                learning_rate=0.01,
+                per_device_train_batch_size=1,
+                generation_batch_size=2,
+                num_generations=2,
+                max_completion_length=4,
+                max_steps=max_steps,
+                save_strategy="no",
+                gradient_checkpointing=gradient_checkpointing,
+                gradient_checkpointing_kwargs={"use_reentrant": False},
+                include_environment_feedback=True,
+                use_successful_as_teacher=False,
+            ),
+            train_dataset=Dataset.from_dict(
+                {
+                    "prompt": ["Solve 2+2.", "Name the capital of France."],
+                    "privileged_context": ["The correct answer is 4.", "The correct answer is Paris."],
+                }
+            ),
+            peft_config=LoraConfig(r=4, target_modules=["q_proj", "v_proj"]),
+        )
+
+        assert "teacher" in trainer.model.peft_config
+        assert trainer.model.active_adapter == "default"
+        teacher_state = get_peft_model_state_dict(trainer.model, adapter_name="teacher")
+        assert teacher_state and all(torch.count_nonzero(value) == 0 for value in teacher_state.values())
+        initial_student = {
+            key: value.detach().clone() for key, value in get_peft_model_state_dict(trainer.model).items()
+        }
+
+        result = trainer.train()
+
+        model = trainer.accelerator.unwrap_model(trainer.model_wrapped)
+        deepspeed_plugin = trainer.accelerator.state.deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
+            gather_context = deepspeed.zero.GatheredParameters(list(model.parameters()))
+        else:
+            gather_context = nullcontext()
+
+        with gather_context:
+            student_state = get_peft_model_state_dict(model, adapter_name="default")
+            teacher_state = get_peft_model_state_dict(model, adapter_name="teacher")
+            assert student_state.keys() == teacher_state.keys()
+            assert any(not torch.equal(value, initial_student[key]) for key, value in student_state.items())
+            assert any(torch.count_nonzero(value) > 0 for value in teacher_state.values())
+            for key, value in student_state.items():
+                expected = (teacher_update_rate * value).to(teacher_state[key].dtype)
+                torch.testing.assert_close(teacher_state[key], expected, rtol=0, atol=0)
+
+        assert trainer.state.global_step == max_steps
+        assert torch.isfinite(torch.tensor(result.training_loss))
+        assert model.active_adapter == "default"
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict(
             {
