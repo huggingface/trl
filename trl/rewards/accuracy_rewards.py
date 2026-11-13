@@ -15,7 +15,6 @@
 import json
 import logging
 import math
-import os
 import queue
 import subprocess
 import sys
@@ -81,7 +80,6 @@ class _Grader:
     def __init__(self):
         self._lock = threading.Lock()
         self._process = None
-        self._pid = None
 
     def _start(self):
         self._process = subprocess.Popen(
@@ -91,7 +89,6 @@ class _Grader:
             text=True,
             bufsize=1,
         )
-        self._pid = os.getpid()
         self._lines = queue.Queue()
 
         def read_results(stdout, lines):
@@ -104,18 +101,10 @@ class _Grader:
 
     def grade(self, solution: str, content: str) -> tuple[float | None, str, str]:
         with self._lock:
-            # A forked trainer process can't share its parent's pipes, so it starts its own grading process
-            if self._process is None or self._process.poll() is not None or self._pid != os.getpid():
+            if self._process is None or self._process.poll() is not None:
                 self._start()
-            request = json.dumps([solution, content]) + "\n"
-            try:
-                self._process.stdin.write(request)
-                self._process.stdin.flush()
-            except OSError:
-                # The grading process died since the check above (e.g. out of memory), so start a new one
-                self._start()
-                self._process.stdin.write(request)
-                self._process.stdin.flush()
+            self._process.stdin.write(json.dumps([solution, content]) + "\n")
+            self._process.stdin.flush()
             try:
                 line = self._lines.get(timeout=GRADE_TIMEOUT)
             except queue.Empty:
