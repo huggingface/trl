@@ -17,6 +17,8 @@
     title: Paper Index
   title: Conceptual Guides
 - sections: # Sorted alphabetically
+  - local: async_grpo_trainer
+    title: Asynchronous GRPO
   - local: distillation_trainer
     title: Distillation
   - local: dpo_trainer
@@ -105,8 +107,6 @@
     title: A2PO
   - local: async_distillation_trainer
     title: Async Distillation
-  - local: async_grpo_trainer
-    title: Asynchronous GRPO
   - local: bema_for_reference_model
     title: BEMA for Reference Model
   - local: cpo_trainer
