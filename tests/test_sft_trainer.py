@@ -14,6 +14,7 @@
 
 import json
 import pathlib
+from importlib.metadata import version
 
 import pytest
 import torch
@@ -27,6 +28,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
+from transformers.integrations import is_deepspeed_available
 from transformers.testing_utils import torch_device
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
@@ -1104,6 +1106,10 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @pytest.mark.skipif(
+        not is_deepspeed_available() or Version(version("deepspeed")) >= Version("0.19.3"),
+        reason="The trainer forces reentrant checkpointing for PEFT + ZeRO-3 only on DeepSpeed < 0.19.3",
+    )
     def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch):
         # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
         # reach the checkpoint function whichever name transformers reads the kwargs from.
