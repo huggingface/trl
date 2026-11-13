@@ -1230,7 +1230,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
-            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=256, report_to="none"
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1591,7 +1591,7 @@ class TestSFTTrainer(TrlTestCase):
         """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=64, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=256, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
