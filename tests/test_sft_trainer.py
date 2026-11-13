@@ -898,8 +898,9 @@ class TestSFTTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
                 0.0,
                 False,
-                marks=pytest.mark.xfail(
-                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="FP8 dequantization requires transformers>=5.0.0",
                 ),
             ),
             pytest.param(
