@@ -55,30 +55,31 @@ def run_command(command: list[str], env: dict[str, str]) -> None:
 
 
 @pytest.fixture
-def get_config_path(lazy_shared_datadir):
-    def _get_config_path(config_name):
-        return lazy_shared_datadir / "accelerate_configs" / f"{config_name}.yaml"
+def get_launch_args(lazy_shared_datadir):
+    def _get_launch_args(config_name):
+        if config_name == "ddp":
+            return []
+        if config_name == "fsdp2":
+            return ["--fsdp", "--fsdp_config", str(lazy_shared_datadir / "fsdp2.json")]
+        return ["--deepspeed", str(lazy_shared_datadir / f"{config_name}.json")]
 
-    return _get_config_path
+    return _get_launch_args
 
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
-    def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):
+    @pytest.mark.parametrize(
+        "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
+    )
+    def test_async_checkpoint_saved_in_compute_dtype(self, test_file):
         run_command(
             [
-                "accelerate",
-                "launch",
-                "--config_file",
-                get_config_path("fsdp2"),
-                "--mixed_precision",
-                "bf16",
-                "--fsdp_state_dict_type",
-                "FULL_STATE_DICT",
+                "torchrun",
+                "--nproc_per_node",
+                "2",
                 "-m",
                 "pytest",
-                f"tests/experimental/{test_file}.py",
+                f"tests/{test_file}",
                 "-k",
                 "test_fsdp_checkpoint_body",
                 "-x",
@@ -97,6 +98,50 @@ class TestDistributed(TrlTestCase):
         assert AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto").dtype == torch.bfloat16
         master = torch.load(os.path.join(checkpoint, "pytorch_model_fsdp.bin"), map_location="cpu", weights_only=True)
         assert {tensor.dtype for tensor in master.values() if tensor.is_floating_point()} == {torch.float32}
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_lora(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_lora_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
 
     def test_zero_sync_grpo_tensor_parallel(self):
         run_command(
@@ -157,11 +202,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft(self, config, get_config_path):
+    def test_sft(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -192,11 +237,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft_nll_loss(self, config, get_config_path):
+    def test_sft_nll_loss(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -228,11 +273,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_dpo(self, config, get_config_path):
+    def test_dpo(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -263,14 +308,14 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
+    def test_dpo_precompute_ref_log_probs(self, config, get_launch_args):
         # `--eval_strategy epoch` passes an eval dataset, so reference log-probs are precomputed for both the train and
         # eval splits (two passes), which is what previously broke multi-GPU precompute (fingerprint cache mismatch, and
         # a corrupted ZeRO-3 parameter coordinator from re-initializing DeepSpeed on the policy model per pass).
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -303,11 +348,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_kto_precompute_ref_log_probs(self, config, get_config_path):
+    def test_kto_precompute_ref_log_probs(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/kto.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/kto.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -340,11 +385,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft_dataset_streaming(self, config, get_config_path):
+    def test_sft_dataset_streaming(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -379,11 +424,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_sft_peft(self, config, get_config_path):
+    def test_sft_peft(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -415,11 +460,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_reward(self, config, get_config_path):
+    def test_reward(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/reward.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/reward.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -457,11 +502,11 @@ class TestDistributed(TrlTestCase):
             ),
         ],
     )
-    def test_rloo(self, config, get_config_path):
+    def test_rloo(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/rloo.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/rloo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
@@ -494,11 +539,11 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
-    def test_grpo(self, config, get_config_path):
+    def test_grpo(self, config, get_launch_args):
         # fmt: off
         run_command(
             [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/grpo.py",
+                "torchrun", "--nproc_per_node", "2", "trl/scripts/grpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",

@@ -18,7 +18,7 @@
 #     "trackio",
 #     "datasets",
 #     "peft",
-#     "openenv @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv==0.7.0",
 # ]
 # ///
 
@@ -110,7 +110,7 @@ from harbor_env.harness import HarborSessionFactory
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer, HarnessRolloutOutcome
 
 

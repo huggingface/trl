@@ -39,6 +39,7 @@ config = Olmo3Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
