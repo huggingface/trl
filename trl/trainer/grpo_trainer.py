@@ -37,7 +37,7 @@ import torch
 import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
@@ -1164,29 +1164,13 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm:
             # vLLM normalizes its log-probs over the top-k/top-p/min-p candidate set, so the trainer must too
             filtered_sampling = self.top_p < 1.0 or self.top_k > 0 or (self.min_p or 0.0) > 0.0
+            # In server mode, the server's `--return-sampling-mask` flag also decides, checked below
             return_sampling_mask = (
                 self.vllm_importance_sampling_correction
                 and filtered_sampling
-                and self.vllm_mode == "colocate"
                 and self.temperature > 0
                 and is_vllm_available(min_version="0.28.0")
             )
-            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
-                args.generation_kwargs or {}
-            )
-            if self.vllm_importance_sampling_correction and structured_outputs and not return_sampling_mask:
-                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
-                raise ValueError(
-                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
-                    "sampled token, which takes `vllm_mode='colocate'` and vLLM >= 0.28. Alternatively, set "
-                    "`vllm_importance_sampling_correction=False`."
-                )
-            if self.vllm_importance_sampling_correction and filtered_sampling and not return_sampling_mask:
-                logger.warning(
-                    "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
-                    "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
-                    "takes `vllm_mode='colocate'` and vLLM >= 0.28."
-                )
             # Initialize vLLM generation backend
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1223,19 +1207,53 @@ class GRPOTrainer(_BaseTrainer):
                 return_sampling_mask=return_sampling_mask,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
-            # The importance sampling correction needs logprobs after temperature scaling and logit processing.
             if (
                 self.vllm_mode == "server"
                 and self.vllm_importance_sampling_correction
                 and self.accelerator.is_main_process
             ):
-                logprobs_mode = self.vllm_generation.vllm_client.get_server_info()["model_config"]["logprobs_mode"]
-                if logprobs_mode != "processed_logprobs":
+                model_config = self.vllm_generation.vllm_client.get_server_info()["model_config"]
+                # The importance sampling correction needs logprobs after temperature scaling and logit processing.
+                if model_config["logprobs_mode"] != "processed_logprobs":
                     logger.warning(
-                        f"The vLLM server runs with `--logprobs-mode {logprobs_mode}`, which biases the importance "
-                        "sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or set "
-                        "`vllm_importance_sampling_correction=False`."
+                        f"The vLLM server runs with `--logprobs-mode {model_config['logprobs_mode']}`, which biases "
+                        "the importance sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or "
+                        "set `vllm_importance_sampling_correction=False`."
                     )
+                # Only a server started with `--return-sampling-mask` returns the candidate sets
+                if self.vllm_generation.return_sampling_mask and not model_config["return_sampling_mask"]:
+                    self.vllm_generation.return_sampling_mask = False
+            if self.vllm_mode == "server":
+                # Only the main process queries the server, so the other processes take its answer
+                return_sampling_mask = [self.vllm_generation.return_sampling_mask]
+                broadcast_object_list(return_sampling_mask, from_process=0)
+                self.vllm_generation.return_sampling_mask = return_sampling_mask[0]
+            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+                args.generation_kwargs or {}
+            )
+            if (
+                self.vllm_importance_sampling_correction
+                and structured_outputs
+                and not self.vllm_generation.return_sampling_mask
+            ):
+                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
+                raise ValueError(
+                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
+                    "sampled token, which takes vLLM >= 0.28 and, in server mode, a server started with "
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30). Alternatively, set "
+                    "`vllm_importance_sampling_correction=False`."
+                )
+            if (
+                self.vllm_importance_sampling_correction
+                and filtered_sampling
+                and not self.vllm_generation.return_sampling_mask
+            ):
+                logger.warning(
+                    "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
+                    "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
+                    "takes vLLM >= 0.28 and, in server mode, a server started with "
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30)."
+                )
         else:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,

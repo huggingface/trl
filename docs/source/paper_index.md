@@ -779,7 +779,7 @@ trainer = A2POTrainer(
 trainer.train()
 ```
 
-## Direct Policy Optimization
+## Direct Preference Optimization
 
 Papers relating to the [`DPOTrainer`]
 
