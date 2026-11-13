@@ -175,11 +175,15 @@ def check_dtype_pattern(reference_id, model):
     `model` can also be the state dict that gets saved, when the script writes the checkpoint itself (quantized weights).
     """
     try:
-        metadata = api.get_safetensors_metadata(reference_id)
+        files_metadata = api.get_safetensors_metadata(reference_id).files_metadata.values()
     except NotASafetensorsRepoError:
-        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
-        return
-    ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
+        # No transformers index: read the headers of the other safetensors files (e.g. Mistral's consolidated format)
+        filenames = [name for name in api.list_repo_files(reference_id) if name.endswith(".safetensors")]
+        if not filenames:
+            print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+            return
+        files_metadata = [api.parse_safetensors_file_metadata(reference_id, name) for name in filenames]
+    ref_dtypes = {name: info.dtype for fm in files_metadata for name, info in fm.tensors.items()}
 
     if isinstance(model, nn.Module):
         tiny_dtypes = {}

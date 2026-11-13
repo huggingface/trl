@@ -513,6 +513,43 @@ class TestVLLMClientServer(TrlTestCase):
         kill_process(cls.server_process)
 
 
+@require_torch_multi_accelerator
+@pytest.mark.skipif(
+    not is_vllm_available(min_version="0.30.0"),
+    reason="`/inference/v1/generate`, which returns the candidate sets, needs `--enable-scale-out` (vLLM >= 0.30)",
+)
+@pytest.mark.xdist_group("vllm_server")
+class TestVLLMClientServerSamplingMask(TrlTestCase):
+    model_id = "Qwen/Qwen2.5-1.5B"
+
+    @classmethod
+    def setup_class(cls):
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
+        cls.server_process = subprocess.Popen(
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS, "--return-sampling-mask"], env=env
+        )
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
+
+    def test_generate_with_sampling_mask(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompt_token_ids = tokenizer(["Hello, AI!", "Tell me a joke"])["input_ids"]
+        outputs = self.client.generate(prompt_token_ids, n=2, top_k=10, max_tokens=8, return_sampling_mask=True)
+
+        assert len(outputs["sampling_mask"]) == len(outputs["completion_ids"]) == 4
+        for completion_ids, sampling_mask in zip(outputs["completion_ids"], outputs["sampling_mask"], strict=True):
+            assert len(sampling_mask) == len(completion_ids)
+            for token_id, candidates in zip(completion_ids, sampling_mask, strict=True):
+                assert token_id in candidates
+                assert len(candidates) <= 10
+
+    @classmethod
+    def teardown_class(cls):
+        kill_process(cls.server_process)
+
+
 # Same as above but using base_url to instantiate the client.
 @require_torch_multi_accelerator
 @require_vllm
