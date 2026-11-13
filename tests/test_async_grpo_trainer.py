@@ -1109,14 +1109,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            pytest.param(
-                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-                0.0,
-                False,
-                marks=pytest.mark.xfail(
-                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
-                ),
-            ),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
@@ -3471,7 +3464,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         or not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9),
         reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
     )
-    @pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)")
     @require_response_parsing
     def test_train_with_tools_deepseekv3(self, make_vllm_server):
         # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one
