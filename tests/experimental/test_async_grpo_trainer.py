@@ -188,7 +188,7 @@ class _StubRolloutWorker:
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
-                    metrics={"reward": float(rewards[idx]), "reward_group_std": float(rewards.std())},
+                    metrics={"reward/trained": float(rewards[idx]), "reward/trained_group_std": float(rewards.std())},
                 )
                 # fork_k rows per generation, all sharing this group_id: mimics message-mode forking a
                 # conversation into several training rows. Only the shared group_id matters for the epoch
@@ -1552,7 +1552,7 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
         "sampler_log_probs": np.full((length, 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": int(input_ids[0]),
-        "metrics": {"reward": reward},
+        "metrics": {"reward/trained": reward},
     }
 
 
@@ -1636,7 +1636,7 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
         assert batch["global_n_forward_tokens"].tolist() == [5.0, 5.0]  # every token forwarded, prompts included
         # Per-sample rewards are aggregated here on rank 0 rather than broadcast with the batch and reduced back.
-        assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
+        assert collator.metrics["reward/trained"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
         assert collator.metrics["batch/packing_ratio"] == [(5, 5)]  # nothing shared, every raw token forwarded
 
     def test_collator_lays_sampling_masks_end_to_end(self):
@@ -1689,7 +1689,7 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["segment_id"].tolist() == [[0, 0, 1], [0, 1, 1]]
         assert batch["global_n_tokens"].tolist() == [6.0, 6.0]  # a:2 + c:1 + b:1 + d:2 completion tokens
         assert batch["global_n_forward_tokens"].tolist() == [10.0, 10.0]  # 3 + 2 + 2 + 3
-        assert collator.metrics["reward"] == [0.5]  # (0.5 + 0.25 + 0.75 + 0.5) / 4
+        assert collator.metrics["reward/trained"] == [0.5]  # (0.5 + 0.25 + 0.75 + 0.5) / 4
         assert collator.metrics["batch/samples_per_row"] == [2.0]
         assert collator.metrics["batch/pad_frac"] == [(0, 10)]  # rows pack equal -> no inter-rank padding
 
@@ -1698,14 +1698,14 @@ class TestPackingAwareBatching(TrlTestCase):
         # first sample without the keys must not drop them, one with them must not KeyError on the rest.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         with_func = _rollout_sample(2, reward=1.0)
-        with_func["metrics"] = {"reward": 1.0, "rewards/env/mean": 4.0}
+        with_func["metrics"] = {"reward/trained": 1.0, "rewards/env/trained_group_std": 4.0}
         plain = _rollout_sample(2, reward=0.0)
 
         for groups in ([[plain], [with_func]], [[with_func], [plain]]):
             collator.metrics.clear()
             collator([[_tree_row(group) for group in groups]])
-            assert collator.metrics["reward"] == [0.5]  # (1.0 + 0.0) / 2, over both samples
-            assert collator.metrics["rewards/env/mean"] == [4.0]  # only the sample that carries it
+            assert collator.metrics["reward/trained"] == [0.5]  # (1.0 + 0.0) / 2, over both samples
+            assert collator.metrics["rewards/env/trained_group_std"] == [4.0]  # only the sample that carries it
 
 
 def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group_id: int = 0):
@@ -1718,7 +1718,7 @@ def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group
         "sampler_log_probs": np.full((len(tokens), 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": group_id,
-        "metrics": {"reward": 0.0},
+        "metrics": {"reward/trained": 0.0},
     }
 
 
@@ -2890,7 +2890,7 @@ class TestScoreGroupOptionThree(TrlTestCase):
         samples = asyncio.run(loop._score_group(group))
 
         # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
-        assert loop._rates["rewards/AsyncTwoReward/mean"] == [4.0, 2]  # rewards 1.0 and 3.0
+        assert loop._rates["rewards/AsyncTwoReward/all"] == [4.0, 2]  # rewards 1.0 and 3.0
         assert samples[0].advantage == pytest.approx(-1.0)
         assert samples[1].advantage == pytest.approx(1.0)
 
@@ -2903,12 +2903,12 @@ class TestScoreGroupOptionThree(TrlTestCase):
         loop = _rollout_loop(reward_funcs=[two_reward])
         samples = asyncio.run(loop._score_group(group))
 
-        assert samples[0].metrics["reward_kept"] == 1.0
-        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
-        assert samples[0].metrics["reward_group_std"] == pytest.approx(1.0)
+        assert samples[0].metrics["reward/trained"] == 1.0
+        assert samples[1].metrics["reward/trained"] == 3.0 and samples[2].metrics["reward/trained"] == 3.0
+        assert samples[0].metrics["reward/trained_group_std"] == pytest.approx(1.0)
         # Each reward function's mean counts the forked conversation once, as GRPO counts a completion once
-        assert loop._rates["rewards/two_reward/mean"] == [4.0, 2]  # rewards 1.0 and 3.0
-        assert samples[1].metrics["rewards/two_reward/group_std"] == pytest.approx(1.0)
+        assert loop._rates["rewards/two_reward/all"] == [4.0, 2]  # rewards 1.0 and 3.0
+        assert samples[1].metrics["rewards/two_reward/trained_group_std"] == pytest.approx(1.0)
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
         assert samples[1].metrics is not samples[2].metrics
 
@@ -2926,9 +2926,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
-        assert math.isnan(samples[0].metrics["reward_kept"])
+        assert math.isnan(samples[0].metrics["reward/trained"])
         assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
-        assert samples[1].metrics["reward_kept"] == 2.0
+        assert samples[1].metrics["reward/trained"] == 2.0
 
 
 def constant_reward(completions, **kwargs):
@@ -2980,14 +2980,14 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
         assert items[0] == 0
         assert [s.group_id for s in items[1:]] == [1, 1]
-        assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
-        assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
+        assert metrics["reward/zero_std_frac"] == [(1.0, 1), (0.0, 1)]
+        assert metrics["reward/all"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
         # So does each reward function's mean, except for a group the function didn't score
-        assert metrics["rewards/dummy_reward_func/mean"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
+        assert metrics["rewards/dummy_reward_func/all"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
         assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
         assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
 
-    def test_reward_dropped_and_duplicate_frac(self):
+    def test_reward_zero_std_and_duplicate_frac(self):
         # The first token of each completion is its reward, and 0 means the reward func cannot score it.
         def first_token_reward(completion_ids, **kwargs):
             return [float(ids[0]) if ids[0] else None for ids in completion_ids]
@@ -2999,9 +2999,9 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [4, 10]])))  # dropped, one scored
         asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # dropped, unscorable
 
-        assert loop._rates["frac_reward_zero_std"] == [3, 4]
+        assert loop._rates["reward/zero_std_frac"] == [3, 4]
         # Only the dropped groups with a scored completion contribute the reward they are stuck at.
-        assert loop._rates["reward_dropped"] == [3.0 + 4.0, 2]
+        assert loop._rates["reward/zero_std"] == [3.0 + 4.0, 2]
         # One of the eight completions repeats an earlier one of its group.
         assert loop._rates["completions/duplicate_frac"] == [1, 8]
 

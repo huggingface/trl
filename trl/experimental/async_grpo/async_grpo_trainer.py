@@ -1373,7 +1373,7 @@ class AsyncRolloutLoop:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward/trained"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.config.num_completions_to_print,
@@ -1824,29 +1824,29 @@ class AsyncRolloutLoop:
         self._rates["completions/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
-        self._rates["reward"][0] += float(scored.sum())
-        self._rates["reward"][1] += len(scored)
-        # Each reward function's mean over the rollouts it scored, dropped groups included, like `reward`. A function
+        self._rates["reward/all"][0] += float(scored.sum())
+        self._rates["reward/all"][1] += len(scored)
+        # Each reward function's mean over the rollouts it scored, dropped groups included, like `reward/all`. A function
         # that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no reward) adds nothing.
         for name, func_rewards in zip(self.reward_func_names, per_func_rewards, strict=True):
             func_scored = func_rewards[~np.isnan(func_rewards)]
             if len(func_scored):
-                self._rates[f"rewards/{name}/mean"][0] += float(func_scored.sum())
-                self._rates[f"rewards/{name}/mean"][1] += len(func_scored)
+                self._rates[f"rewards/{name}/all"][0] += float(func_scored.sum())
+                self._rates[f"rewards/{name}/all"][1] += len(func_scored)
         if self.tools or any(group.tool_call_counts):
             self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
             self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
             self._rates["tools/failure_frequency"][0] += sum(group.tool_failure_counts)
             self._rates["tools/failure_frequency"][1] += sum(group.tool_call_counts)
         zero_std = bool(np.all(scored == scored[:1]))
-        self._rates["frac_reward_zero_std"][0] += zero_std
-        self._rates["frac_reward_zero_std"][1] += 1
+        self._rates["reward/zero_std_frac"][0] += zero_std
+        self._rates["reward/zero_std_frac"][1] += 1
         if zero_std:
             if len(scored):
                 # The reward a dropped group is stuck at: near the top of its range, the prompts are too easy; near the
                 # bottom, too hard. With 0/1 rewards, this is the share of dropped groups whose completions all pass.
-                self._rates["reward_dropped"][0] += reward_mean
-                self._rates["reward_dropped"][1] += 1
+                self._rates["reward/zero_std"][0] += reward_mean
+                self._rates["reward/zero_std"][1] += 1
             return []
 
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
@@ -1862,10 +1862,10 @@ class AsyncRolloutLoop:
             group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True
         ):
             metrics = {
-                "reward_kept": float(reward),
-                "reward_group_std": reward_std,
+                "reward/trained": float(reward),
+                "reward/trained_group_std": reward_std,
                 **{
-                    f"rewards/{name}/group_std": std
+                    f"rewards/{name}/trained_group_std": std
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
@@ -2213,7 +2213,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/group_std
+                    **sample.metrics,  # reward/trained, reward/trained_group_std, rewards/<func>/trained_group_std
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
