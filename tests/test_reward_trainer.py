@@ -869,6 +869,30 @@ class TestRewardTrainer(TrlTestCase):
 
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
+    def test_train_with_group_by_length(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8327: the tokenized dataset has no
+        # `input_ids` column for transformers to infer the lengths from, which broke both the train and eval samplers
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference")
+        if Version(transformers.__version__) >= Version("5.2.0"):
+            sampling_kwargs = {"train_sampling_strategy": "group_by_length"}
+        else:
+            sampling_kwargs = {"group_by_length": True}
+
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none", **sampling_kwargs
+        )
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[0]["eval_loss"] is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     def test_train_with_multiple_eval_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference")
 

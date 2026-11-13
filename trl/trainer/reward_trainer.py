@@ -33,6 +33,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
+from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -45,6 +46,7 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.modeling_layers import GenericForSequenceClassification
+from transformers.trainer_pt_utils import LengthGroupedSampler
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -642,6 +644,12 @@ class RewardTrainer(_BaseTrainer):
             else:
                 eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
+        # `group_by_length=True` became `train_sampling_strategy="group_by_length"` in transformers 5.2.0
+        if Version(transformers.__version__) >= Version("5.2.0"):
+            self._group_by_length = args.train_sampling_strategy == "group_by_length"
+        else:
+            self._group_by_length = args.group_by_length
+
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
         # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
@@ -800,6 +808,38 @@ class RewardTrainer(_BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             self._signature_columns = ["chosen_ids", "rejected_ids", "margin"]
+
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> Sampler | None:
+        if train_dataset is None:
+            train_dataset = self.train_dataset
+        # Transformers infers the lengths for `group_by_length` from an `input_ids` column, which the tokenized dataset
+        # doesn't have. Pass them instead: the longer of the two sequences, the length the collator pads to.
+        if self._group_by_length and isinstance(train_dataset, Dataset):
+            lengths = [
+                max(len(chosen_ids), len(rejected_ids))
+                for chosen_ids, rejected_ids in zip(
+                    train_dataset["chosen_ids"], train_dataset["rejected_ids"], strict=True
+                )
+            ]
+            return LengthGroupedSampler(
+                self.args.train_batch_size * self.args.gradient_accumulation_steps, lengths=lengths
+            )
+        return super()._get_train_sampler(train_dataset)
+
+    def _get_eval_sampler(self, eval_dataset: Dataset) -> Sampler | None:
+        # Same as in `_get_train_sampler`
+        if self._group_by_length and isinstance(eval_dataset, Dataset):
+            lengths = [
+                max(len(chosen_ids), len(rejected_ids))
+                for chosen_ids, rejected_ids in zip(
+                    eval_dataset["chosen_ids"], eval_dataset["rejected_ids"], strict=True
+                )
+            ]
+            seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
+            return LengthGroupedSampler(
+                self.args.eval_batch_size, lengths=lengths, generator=torch.Generator().manual_seed(seed)
+            )
+        return super()._get_eval_sampler(eval_dataset)
 
     def evaluate(
         self,

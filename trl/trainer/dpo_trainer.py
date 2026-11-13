@@ -33,7 +33,7 @@ from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
 from datasets.fingerprint import Hasher
 from packaging.version import Version
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
@@ -46,6 +46,7 @@ from transformers import (
     set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_pt_utils import LengthGroupedSampler
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -933,6 +934,12 @@ class DPOTrainer(_BaseTrainer):
                 else:
                     eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
+        # `group_by_length=True` became `train_sampling_strategy="group_by_length"` in transformers 5.2.0
+        if Version(transformers.__version__) >= Version("5.2.0"):
+            self._group_by_length = args.train_sampling_strategy == "group_by_length"
+        else:
+            self._group_by_length = args.group_by_length
+
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
         # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
@@ -1241,6 +1248,41 @@ class DPOTrainer(_BaseTrainer):
                     "ref_chosen_logps",
                     "ref_rejected_logps",
                 ]
+
+    def _get_train_sampler(self, train_dataset: Dataset | None = None) -> Sampler | None:
+        if train_dataset is None:
+            train_dataset = self.train_dataset
+        # Transformers infers the lengths for `group_by_length` from an `input_ids` column, which the tokenized dataset
+        # doesn't have. Pass them instead: the prompt plus the longer completion, the length the collator pads to.
+        if self._group_by_length and not self._is_vision_dataset and isinstance(train_dataset, Dataset):
+            lengths = [
+                len(prompt_ids) + max(len(chosen_ids), len(rejected_ids))
+                for prompt_ids, chosen_ids, rejected_ids in zip(
+                    train_dataset["prompt_ids"],
+                    train_dataset["chosen_ids"],
+                    train_dataset["rejected_ids"],
+                    strict=True,
+                )
+            ]
+            return LengthGroupedSampler(
+                self.args.train_batch_size * self.args.gradient_accumulation_steps, lengths=lengths
+            )
+        return super()._get_train_sampler(train_dataset)
+
+    def _get_eval_sampler(self, eval_dataset: Dataset) -> Sampler | None:
+        # Same as in `_get_train_sampler`
+        if self._group_by_length and not self._is_vision_dataset and isinstance(eval_dataset, Dataset):
+            lengths = [
+                len(prompt_ids) + max(len(chosen_ids), len(rejected_ids))
+                for prompt_ids, chosen_ids, rejected_ids in zip(
+                    eval_dataset["prompt_ids"], eval_dataset["chosen_ids"], eval_dataset["rejected_ids"], strict=True
+                )
+            ]
+            seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
+            return LengthGroupedSampler(
+                self.args.eval_batch_size, lengths=lengths, generator=torch.Generator().manual_seed(seed)
+            )
+        return super()._get_eval_sampler(eval_dataset)
 
     def _precompute_ref_logps(self, dataset: Dataset, name: str, batch_size: int) -> Dataset:
         if isinstance(dataset, IterableDataset):
