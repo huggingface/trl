@@ -49,6 +49,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     BitsAndBytesConfig,
+    FineGrainedFP8Config,
+    Mxfp4Config,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
@@ -1318,12 +1320,25 @@ def create_model_from_path(
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`. A checkpoint quantized in MXFP4 or FP8
+            is loaded dequantized, unless `'quantization_config'` is set.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
+    # The config decides how the weights load, so it comes from the revision they load from
+    config = AutoConfig.from_pretrained(
+        model_id, revision=kwargs.get("revision"), trust_remote_code=kwargs.get("trust_remote_code", False)
+    )
+    # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
+    # loaded dequantized, unless the caller chose how to load it with `quantization_config`
+    dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
+    quant_method = config.to_dict().get("quantization_config", {}).get("quant_method")
+    if quant_method in dequantizers and "quantization_config" not in kwargs:
+        if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
+            raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
+        kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
     dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
@@ -1346,7 +1361,6 @@ def create_model_from_path(
         kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
         architecture = getattr(transformers, config.architectures[0], None)
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
@@ -1589,6 +1603,9 @@ def add_fused_lm_head(
     tokens at each position as well, returned as `score_log_probs` and normalized like `log_probs`. It is aligned and
     shifted like `support_ids`.
 
+    For MoE models, `loss` includes the load-balancing loss weighted by `router_aux_loss_coef`, the one of the model
+    config unless passed to the forward.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1634,6 +1651,7 @@ def add_fused_lm_head(
         num_items_in_batch=None,
         support_ids=None,
         score_ids=None,
+        router_aux_loss_coef=None,
         **kwargs,
     ):
         if not fused_lm_head:
@@ -1729,23 +1747,25 @@ def add_fused_lm_head(
             # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = self.num_experts
-                num_experts_per_tok = self.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
-                    transformers.__version__
-                ) < Version("5.6.0"):
-                    num_experts = self.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = self.num_experts_per_tok
                 else:
-                    num_experts = text_config.num_experts
-                num_experts_per_tok = text_config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(
-                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
-            )
-            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
+                    num_experts_per_tok = text_config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(
+                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                )
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
+            if router_aux_loss_coef is None:
+                router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
+            loss = loss + router_aux_loss_coef * aux_loss
 
         return FusedCausalLMOutput(
             loss=loss,
@@ -1762,14 +1782,29 @@ def add_fused_lm_head(
     model.forward = types.MethodType(_fused_forward, model)
 
 
-def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+# Model types whose layers `compute_flops_per_token` describes: full attention in every layer, and a gate/up/down MLP
+# or routed experts of that shape. For each, the estimate matches 6 FLOPs per active weight on real checkpoints.
+_FLOPS_PER_TOKEN_MODEL_TYPES = (
+    "gemma",
+    "granite",
+    "llama",
+    "olmo2",
+    "qwen2",
+    "qwen3",
+    "qwen3_moe",
+    "qwen3_vl_moe_text",
+    "qwen3_vl_text",
+    "smollm3",
+)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int | None:
     """
     Estimate training FLOPs per token for a causal language model (forward + backward).
 
-    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
-    × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU through [`adjusted_mfu`] for the Llama /
-    DeepSpeed Ulysses causal-corrected convention.
+    Supports the dense and MoE model types in `_FLOPS_PER_TOKEN_MODEL_TYPES`. Backward is assumed to cost 2× the
+    forward pass, so total training FLOPs = 3 × forward FLOPs. The attention-score term uses the non-causal convention
+    (every token attends to the full `seq_len`, matching PaLM / Megatron / nanoGPT).
 
     Args:
         config ([`~transformers.PretrainedConfig`]):
@@ -1778,8 +1813,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             The sequence length used for training.
 
     Returns:
-        `int`: Estimated training FLOPs per token.
+        `int` or `None`: Estimated training FLOPs per token, or `None` if the model type is unsupported.
     """
+    if config.model_type not in _FLOPS_PER_TOKEN_MODEL_TYPES:
+        return None
+
     h = config.hidden_size
     L = config.num_hidden_layers
     V = config.vocab_size
@@ -1922,30 +1960,3 @@ def compute_mfu(
         `float`: MFU as a percentage (0-100).
     """
     return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
-
-
-def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
-    """
-    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
-
-    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as attending to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only half of the attention-score FLOPs (`Q·Kᵀ`
-    and `attn·V`) are actually performed. This function subtracts that half from the per-token total and rescales `mfu`
-    accordingly. Use it to compare against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
-
-    Args:
-        mfu (`float`):
-            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal [`compute_flops_per_token`]).
-        config ([`~transformers.PretrainedConfig`]):
-            The model configuration.
-        seq_len (`int`):
-            The sequence length used for training.
-
-    Returns:
-        `float`: Causal-corrected MFU as a percentage.
-    """
-    flops_full = compute_flops_per_token(config, seq_len)
-    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
-    return mfu * (flops_full - half_attn_score) / flops_full

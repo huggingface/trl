@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.22.1` to `0.33.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.23.0` to `0.33.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -107,7 +107,7 @@ trainer.train()
 And the train command on separate GPUs from the server:
 
 ```sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 ```
 
 ## Why using vLLM?
@@ -134,7 +134,7 @@ Only the following are required by TRL:
 | `--weight-transfer-config '{"backend": "nccl"}'` | Enables the NCCL weight-transfer engine. Use `"ipc"` instead when the trainer and the server share a GPU. |
 | `--logprobs-mode processed_logprobs` | Returns logprobs after temperature scaling and logit processing, which is what the importance sampling correction expects. |
 | `--max-logprobs -1` | Lifts the OpenAI-compatible cap of 20 logprobs per token, required to request the top-k teacher distribution for distillation. |
-| `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images. Earlier versions reject the flag. |
+| `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts and `--return-sampling-mask` only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images and to get the candidate set of each sampled token. Earlier versions reject the flag. |
 
 > [!WARNING]
 > `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.

@@ -1,0 +1,439 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .base_config import _BaseConfig
+
+
+@dataclass
+class AsyncGRPOConfig(_BaseConfig):
+    r"""
+    Configuration class for the [`AsyncGRPOTrainer`].
+
+    This class includes only the parameters that are specific to asynchronous GRPO training. For a full list of
+    training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values
+    in this class may differ from those in [`~transformers.TrainingArguments`].
+
+    Parameters:
+        > Parameters that control the model
+
+        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
+            model from a path. The `revision` value is also used when loading the processing class.
+        dtype (`str`, *optional*, defaults to `"float32"`):
+            Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
+            to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
+            Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788)) is sensitive to the
+            trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
+            dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
+            `model_init_kwargs` takes precedence.
+
+            This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
+            default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
+            the optimizer state are fp32 whatever `dtype` says, while the forward and backward run in bf16 or fp16.
+            Checkpoints are then written in that mixed-precision dtype, not in fp32. Without FSDP nothing upcasts:
+            `dtype="bfloat16"` with `bf16=True` keeps bf16 weights and optimizer states, which is pure bf16 training.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
+
+        > Parameters that control generation
+
+        num_generations (`int`, *optional*, defaults to `8`):
+            Number of generations per prompt to sample.
+        max_completion_length (`int`, *optional*, defaults to `2048`):
+            Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
+            to consider all tokens. Below `1.0`, `top_k` must be set too, and the vLLM server (>= 0.28) started with
+            `--return-sampling-mask --enable-scale-out`: the trainer renormalizes its log-probabilities over the
+            candidate set each token was sampled from, as the server does. An older vLLM keeps the whole vocabulary.
+        top_k (`int`, *optional*, defaults to `0`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
+            disabled and all tokens are considered. Any other value needs the server flags described under `top_p`.
+        min_p (`float`, *optional*):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range. Above `0.0`, `top_k` must be set too,
+            with the server flags described under `top_p`.
+        chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls.
+
+        > Parameters that control the vLLM server
+
+        vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
+            Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`).
+        vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
+            Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each generation
+            request, and each weight-sync call. Waiting for the server and weight-sync calls raise when it runs out; a
+            generation request that times out is retried.
+
+        > Parameters that control the training
+
+        epsilon (`float`, *optional*, defaults to `0.2`):
+            Epsilon value for clipping.
+        epsilon_high (`float`, *optional*):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        score_centering (`bool`, *optional*, defaults to `True`):
+            Whether to train with score centering ([paper](https://huggingface.co/papers/2609.20807)) instead of the
+            clipped objective: the importance-weighted score of each sampled token minus its expectation under the vLLM
+            sampler, so that a constant advantage does not pull the policy toward the sampler. The expectation is taken
+            over the `num_sampler_logprobs` most likely tokens at each position, whose log-probabilities the sampler
+            reports.
+        vllm_importance_sampling_clip_min (`float`, *optional*, defaults to `0.5`):
+            Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio falls
+            outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are dropped from the
+            loss (masked importance sampling).
+        vllm_importance_sampling_clip_max (`float`, *optional*, defaults to `5.0`):
+            Upper bound C_max of the importance ratio.
+        num_sampler_logprobs (`int`, *optional*, defaults to `8`):
+            Number of top log-probabilities requested from the vLLM sampler for every generated token, used by score
+            centering. More cover more of the sampler's probability mass but cost more to serialize; the server's
+            `--max-logprobs` bounds it.
+        token_budget (`int`, *optional*):
+            Maximum number of tokens forwarded in a single row (one DP rank's forward). A `TokenBudgetBatcher` forms
+            attention-cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory
+            independently of the sample count (the number of samples per row becomes dynamic). The budget bounds unique
+            tokens rather than raw ones, so tokens shared by several samples count once, and it bounds the row's loss
+            terms too. If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) —
+            the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer
+            than `token_budget` fits in no row and is dropped with a warning.
+
+        > Parameters that control the async rollout pipeline
+
+        max_concurrent_rollouts (`int`, *optional*, defaults to `512`):
+            Maximum number of rollouts running at once. Each one holds an environment, may run synchronous tool calls,
+            and keeps a connection to the vLLM server, so set it to what those resources can take. Below it, the number
+            of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`.
+        max_staleness (`int`, *optional*, defaults to `4`):
+            Maximum number of weight update steps a rollout sample can lag behind the current model version before
+            being dropped. Generation is held to it: a new group of rollouts starts only while the tokens queued and in
+            flight fit in what the trainer consumes in `max(max_staleness, 1)` steps.
+        weight_sync_steps (`int`, *optional*, defaults to `1`):
+            Number of training steps between weight synchronizations to the vLLM server.
+        rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
+            Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
+
+        > Parameters that control the logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps.
+        num_completions_to_print (`int`, *optional*):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
+
+    > [!NOTE]
+    > These parameters have default values different from [`~transformers.TrainingArguments`]:
+    > - `logging_steps`: Defaults to `1` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
+    > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
+    > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
+    > - `lr_scheduler_type`: Defaults to `constant` instead of `linear` (see below).
+    > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
+    > - `remove_unused_columns`: Defaults to `False` instead of `True`, and must stay `False`: every dataset column is passed to the reward functions.
+
+    > [!NOTE]
+    > Training duration and learning rate under message-mode reconciliation:
+    > A multi-turn conversation can fork into a variable number of training rows (a rewrite of the conversation
+    > starts a new row), so the number of samples, and therefore the number of optimizer steps, per epoch is not
+    > known up front. As a consequence:
+    > - `num_train_epochs` bounds training by full passes over the *prompt* dataset, counted as the number of
+    >   distinct prompts actually trained on. This is independent of how many rows the forks produce, so requesting
+    >   N epochs always trains on N passes over the data. When `max_steps` is left unset, this is the stop condition
+    >   and `max_steps` is only a safety ceiling.
+    > - `max_steps`, if set explicitly (`> 0`), takes over as the stop condition (bounding by optimizer steps rather
+    >   than by epochs) and disables the epoch-based stop.
+    > - `lr_scheduler_type` defaults to `constant` because a decay horizon is measured in optimizer steps, which
+    >   cannot be known up front when the step count depends on the fork rate. For a decaying learning rate, set a
+    >   decaying schedule together with an explicit `max_steps`.
+    """
+
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
+
+    # Parameters that control the model
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
+            "the model from a path. The `revision` value is also used when loading the processing class."
+        },
+    )
+    dtype: str = field(
+        default="float32",
+        metadata={
+            "help": "Dtype to load the model under. Defaults to 'float32', the precision the training-inference "
+            "mismatch results this trainer is measured against were obtained at. Under FSDP with mixed precision the "
+            "master weights and optimizer state are fp32 regardless (accelerate upcasts before sharding) and "
+            "checkpoints are written in the bf16/fp16 compute dtype. A `dtype` in `model_init_kwargs` takes "
+            "precedence.",
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float | None = field(
+        default=None,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
+        },
+    )
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=1,
+        metadata={
+            "help": "Log every X update steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    lr_scheduler_type: str = field(
+        default="constant",
+        metadata={
+            "help": "Learning-rate schedule. Defaults to `constant`: when training is bounded by `num_train_epochs`, "
+            "message-mode forks make the total step count unknown up front, so `max_steps` is only a safety ceiling "
+            "and a decay horizon can't be calibrated. Set a decaying schedule (e.g. `cosine`) together with an "
+            "explicit `max_steps` if you want LR decay."
+        },
+    )
+    ignore_data_skip: bool = field(
+        default=True,
+        metadata={
+            "help": "Always `True` for AsyncGRPO; the base Trainer's skip-and-replay loop does not apply to a live "
+            "rollout queue."
+        },
+    )
+    remove_unused_columns: bool = field(
+        default=False,
+        metadata={
+            "help": "Must be `False` for AsyncGRPO: every dataset column is passed to the reward functions. Remove the "
+            "columns you don't need from the dataset instead."
+        },
+    )
+
+    # Parameters that control generation
+    num_generations: int = field(
+        default=8,
+        metadata={"help": "Number of generations per prompt to sample."},
+    )
+    max_completion_length: int = field(
+        default=2048,
+        metadata={"help": "Maximum number of tokens generated per vLLM request, so per turn in a multi-turn rollout."},
+    )
+    temperature: float = field(
+        default=1.0,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
+        },
+    )
+    top_k: int = field(
+        default=0,
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, "
+            "top-k-filtering is disabled and all tokens are considered."
+        },
+    )
+    min_p: float | None = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    chat_template_kwargs: dict | str | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
+            "completions."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls."
+        },
+    )
+
+    # Parameters that control the vLLM server
+    vllm_server_base_url: str = field(
+        default="http://localhost:8000",
+        metadata={"help": "Base URL of the vLLM server used for generation (e.g., 'http://localhost:8000')."},
+    )
+    vllm_server_timeout: float = field(
+        default=1800.0,
+        metadata={
+            "help": "Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each "
+            "generation request, and each weight-sync call. Waiting for the server and weight-sync calls raise when "
+            "it runs out; a generation request that times out is retried."
+        },
+    )
+
+    # Parameters that control the training
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Epsilon value for clipping."},
+    )
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
+    )
+    score_centering: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to train with score centering instead of the clipped objective: the importance-weighted "
+            "score of each sampled token minus its expectation under the vLLM sampler."
+        },
+    )
+    vllm_importance_sampling_clip_min: float = field(
+        default=0.5,
+        metadata={
+            "help": "Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose "
+            "ratio falls outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are "
+            "dropped from the loss."
+        },
+    )
+    vllm_importance_sampling_clip_max: float = field(
+        default=5.0,
+        metadata={"help": "Upper bound C_max of the importance ratio."},
+    )
+    num_sampler_logprobs: int = field(
+        default=8,
+        metadata={
+            "help": "Number of top log-probabilities requested from the vLLM sampler for every generated token, used "
+            "by score centering."
+        },
+    )
+    token_budget: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward). A "
+            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this "
+            "budget, bounding peak memory independently of the sample count. If None (default), it is set to the "
+            "vLLM server's `max_model_len` (queried at train start), so no rollout sample can ever exceed the budget. "
+            "A sample longer than `token_budget` fits in no row and is dropped with a warning."
+        },
+    )
+
+    # Parameters that control the async rollout pipeline
+    max_concurrent_rollouts: int = field(
+        default=512,
+        metadata={
+            "help": "Maximum number of rollouts running at once. Each one holds an environment, may run synchronous "
+            "tool calls, and keeps a connection to the vLLM server, so set it to what those resources can take. Below "
+            "it, the number of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`."
+        },
+    )
+    max_staleness: int = field(
+        default=4,
+        metadata={
+            "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
+            "before being dropped. Generation is held to it: a new group of rollouts starts only while the tokens "
+            "queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
+        },
+    )
+    weight_sync_steps: int = field(
+        default=1,
+        metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
+    )
+    rollout_worker_timeout: float = field(
+        default=300.0,
+        metadata={
+            "help": "Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung "
+            "and aborts."
+        },
+    )
+
+    # Parameters that control the logging
+    log_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+    num_completions_to_print: int | None = field(
+        default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.remove_unused_columns:
+            raise ValueError(
+                "`remove_unused_columns=True` is not supported: AsyncGRPO passes every dataset column to the reward "
+                "functions. Remove the columns you don't need from the dataset before passing it to the trainer, for "
+                "example with `dataset.remove_columns(...)`."
+            )
+
+        if self.score_centering and self.num_sampler_logprobs < 1:
+            raise ValueError("`score_centering=True` needs `num_sampler_logprobs >= 1`.")
+
+        if (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0) and self.top_k == 0:
+            raise ValueError(
+                "`top_p < 1.0` or `min_p > 0.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each "
+                "sampled token with `top_k` (e.g. `top_k=512`)."
+            )
+
+        if self.num_generations < 2:
+            raise ValueError(
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}, which is less than the minimum required."
+            )
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "AsyncGRPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` "
+                "or `parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation "
+                "inside the trainer, so Transformers' context-parallel / Ulysses sequence-parallel input "
+                "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
+                "or disable `parallelism_config`."
+            )
+
+        # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
+        # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
+        # and batches are broadcast to other processes rather than each process pulling independently.
+        self.accelerator_config.split_batches = True
+        self.accelerator_config.dispatch_batches = True
