@@ -171,7 +171,7 @@ Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the ori
 
 ### `muse_glimmer_training.jinja`
 
-Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
 
 ### `muse_spark_training.jinja`
 
@@ -250,9 +250,13 @@ Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` 
 
 ### `smolvlm_training.jinja`
 
-Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+Patched SmolVLM template (also used for SmolVLM2-500M-Video-Instruct, and SmolVLM2-2.2B-Instruct before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d), which ship a byte-identical template). Diff vs `smolvlm.jinja`:
 
 Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
+
+### `smolvlm_v2_training.jinja`
+
+Patched SmolVLM2 template. Same diff as `smolvlm_training.jinja`, applied to `smolvlm_v2.jinja`.
 
 ## Related utilities
 
