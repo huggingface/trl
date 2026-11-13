@@ -126,9 +126,17 @@ def _unwrap_model_for_generation(
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        is_gradient_checkpointing = unwrapped_model.is_activation_checkpointing
+        disable_checkpointing = unwrapped_model.activation_checkpointing_disable
+        enable_checkpointing = unwrapped_model.activation_checkpointing_enable
+    else:
+        is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+        disable_checkpointing = unwrapped_model.gradient_checkpointing_disable
+        enable_checkpointing = unwrapped_model.gradient_checkpointing_enable
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_disable()
+        disable_checkpointing()
     from ..distributed import DistributedBackend
 
     if DistributedBackend(accelerator).is_zero3:
@@ -144,7 +152,7 @@ def _unwrap_model_for_generation(
     else:
         yield unwrapped_model
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+        enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 @contextmanager
@@ -387,14 +395,22 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
         gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
-    was_enabled = model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        was_enabled = model.is_activation_checkpointing
+        disable_checkpointing = model.activation_checkpointing_disable
+        enable_checkpointing = model.activation_checkpointing_enable
+    else:
+        was_enabled = model.is_gradient_checkpointing
+        disable_checkpointing = model.gradient_checkpointing_disable
+        enable_checkpointing = model.gradient_checkpointing_enable
     if was_enabled:
-        model.gradient_checkpointing_disable()
+        disable_checkpointing()
     try:
         yield
     finally:
         if was_enabled:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+            enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 def create_reference_model(

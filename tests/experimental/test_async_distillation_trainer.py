@@ -690,6 +690,22 @@ class TestMultiTeacherRouting:
         # The routed id rides along on the sample so the collator can tag every token with it (MOPD metrics).
         assert [sample.teacher_id for sample in samples] == ["code", "math"]
 
+    def test_only_the_student_request_is_salted_by_model_version(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        loop = _scoring_loop(tokenizer, ONE_TEACHER)
+        loop._model_version_value.value = 3
+        requests = []
+
+        async def fake_post(base_url, path, payload, timeout):
+            requests.append(payload)
+            if "prompt_logprobs" in payload:
+                return {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+            return {"choices": [{"token_ids": [7]}]}
+
+        loop._post = fake_post
+        asyncio.run(loop._generate_and_score_one(0, {"prompt": [{"role": "user", "content": "hi"}]}))
+        assert [payload.get("cache_salt") for payload in requests] == ["v3", None]
+
     def test_scores_only_the_completion_region(self):
         (sample,), ((_, payload),) = self._run(ONE_TEACHER, None)
         n_prompt = len(sample.input_ids) - int(sample.completion_mask.sum())
@@ -1446,7 +1462,6 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         with pytest.raises(ValueError, match="--max-lora-rank"):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base

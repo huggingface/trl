@@ -38,6 +38,7 @@ config = SmolLM3Config(
     vocab_size=128256,
     hidden_size=8,
     num_attention_heads=4,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_key_value_heads=2,
     # Four layers so that the last one skips RoPE (no_rope_layer_interval=4), as every fourth layer of the reference
     num_hidden_layers=4,
