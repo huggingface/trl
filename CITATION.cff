@@ -27,6 +27,8 @@ authors:
     family-names: Dirhoussi
   - given-names: Albert
     family-names: Villanova del Moral
+  - given-names: Sergio
+    family-names: Paniego Blanco
 repository-code: 'https://github.com/huggingface/trl'
 abstract: >-
   TRL (Transformers Reinforcement Learning) is an
