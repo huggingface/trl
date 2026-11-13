@@ -100,7 +100,7 @@ The [`KTOTrainer`] tokenizes each input using the model's tokenizer.
 
 ### Computing the loss
 
-The KL divergence term used by the KTO loss is estimated by pairing each prompt with a mismatched completion drawn from elsewhere in the batch. For this reason, loss types that estimate the KL term (all except `apo_zero_unpaired`) require a per-device train batch size greater than 1 and a sequential sampling strategy, so that the mismatched pairs are stable across a batch.
+The KL divergence term used by the KTO loss is estimated by pairing each prompt with a mismatched completion drawn from elsewhere in the batch. For this reason, loss types that estimate the KL term (all except `apo_zero_unpaired`) require a per-device train batch size greater than 1 and a sequential sampling strategy, so that the mismatched pairs are stable across a batch. To keep desirable and undesirable examples mixed within each batch, the trainer shuffles the training dataset once during preparation, using `seed`.
 
 The loss used in KTO (Eq. 7 of the [paper](https://huggingface.co/papers/2402.01306)) is defined as follows:
 
