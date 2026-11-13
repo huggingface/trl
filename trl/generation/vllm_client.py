@@ -935,6 +935,41 @@ class VLLMClient:
         ]
         self.update_named_params(metadata, ((name, param.data) for name, param in model.named_parameters()))
 
+    def load_lora_adapter(self, lora_name: str, lora_path: str):
+        """
+        Register a PEFT adapter directory under `lora_name`, making it selectable as a model name.
+
+        Args:
+            lora_name (`str`):
+                Name to register the adapter under. Generation requests select it through their `model` field.
+            lora_path (`str`):
+                Directory holding `adapter_config.json` and the adapter weights. The server process reads it, so it
+                must sit on a filesystem the server can see: vLLM has no in-memory adapter API.
+        """
+        response = self.session.post(
+            f"{self.base_url}/v1/load_lora_adapter",
+            # `load_inplace` stays `False`: it makes the server re-read the adapter from disk on every request
+            # (https://github.com/vllm-project/vllm/pull/41482). New policies get a new name instead.
+            json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": False},
+        )
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} does not expose `/v1/load_lora_adapter`. Restart it with "
+                "`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def unload_lora_adapter(self, lora_name: str):
+        """
+        Remove a previously registered adapter. Missing names are not an error.
+
+        Args:
+            lora_name (`str`):
+                Name the adapter was registered under.
+        """
+        self.session.post(f"{self.base_url}/v1/unload_lora_adapter", json={"lora_name": lora_name})
+
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
