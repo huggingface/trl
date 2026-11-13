@@ -952,7 +952,7 @@ class TestSFTTrainer(TrlTestCase):
         reason="transformers rejects router logits under reentrant checkpointing from 5.24",
     )
     def test_aux_loss_fails_with_reentrant_gradient_checkpointing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train[:2]")
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             router_aux_loss_coef=0.5,
