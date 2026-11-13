@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.3
+    rev: 9c89adb347f6b973f4905a4be0051eb2ecf85dea  # v0.13.3
     hooks:
       - id: ruff-check
         types_or: [ python, pyi ]
@@ -9,7 +9,7 @@ repos:
         types_or: [ python, pyi ]
 
   - repo: https://github.com/huggingface/doc-builder
-    rev: 1a5ffe7ee75754c27c7bbd650ac124affa660d3d  # main
+    rev: ecdecfb9b66123f9078fa5ec62296cba6fdc971b  # v0.6.0
     hooks:
       - id: doc-builder-style
         args: [--max_len, "119"]

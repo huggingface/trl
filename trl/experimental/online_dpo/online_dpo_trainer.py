@@ -555,6 +555,17 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(processing_class, ProcessorMixin):
                 # A sampled image token would mismatch the image features
                 generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
+                # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+                if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                    "qwen2_vl",
+                    "qwen2_5_vl",
+                    "qwen3_vl",
+                    "qwen3_vl_moe",
+                    "qwen3_5",
+                    "qwen3_5_moe",
+                    "paddleocr_vl",
+                ):
+                    generation_kwargs["suppress_tokens"].append(model.config.vision_start_token_id)
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             # Remove None values
@@ -618,7 +629,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             checkpointed_model.gradient_checkpointing_enable()
 
-        model.enable_input_require_grads()
+        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if Version(transformers.__version__) < Version("5.0.0"):
+            model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):

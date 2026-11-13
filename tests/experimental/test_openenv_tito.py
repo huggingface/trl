@@ -46,8 +46,10 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import TurnRecord, _chain_to_sequences, _SampleBuilder
+from trl import AsyncGRPOConfig
+from trl.experimental.async_grpo import openenv_harness
+from trl.trainer import async_grpo_trainer
+from trl.trainer.async_grpo_trainer import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
 
 from ..testing_utils import is_ampere_or_newer, require_vllm
 
@@ -73,8 +75,8 @@ def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
         entry([1, 2, 3, 4, 99, 6], [7], [-0.4], [0, 0, 0, 0, 0, 0, 1]),
     ]
     turns = convert(entries)
-    rows, tally = _chain_to_sequences(turns, "rollout", 0)
-    assert len(rows) == 2 and tally["realign"] == 0
+    rows, drifts = _chain_to_sequences(Rollout([], [], turns))
+    assert len(rows) == 2 and drifts == [1]
     assert rows[0].input_ids == [1, 2, 3, 4, 5]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
     assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
@@ -91,7 +93,7 @@ def test_missing_or_invalid_sample_logprobs_cannot_be_filled_with_zeros(logprobs
 
 @pytest.mark.parametrize("mask,logprobs", [(1, None), (1, []), ([1, 0], [-0.1]), (0, [])])
 def test_builder_rejects_misaligned_arrays_before_mutation(mask, logprobs):
-    builder = _SampleBuilder(fork_threshold=0)
+    builder = _SampleBuilder("rollout")
     with pytest.raises(ValueError):
         builder._append([2], mask=mask, logprobs=logprobs)
     assert builder.tokens == builder.loss_mask == builder.logprobs == []
@@ -103,17 +105,10 @@ def test_consumer_rejects_invalid_full_masks(mask):
         convert([entry([1], [2], [-0.1], mask)])
 
 
-@pytest.mark.parametrize(
-    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (MCPHarnessAdapter(), True, 1024)]
-)
-def test_loop_owning_capture_defaults_to_lossless_reconciliation(make_loop, adapter, lossless, threshold):
+@pytest.mark.parametrize("adapter", [None, MCPHarnessAdapter()])
+def test_agent_owned_loop_gets_the_training_sampling(make_loop, adapter):
     factory_calls = []
-    loop = make_loop(
-        factory_builder=lambda **kwargs: factory_calls.append(kwargs),
-        harness_adapter=adapter,
-        lossless_capture=lossless,
-    )
-    assert loop._fork_threshold_tokens == threshold
+    make_loop(factory_builder=lambda **kwargs: factory_calls.append(kwargs), harness_adapter=adapter)
     if adapter is not None:
         assert factory_calls == [{}]
     else:
@@ -147,6 +142,7 @@ def make_loop():
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
             model_version_value=mp.Value("i", 0),
+            token_allowance=mp.Value("q", 10**12),
             heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
@@ -317,7 +313,7 @@ def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     result, _ = loop._run_session([])
-    rows, _ = _chain_to_sequences(result.turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(result)
     assert result.reward == 0.25
     assert rows[0].input_ids == [1, 2, 3]
     assert rows[0].completion_mask == [0, 1, 0]
@@ -403,8 +399,8 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     assert (result.tool_call_count, result.tool_failure_count) == (2, 1)
     loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
-    assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
+    assert payload["tools/bash/call_count"] == 1 and payload["tools/edit/call_count"] == 1
+    assert payload["tools/edit/failure_count"] == 1 and "tools/bash/failure_count" not in payload
     assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
     assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.02
 
@@ -427,7 +423,7 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     assert (result.tool_call_count, result.tool_failure_count) == (1, 1)
     loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
+    assert payload["tools/bash/call_count"] == 1 and payload["tools/edit/failure_count"] == 1
     assert "tools/latency_s" not in payload
 
 
@@ -491,7 +487,7 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
     trace = to_training_trace(result)
     assert factory.sampling == policy
     turns = openenv_harness._turns_from_training_trace(trace)
-    rows, _ = _chain_to_sequences(turns, "test", 0)
+    rows, _ = _chain_to_sequences(Rollout([], [], turns))
     assert rows[0].input_ids == [10, 11, 12, 13, 14]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
     assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
@@ -501,7 +497,7 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     session = Session(captured_entry())
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     monkeypatch.setattr(
-        async_rollout_worker, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+        async_grpo_trainer, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
     )
     with pytest.raises(ValueError, match="invalid training sequence"):
         loop._run()
@@ -558,7 +554,7 @@ def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward)
     actual, _ = loop._run_session([])
     assert actual.reward == reward
     assert actual.tool_call_count == 2  # Usage includes the zero-masked agent call.
-    rows, _ = _chain_to_sequences(actual.turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(actual)
     assert len(rows) == 1
     assert rows[0].input_ids == [10, 11, 12]
     assert rows[0].completion_mask == [0, 1, 0]
@@ -580,7 +576,7 @@ def test_shared_prefix_is_supervised_once_across_both_branches():
         ]
     }
     turns = openenv_harness._turns_from_training_trace(to_training_trace(graph, document))
-    rows, _ = _chain_to_sequences(turns, "rollout", 0)
+    rows, _ = _chain_to_sequences(Rollout([], [], turns))
     supervised = [
         token for row in rows for token, mask in zip(row.input_ids, row.completion_mask, strict=True) if mask
     ]

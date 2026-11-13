@@ -40,10 +40,9 @@ from openenv.core.harness.capture.upstream import training_sampling
 from openenv.core.llm_client import LLMResponse, ToolCall
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
-from ...chat_template_utils import parse_response
-from .async_grpo_config import AsyncGRPOConfig
-from .async_grpo_trainer import AsyncGRPOTrainer
-from .async_rollout_worker import AsyncRolloutLoop, Rollout, TurnRecord
+from ...chat_template_utils import add_response_schema, parse_response
+from ...trainer.async_grpo_config import AsyncGRPOConfig
+from ...trainer.async_grpo_trainer import AsyncGRPOTrainer, AsyncRolloutLoop, Rollout, TurnRecord
 
 
 if TYPE_CHECKING:
@@ -110,15 +109,11 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
         harness_session_factory: Callable[..., ResourceSessionFactory],
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
-        lossless_capture: bool = True,
         max_session_failures_per_slot: int = 10,
         max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         super().__init__(**loop_kwargs)
-        # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
-        if harness_adapter is None and lossless_capture:
-            self._fork_threshold_tokens = 0
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
         if harness_adapter is None and (self.config.top_p < 1.0 or self.config.top_k > 0):
@@ -132,12 +127,21 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 "top_p": self.config.top_p,
                 "top_k": self.config.top_k,
                 "min_p": self.config.min_p,
-                "repetition_penalty": self.config.repetition_penalty,
+                # Explicit: vLLM fills an omitted penalty from the model's generation config (1.05 for
+                # Qwen2.5-Instruct), and the trainer's log-probs carry none
+                "repetition_penalty": 1.0,
             }
             sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
             self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
         else:
             self._factory = harness_session_factory()
+            # TRL parses each sampled turn for the agent's tool calls, so it needs a response parser even though the
+            # trainer has no tools of its own.
+            if (
+                getattr(self.tokenizer, "response_template", None) is None
+                and getattr(self.tokenizer, "response_schema", None) is None
+            ):
+                self.tokenizer = add_response_schema(self.tokenizer)
         self._limits = HarnessRunLimits(
             max_turns=self.config.max_tool_calling_iterations
             if self.config.max_tool_calling_iterations is not None
@@ -164,9 +168,9 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
             for name, count in metrics.pop("tool_calls_by_name").items():
-                self._counters[f"tools/{name}/call_total"] += count
+                self._counters[f"tools/{name}/call_count"] += count
             for name, count in metrics.pop("tool_failures_by_name").items():
-                self._counters[f"tools/{name}/failure_total"] += count
+                self._counters[f"tools/{name}/failure_count"] += count
             for name, elapsed in metrics.pop("tool_latency"):
                 self._rates["tools/latency_s"][0] += elapsed
                 self._rates["tools/latency_s"][1] += 1
@@ -307,7 +311,10 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
-            return Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward), metrics
+            return (
+                Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward, rollout_id),
+                metrics,
+            )
         except CaptureContractError:
             raise
         except Exception:
@@ -411,8 +418,8 @@ def _messages_from_trace(entries: list[TraceEntry]) -> list[Message]:
 
 class HarnessAsyncGRPOTrainer(AsyncGRPOTrainer):
     """
-    [`experimental.async_grpo.AsyncGRPOTrainer`] whose rollouts are OpenEnv harness sessions, for example an agent
-    served by Harbor that runs its own loop.
+    [`AsyncGRPOTrainer`] whose rollouts are OpenEnv harness sessions, for example an agent served by Harbor that runs
+    its own loop.
 
     Each rollout creates a session from the factory and lets it run to completion. Without `harness_adapter`, the agent
     owns its loop and TRL trains on the `TrainingTrace` the session captured; with one, TRL samples each turn itself.
@@ -422,7 +429,7 @@ class HarnessAsyncGRPOTrainer(AsyncGRPOTrainer):
 
     Args:
         model (`str` or [`~transformers.PreTrainedModel`]):
-            Model to be trained, as in [`experimental.async_grpo.AsyncGRPOTrainer`].
+            Model to be trained, as in [`AsyncGRPOTrainer`].
         harness_session_factory (`Callable[..., ResourceSessionFactory]`):
             Callable returning an OpenEnv `ResourceSessionFactory`, for example
             `functools.partial(HarborSessionFactory, server_url, ...)`. Without `harness_adapter`, it is called with
@@ -431,10 +438,10 @@ class HarnessAsyncGRPOTrainer(AsyncGRPOTrainer):
             picklable: a module-level function, a `functools.partial` or a callable class instance, not a lambda.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset of prompts. Each prompt is passed to the factory's `create` to start a session on its task.
-        args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
+        args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
-            Processing class used to process the data, as in [`experimental.async_grpo.AsyncGRPOTrainer`].
+            Processing class used to process the data, as in [`AsyncGRPOTrainer`].
         harness_adapter (`HarnessAdapter`, *optional*):
             Adapter that lets TRL sample each turn of the session. If `None`, the agent owns its loop and TRL trains on
             what the session captured, which requires sampling the full vocabulary (`top_p=1.0`, `top_k=0`). Used in

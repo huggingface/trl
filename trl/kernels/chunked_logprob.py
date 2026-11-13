@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import math
+from functools import partial
 
 import torch
 from packaging.version import Version
@@ -560,7 +561,8 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     )
                     chunk = score_logit[token_start:token_end]
                     chunk.copy_(torch.where(in_tile, z, chunk))
-                fold = _forward_kernel[(n,)] if _use_triton(device) else _forward_tile
+                # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+                fold = partial(_forward_kernel[(n,)], enable_fp_fusion=False) if _use_triton(device) else _forward_tile
                 fold(
                     tile,
                     tile.stride(0),
@@ -695,8 +697,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                         if ctx.softcap is not None:
                             chain = chain * (1 - torch.tanh(y / ctx.softcap) ** 2)
                         sparse_grad = grad_score[token_start:token_end] * chain * in_tile
+                    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
                     fold = (
-                        _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))]
+                        partial(_backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))], enable_fp_fusion=False)
                         if _use_triton(hidden.device)
                         else _backward_tile
                     )

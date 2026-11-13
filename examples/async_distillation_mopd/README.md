@@ -51,7 +51,7 @@ The `vllm serve` commands to run it on your own GPUs are in the script's docstri
 
 ## 4. Watch the token imbalance
 
-The trainer logs two metrics per teacher: `teacher_token_frac/<id>`, the share of each step's tokens that went to it, and `teacher_jsd/<id>`, how far the student is from it. Keep an eye on `teacher_token_frac`. The loss is averaged over tokens, so each domain counts in proportion to the tokens it produces. Math and code answers run to thousands of tokens, instruction-following ones to a few hundred, so with 20% of the prompts instruction following got 1 to 3% of the tokens, and the student barely moved toward that teacher:
+The trainer logs two metrics per teacher: `teacher/<id>/token_frac`, the share of each step's tokens that went to it, and `teacher/<id>/jsd`, how far the student is from it. Keep an eye on `teacher/<id>/token_frac`. The loss is averaged over tokens, so each domain counts in proportion to the tokens it produces. Math and code answers run to thousands of tokens, instruction-following ones to a few hundred, so with 20% of the prompts instruction following got 1 to 3% of the tokens, and the student barely moved toward that teacher:
 
 ![Per-teacher token share and divergence](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/trl/mopd-per-teacher-metrics.png)
 
