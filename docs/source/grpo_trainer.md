@@ -1039,6 +1039,19 @@ Each training sample should include:
 
 The trainer automatically handles image-to-tensor conversion via the model’s image processor.
 
+For Gemma 3, pan-and-scan can be enabled when loading the processor:
+
+```python
+processor = AutoProcessor.from_pretrained(model_id, do_pan_and_scan=True)
+trainer = GRPOTrainer(
+    model=model_id,
+    processing_class=processor,
+    # ...
+)
+```
+
+Pan-and-scan may expand an image into the original image plus several crops. GRPO keeps these crops together when splitting rollout batches into training microbatches. Crops increase memory use, so consider reducing the per-device batch size.
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
