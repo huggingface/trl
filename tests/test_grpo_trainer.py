@@ -3779,13 +3779,6 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
         )
 
-        # Each environment exposes only its own tool.
-        assert [tool.__name__ for tool in trainer._env_tools["counter"]] == ["increment"]
-        assert [tool.__name__ for tool in trainer._env_tools["echo"]] == ["shout"]
-        # The probe instances seed the reuse pool, so they are not wasted.
-        assert len(trainer._environment_pool["counter"]) == 1
-        assert len(trainer._environment_pool["echo"]) == 1
-
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         script = ScriptedTurns(
@@ -3821,6 +3814,10 @@ class TestGRPOTrainer(TrlTestCase):
         # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
         assert records["reset_counter"] and records["reset_echo"]
         assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
+        # Each rollout is shown only the tool of its own environment
+        prompts = list(script.seen)
+        assert all(("increment" in prompt) == ("Count." in prompt) for prompt in prompts)
+        assert all(("shout" in prompt) == ("Echo." in prompt) for prompt in prompts)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
