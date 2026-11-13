@@ -23,6 +23,8 @@ authors:
     family-names: Rasul
   - given-names: Quentin
     family-names: Gallouédec
+  - given-names: Amine
+    family-names: Dirhoussi
 repository-code: 'https://github.com/huggingface/trl'
 abstract: >-
   TRL (Transformers Reinforcement Learning) is an
