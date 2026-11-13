@@ -65,7 +65,16 @@ class TestRLOOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Cohere2ForCausalLM",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    raises=ValueError,
+                    reason="Before transformers 5.0, its generic tokenizer class returns `token_type_ids`, which "
+                    "`generate` rejects for this model",
+                    strict=True,
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 marks=pytest.mark.skipif(
