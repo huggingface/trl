@@ -175,7 +175,7 @@ Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assi
 
 ### `muse_spark_training.jinja`
 
-Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
 ### `nemotron_3_nano_training.jinja`
 

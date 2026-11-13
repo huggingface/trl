@@ -56,6 +56,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    muse_spark_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
@@ -1482,6 +1483,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
             id="muse_spark",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", muse_spark_v2_chat_template),
+            id="muse_spark_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
