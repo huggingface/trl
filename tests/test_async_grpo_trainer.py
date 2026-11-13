@@ -1037,8 +1037,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 marks=pytest.mark.skip(
-                    reason="Needs the trained tiny Beam from #8195: with random weights no group has a reward spread, so "
-                    "no step completes"
+                    reason="Too slow on the stand-in vLLM server: a step takes over a minute, and the epoch does not end "
+                    "within 20 minutes"
                 ),
             ),
             pytest.param(
