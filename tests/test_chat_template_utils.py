@@ -1807,6 +1807,9 @@ class TestGetTrainingChatTemplate:
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
         if prompt.rstrip().endswith("</think>"):
             assistant = {"role": "assistant", "content": "It is blue."}
+        # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
+        elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
+            assistant = {"role": "assistant", "content": "<think>\nRayleigh scattering.\n</think>\n\nIt is blue."}
         else:
             assistant = {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
         messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
