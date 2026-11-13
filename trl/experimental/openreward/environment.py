@@ -130,9 +130,8 @@ class _RolloutEnvironment:
             Reserved for future use. The SDK manages its own timeouts.
 
     Attributes:
-        reward (`float`):
-            Last non-null reward in the trajectory (outcome-only convention). Initialized to `0.0`; use `rewards` to
-            distinguish an unscored rollout from an observed zero reward.
+        reward (`float` or `None`):
+            Last non-null reward in the trajectory (outcome-only convention). `None` if no tool returned a reward.
         rewards (`list[float | None]`):
             Per-step reward sequence in tool-call order.
         metadata (`list[dict | None]`):
@@ -190,7 +189,7 @@ class _RolloutEnvironment:
         self._session = None  # the entered Session object
 
         # Episode state — read by the trainer's reward_func.
-        self.reward: float = 0.0
+        self.reward: float | None = None
         self.rewards: list[float | None] = []
         self.metadata: list[dict[str, Any] | None] = []
         self.finished: bool = False
@@ -217,7 +216,7 @@ class _RolloutEnvironment:
         prompt, and returns its text (which TRL appends to the user message).
         """
         self._teardown_session()
-        self.reward = 0.0
+        self.reward = None
         self.rewards = []
         self.metadata = []
         self.finished = False

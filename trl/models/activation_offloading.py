@@ -24,7 +24,6 @@ import sys
 import psutil
 import torch
 from accelerate.logging import get_logger
-from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
 from transformers import is_torch_npu_available
@@ -34,15 +33,11 @@ if is_torch_npu_available():
     import torch_npu  # noqa: F401
 
 
-# Import DTensor for FSDP v2 support with version-aware import path
+# Import DTensor for FSDP v2 support
 DTensor = None
 if torch.distributed.is_available():
     try:
-        if is_torch_version(">=", "2.5.0"):
-            from torch.distributed.tensor import DTensor
-        else:
-            # from torch 2.0.0 (oldest supported accelerate torch version), DTensor is in torch.distributed._tensor
-            from torch.distributed._tensor import DTensor
+        from torch.distributed.tensor import DTensor
     except (ImportError, AttributeError):
         DTensor = None
 
@@ -80,6 +75,12 @@ def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:
     return (storage_ptr, actual_tensor.dtype)
 
 
+def _is_dense(tensor: torch.Tensor) -> bool:
+    """Whether `tensor` covers its memory without gaps or overlaps in some dimension order, e.g. a transposed tensor."""
+    order = sorted(range(tensor.dim()), key=tensor.stride, reverse=True)
+    return tensor.permute(order).is_contiguous()
+
+
 class OffloadActivations(saved_tensors_hooks):
     """
     Context manager under which activation tensors created in the forward pass will be offloaded.
@@ -98,7 +99,7 @@ class OffloadActivations(saved_tensors_hooks):
             be moved back onto GPU more quickly but is a limited resource.
         use_streams (`bool`, *optional*, defaults to `True`):
             Whether to use streams for performance optimization where the communications get overlapped with the
-            computation. Requires a torch build after torch-2.5.0.
+            computation.
         min_offload_size (`int`, *optional*, defaults to `1024`):
             Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
             do not want to waste bandwidth and resources moving it to CPU and back.
@@ -148,18 +149,12 @@ class OffloadActivations(saved_tensors_hooks):
         self.use_pin_memory = use_pin_memory
         self.virtual_memory_safe_pct = 60  # we should not exceed this percentage of memory
 
-        self.accelerator_type = (
-            torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
-        )
+        self.accelerator_type = torch.accelerator.current_accelerator().type
+        self.device_module = torch.get_device_module(self.accelerator_type)
 
         # For streaming
         if self.use_streams:
-            if self.accelerator_type == "xpu":  # comms stream
-                self.s1 = torch.xpu.Stream()
-            elif self.accelerator_type == "npu":
-                self.s1 = torch.npu.Stream()
-            else:
-                self.s1 = torch.cuda.Stream()
+            self.s1 = self.device_module.Stream()  # comms stream
             self.fwd_stash = {}  # tensor_id => (activation, ev1)
             if max_fwd_stash_size < 1:
                 raise ValueError(f"max_fwd_stash_size should be at least 1 but is {max_fwd_stash_size}")
@@ -226,7 +221,7 @@ class OffloadActivations(saved_tensors_hooks):
                 return tensor_id
 
             # Check if tensor is on CPU (skip offloading)
-            if activation.device.type not in ["cuda", "xpu", "npu"]:
+            if activation.device.type != self.accelerator_type:
                 self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
@@ -236,9 +231,7 @@ class OffloadActivations(saved_tensors_hooks):
                 return tensor_id
 
             # Check if tensor is a parameter or buffer
-            if isinstance(activation, torch.nn.Parameter) or (
-                hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer)
-            ):
+            if isinstance(activation, (torch.nn.Parameter, torch.nn.Buffer)):
                 self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
@@ -267,16 +260,12 @@ class OffloadActivations(saved_tensors_hooks):
             # If so, copy the underlying storage directly instead of materializing the broadcast
             has_broadcast = 0 in activation.stride()
 
-            # No broadcast - use normal contiguous copy
-            # .contiguous() can be a no-op for contiguous views with
-            # non-zero storage_offset. Force a clone for those views
-            # so later as_strided reconstruction stays in bounds.
+            # No broadcast - copy views with a storage offset or gaps into their own storage, so the later as_strided
+            # reconstruction stays in bounds. `clone()` keeps the strides of a dense tensor, e.g. a transposed one:
+            # backward kernels such as SDPA's memory-efficient attention depend on the layout of what they saved.
             # Done on the compute stream, before `wait_stream` below, so that wait also covers this clone.
-            if not has_broadcast and (not activation.is_contiguous() or activation.storage_offset() != 0):
-                if activation.storage_offset() != 0:
-                    activation = activation.clone(memory_format=torch.contiguous_format)
-                else:
-                    activation = activation.contiguous()
+            if not has_broadcast and (activation.storage_offset() != 0 or not _is_dense(activation)):
+                activation = activation.clone()
 
             if self.use_streams:
                 # First, sync back and dereference previously offloaded tensors
@@ -299,13 +288,7 @@ class OffloadActivations(saved_tensors_hooks):
             original_shape = activation.size()
 
             stream = self.s1 if self.use_streams else self.s0
-            if self.accelerator_type == "xpu":
-                stream_ctx = torch.xpu.stream(stream)
-            elif self.accelerator_type == "npu":
-                stream_ctx = torch.npu.stream(stream)
-            else:
-                stream_ctx = torch.cuda.stream(stream)
-            with stream_ctx:
+            with self.device_module.stream(stream):
                 if has_broadcast:
                     # Copy only the actual underlying storage, not the materialized broadcast
                     # Create CPU tensor with same storage size as original
@@ -440,13 +423,7 @@ class OffloadActivations(saved_tensors_hooks):
                     brought_back_from_cpu = False
                 else:
                     # Kick off the process to bring tensors back
-                    if self.accelerator_type == "xpu":
-                        stream_ctx = torch.xpu.stream(self.s1)
-                    elif self.accelerator_type == "npu":
-                        stream_ctx = torch.npu.stream(self.s1)
-                    else:
-                        stream_ctx = torch.cuda.stream(self.s1)
-                    with stream_ctx:
+                    with self.device_module.stream(self.s1):
                         # Restore tensor to GPU
                         accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
                         # Restore original stride if we saved it (handles both broadcast and non-broadcast cases)
@@ -553,11 +530,7 @@ class OffloadActivations(saved_tensors_hooks):
     def s0(self) -> torch.Stream:
         # Compute stream. Queried live, not cached: under FSDP2, checkpoint recompute, or a custom autograd
         # Function, the current stream when packing/unpacking may differ from the one at construction time.
-        if self.accelerator_type == "xpu":
-            return torch.xpu.current_stream()
-        elif is_torch_npu_available() and self.accelerator_type == "npu":
-            return torch.npu.current_stream()
-        return torch.cuda.current_stream()
+        return self.device_module.current_stream()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -617,12 +590,7 @@ class OffloadActivations(saved_tensors_hooks):
             self.bwd_ev_stash.clear()
             self.fwd_stash.clear()
         if "bitsandbytes" in sys.modules:
-            if self.accelerator_type == "xpu":
-                torch.xpu.empty_cache()
-            elif is_torch_npu_available() and self.accelerator_type == "npu":
-                torch.npu.empty_cache()
-            else:
-                torch.cuda.empty_cache()
+            self.device_module.empty_cache()
         return super().__enter__()
 
     def __exit__(self, *args, **kwargs):
@@ -682,7 +650,7 @@ def get_act_offloading_ctx_manager(
             be moved back onto GPU more quickly but is a limited resource.
         use_streams (`bool`, *optional*, defaults to `True`):
             Whether to use streams for performance optimization where the communications get overlapped with the
-            computation. Requires a torch build after torch-2.5.0.
+            computation.
         min_offload_size (`int`, *optional*, defaults to `1024`):
             Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
             do not want to waste bandwidth and resources moving it to CPU and back.

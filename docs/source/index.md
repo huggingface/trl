@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`] graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Taxonomy
 
@@ -23,6 +23,7 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 
 #### Online methods
 
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GRPOTrainer`](grpo_trainer)
 - [`RLOOTrainer`](rloo_trainer)
 
@@ -54,7 +55,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Online methods
 
 - [`A2POTrainer`](a2po_trainer)
-- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 
@@ -66,7 +66,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [BEMA for Reference Model](bema_for_reference_model)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 
@@ -76,7 +75,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`IWOPDTrainer`](iw_opd_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
-- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>
@@ -94,7 +92,7 @@ The documentation is organized into the following sections:
 - **Getting Started**: installation and quickstart guide.
 - **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
 - **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
-- **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
+- **Integrations**: DeepSpeed, PEFT, etc.
 - **Examples**: example overview, community tutorials, etc.
 - **API**: trainers, utils, etc.
 

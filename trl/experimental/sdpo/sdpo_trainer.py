@@ -329,7 +329,8 @@ class SDPOTrainer(_BaseTrainer):
     next-token predictions back into the policy.
     """
 
-    config_cls = SDPOConfig
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
     # docstyle-ignore
@@ -362,6 +363,10 @@ class SDPOTrainer(_BaseTrainer):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
@@ -436,6 +441,16 @@ class SDPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
@@ -460,7 +475,7 @@ class SDPOTrainer(_BaseTrainer):
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "eos_token_id": self.eos_token_ids,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
@@ -511,7 +526,6 @@ class SDPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -564,7 +578,6 @@ class SDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
         self.scale_rewards = args.scale_rewards
@@ -714,10 +727,13 @@ class SDPOTrainer(_BaseTrainer):
 
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
-        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs = dict(self.args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # A student passed as an instance wasn't loaded from `model_init_kwargs`, so build the teacher like it
+        model_init_kwargs.setdefault("dtype", self.model.dtype)
+        model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
@@ -923,7 +939,7 @@ class SDPOTrainer(_BaseTrainer):
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right").to(device=device)
 
         if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
@@ -985,7 +1001,7 @@ class SDPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+        prompt_ids_out, completion_ids_list, _, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids,
             images=None,
             num_generations=num_generations,
@@ -1019,7 +1035,7 @@ class SDPOTrainer(_BaseTrainer):
 
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self._tokenizer.eos_token_id
+        is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1188,12 +1204,6 @@ class SDPOTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.loss_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
-            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
-            return distillation_logits.student_logits.sum() * 0.0
-
         if self.args.distillation_mode == "topk_logits":
             if self.args.distillation_topk is None:
                 raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
@@ -1242,13 +1252,14 @@ class SDPOTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(
-            mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
-        )
+        mask = distillation_logits.loss_mask
+
+        def global_masked_mean(x):
+            local_sum, local_count = (x * mask).sum().float(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
@@ -1300,14 +1311,15 @@ class SDPOTrainer(_BaseTrainer):
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
 
+        def global_masked_mean(x):
+            local_sum, local_count = (x * loss_mask).sum().float(), loss_mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
-        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(global_masked_mean(abs_diff))
 
         if self.args.distillation_mode == "sampled_token":
             # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
@@ -1339,8 +1351,7 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1497,7 +1508,7 @@ class SDPOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())

@@ -18,7 +18,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import KTOConfig, KTOTrainer
@@ -31,9 +31,8 @@ from .testing_utils import (
     TrlTestCase,
     is_bf16_supported,
     require_bitsandbytes,
-    require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
+    require_torch_accelerator,
     require_vision,
 )
 
@@ -344,6 +343,73 @@ class TestKTOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            # (`Qwen3_5ForCausalLM`, model type `qwen3_5_text`), which is how Qwen3.5 is usually trained on text
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_train_model(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_fully_truncated_completion_examples_dropped(self):
         """The collator truncates with `keep_start`, so an example whose prompt alone fills `max_length` loses every
         completion token; it's dropped during dataset preparation."""
@@ -379,10 +445,10 @@ class TestKTOTrainer(TrlTestCase):
         # at init. See https://github.com/huggingface/trl/issues/6115. Also a regression test: Accelerate's dispatch
         # for `IterableDataset` requires every batch field to be a tensor, which previously broke streaming
         # evaluation. `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+            "trl-internal-testing/zen", "conversational_unpaired_preference", split="test", streaming=streaming
         )
         if eval_dataset_type in ("dataset", "iterable_dataset"):
             eval_dataset = eval_split
@@ -417,8 +483,8 @@ class TestKTOTrainer(TrlTestCase):
     def test_evaluate_precompute_ref_log_probs_after_training_raises(self):
         # Full fine-tuning with `precompute_ref_log_probs=True` and no `ref_model` uses `self.model` as the reference.
         # That's valid only before training; a dataset passed to `evaluate()` afterwards can't get a correct reference.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="test")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             max_steps=1,
@@ -440,8 +506,8 @@ class TestKTOTrainer(TrlTestCase):
         # Regression for the guard above: an `eval_dataset` set at init has its reference log-probs precomputed once
         # (against the untrained reference) and stored, so no-arg `evaluate()` reuses those stored values and must not
         # raise after training, even with full fine-tuning and `precompute_ref_log_probs=True`.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        eval_split = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="test")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        eval_split = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="test")
         if eval_dataset_type == "dataset":
             eval_dataset = eval_split
         elif eval_dataset_type == "dataset_dict":
@@ -469,7 +535,7 @@ class TestKTOTrainer(TrlTestCase):
             assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
         with pytest.raises(ValueError, match="custom code"):
@@ -522,7 +588,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         with pytest.raises(ValueError):
             KTOTrainer(
@@ -594,7 +660,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
@@ -638,7 +704,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference")
 
         trainer = KTOTrainer(
             model=self.model,
@@ -669,7 +735,7 @@ class TestKTOTrainer(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer.pad_token = tokenizer.eos_token
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
@@ -694,12 +760,13 @@ class TestKTOTrainer(TrlTestCase):
             compute_metrics=dummy_compute_metrics,
         )
 
-        trainer.train()
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
 
     def test_train_with_explicit_ref_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -732,7 +799,7 @@ class TestKTOTrainer(TrlTestCase):
             torch.testing.assert_close(param, new_ref_param, msg=f"Reference model parameter {n} has changed.")
 
     def test_train_with_sync_ref_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -760,8 +827,20 @@ class TestKTOTrainer(TrlTestCase):
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
+    def test_ref_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert trainer.ref_model.dtype == torch.bfloat16
+        assert trainer.ref_model.config._attn_implementation == "eager"
+
     def test_train_model_dtype(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -793,7 +872,7 @@ class TestKTOTrainer(TrlTestCase):
     @require_peft
     def test_peft_init_is_seeded(self):
         # Two trainers with the same seed start from the same adapter weights
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         adapters = []
         for global_seed in range(2):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
@@ -819,7 +898,7 @@ class TestKTOTrainer(TrlTestCase):
         lora_config = LoraConfig()
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -842,19 +921,23 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
-        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -891,7 +974,7 @@ class TestKTOTrainer(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -921,69 +1004,12 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
     @require_peft
-    def test_train_with_liger_kernel_and_peft(self):
-        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
-        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
-        )
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-        trainer.train()
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n:
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    @require_peft
-    def test_liger_kernel_with_peft_lm_head_raises(self):
+    def test_peft_lm_head_raises(self):
         # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -1001,123 +1027,55 @@ class TestKTOTrainer(TrlTestCase):
                 peft_config=lora_config,
             )
 
-    @require_liger_kernel
     @require_peft
-    def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the chunked path bypasses.
-        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.raises(ValueError, match="prompt-learning"):
+    def test_peft_ref_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
+        ref_model = get_peft_model(ref_model, LoraConfig())
+        with pytest.raises(ValueError, match="`ref_model` cannot be a `PeftModel`"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                ref_model=ref_model,
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
             )
 
-    @require_liger_kernel
-    def test_init_fails_with_compute_metrics_and_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
+    @require_peft
+    def test_train_peft_prompt_tuning(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            use_liger_kernel=True,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
-
-        with pytest.raises(ValueError, match="`compute_metrics` is not supported with `use_liger_kernel=True`"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-                compute_metrics=lambda _: {},
-            )
-
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "loss_type, desirable_weight, undesirable_weight",
-        [("kto", 0.7, 1.3), ("apo_zero_unpaired", 1.0, 1.0)],
-    )
-    def test_liger_loss_matches_non_liger_loss(self, loss_type, desirable_weight, undesirable_weight):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            bf16=False,  # keep exact gradient parity separate from the mixed-precision coverage below
-            per_device_train_batch_size=2,
-            use_liger_kernel=True,
-            loss_type=loss_type,
-            desirable_weight=desirable_weight,
-            undesirable_weight=undesirable_weight,
-            report_to="none",
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
         )
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        trainer.model.train()
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        chunked_loss = trainer.compute_loss(trainer.model, inputs)
-        chunked_loss.backward()
-        chunked_grads = {
-            name: param.grad.detach().clone()
-            for name, param in trainer.model.named_parameters()
-            if param.grad is not None
-        }
+        trainer.train()
 
-        trainer.model.zero_grad()
-        trainer._metrics["train"].clear()
-        trainer.use_liger_kernel = False
-        loss = trainer.compute_loss(trainer.model, inputs)
-        loss.backward()
-        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        assert chunked_loss.abs() > 0
-        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
-        assert chunked_grads.keys() == grads.keys()
-        for name, grad in grads.items():
-            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 3.1e-4 in fp32.
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
+        # Check that the prompt embeddings have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "prompt_encoder" in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    def test_chunked_logps_stay_differentiable_when_all_masked(self):
-        # A batch whose completion is fully masked yields no valid rows. The streamed projection still has to return
-        # log-probs attached to the model, so it contributes a differentiable zero instead of failing in `backward()`.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            bf16=False,
-            per_device_train_batch_size=2,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        input_ids = inputs["input_ids"]
-        model_kwargs = {"input_ids": input_ids, "attention_mask": inputs["attention_mask"], "use_cache": False}
-        empty_completion_mask = torch.zeros_like(inputs["completion_mask"])
-
-        logps, _, _ = trainer._get_per_token_logps_and_entropies(
-            trainer.model, model_kwargs, input_ids, empty_completion_mask
-        )
-
-        assert logps.shape == (input_ids.shape[0], input_ids.shape[1] - 1)
-        assert logps.count_nonzero() == 0
-        assert logps.requires_grad
-        logps.sum().backward()
-        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
-        assert lm_head_grad is not None
-        assert lm_head_grad.count_nonzero() == 0
-
-    @require_liger_kernel
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_chunked_logps_use_mixed_precision(self):
-        # The streamed projection reads the backbone directly instead of going through the model's forward, so it has
-        # to enter autocast itself. Without that the backbone would silently run in fp32 under bf16 training.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+    def test_logps_use_mixed_precision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
             per_device_train_batch_size=2,
-            use_liger_kernel=True,
             report_to="none",
         )
         trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
@@ -1133,14 +1091,12 @@ class TestKTOTrainer(TrlTestCase):
         assert projection_dtypes  # the hook fired at all
         assert set(projection_dtypes) == {torch.bfloat16}
 
-    @require_liger_kernel
-    def test_train_with_liger_and_precomputed_ref_logps(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+    def test_train_with_precomputed_ref_logps(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            use_liger_kernel=True,
             precompute_ref_log_probs=True,
             report_to="none",
         )
@@ -1150,57 +1106,14 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    @require_liger_kernel
-    def test_compute_ref_log_probs_redirects_wrapped_liger_model(self, monkeypatch):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        wrapped_model = object()
-        redirected = False
-
-        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
-
-        def forward_redirection(wrapper, unwrapped, method, *args):
-            nonlocal redirected
-            redirected = True
-            assert wrapper is wrapped_model
-            assert unwrapped is trainer.model
-            return method(*args)
-
-        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
-        trainer.compute_ref_log_probs(wrapped_model, inputs)
-
-        # A distributed wrapper owns the hooks that gather its sharded backbone parameters, so the chunked reference
-        # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
-        assert redirected
-
-    @require_liger_kernel
-    def test_init_fails_with_moe_aux_loss_and_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        # The MoE auxiliary loss is on by default; the chunked path bypasses the wrapper that computes it.
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-
-        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                args=training_args,
-                train_dataset=dataset,
-            )
-
     @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
     def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
         # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is
         # therefore incompatible with a streaming `IterableDataset` — whether passed directly or nested in a dict or
         # `IterableDatasetDict` as the eval dataset.
-        map_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        map_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
         iterable_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
+            "trl-internal-testing/zen", "conversational_unpaired_preference", split="train", streaming=True
         )
 
         train_dataset, eval_dataset = map_dataset, None
@@ -1237,7 +1150,7 @@ class TestKTOTrainer(TrlTestCase):
         # `apo_zero_unpaired`) build the mismatched KL pairs from neighboring examples within each fixed-order batch,
         # which streaming preserves because it is consumed sequentially.
         dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=True
+            "trl-internal-testing/zen", "conversational_unpaired_preference", split="train", streaming=True
         )
 
         training_args = KTOConfig(
@@ -1359,7 +1272,7 @@ class TestKTOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference")
 
         training_args = KTOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = KTOTrainer(
@@ -1374,7 +1287,7 @@ class TestKTOTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
     def test_train_with_multiple_eval_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference")
 
         training_args = KTOConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = KTOTrainer(
@@ -1395,7 +1308,7 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset = None
         else:
             train_dataset = load_dataset(
-                "trl-internal-testing/zen", "standard_unpaired_preference", split="train", streaming=streaming
+                "trl-internal-testing/zen", "conversational_unpaired_preference", split="train", streaming=streaming
             )
             if train_dataset_type == "unsupported_dataset_dict":
                 # `DatasetDict` is representative of any unsupported type here; not exhaustive
@@ -1438,14 +1351,14 @@ class TestKTOTrainer(TrlTestCase):
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
         # `apo_zero_unpaired` avoids KTO's KL term, which is incompatible with streaming datasets.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "standard_unpaired_preference", split="test", streaming=streaming
+                "trl-internal-testing/zen", "conversational_unpaired_preference", split="test", streaming=streaming
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -1477,7 +1390,7 @@ class TestKTOTrainer(TrlTestCase):
     # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -1500,8 +1413,33 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_torch_accelerator
+    def test_train_with_fp16(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            fp16=True,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_tag_added(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1513,7 +1451,7 @@ class TestKTOTrainer(TrlTestCase):
 
     @require_peft
     def test_tag_added_peft(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1527,7 +1465,7 @@ class TestKTOTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -1565,7 +1503,7 @@ class TestKTOTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_dora_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -1608,7 +1546,7 @@ class TestKTOTrainer(TrlTestCase):
     def test_pad_token_id_synced_with_model_config(self):
         # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = KTOTrainer(
@@ -1676,6 +1614,13 @@ class TestKTOTrainerVLM(TrlTestCase):
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ),
         ],
     )
     def test_train_vlm(self, model_id):
@@ -1705,6 +1650,9 @@ class TestKTOTrainerVLM(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
@@ -1785,6 +1733,9 @@ class TestKTOTrainerVLM(TrlTestCase):
             train_dataset=dataset,
         )
 
+        # The vision tower gets no gradients, so DDP must search for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
+
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
@@ -1837,29 +1788,3 @@ class TestKTOTrainerVLM(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-    @require_liger_kernel
-    def test_train_vlm_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"

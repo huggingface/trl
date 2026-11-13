@@ -23,6 +23,12 @@ authors:
     family-names: Rasul
   - given-names: Quentin
     family-names: Gallouédec
+  - given-names: Amine
+    family-names: Dirhoussi
+  - given-names: Albert
+    family-names: Villanova del Moral
+  - given-names: Sergio
+    family-names: Paniego Blanco
 repository-code: 'https://github.com/huggingface/trl'
 abstract: >-
   TRL (Transformers Reinforcement Learning) is an
@@ -37,5 +43,5 @@ keywords:
   - language model alignment
   - post-training
 license: Apache-2.0
-version: '1.14'
+version: '1.18'
 date-released: '2020-03-27'

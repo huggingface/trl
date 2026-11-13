@@ -202,9 +202,6 @@ trainer = GRPOTrainer(
 
 The per-rollout adapter exposes the running state TRL needs — `env.reward`, `env.rewards`, `env.metadata`, `env.finished`, `env.last_output` — for arbitrary post-hoc reward shaping.
 
-For compatibility, `env.reward` still starts at `0.0`. The default reward function checks `env.rewards` to determine
-whether a score was actually observed.
-
 ## OpenRewardSpec
 
 [[autodoc]] trl.experimental.openreward.OpenRewardSpec

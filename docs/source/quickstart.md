@@ -21,6 +21,8 @@ trainer.train()
 
 ### Group Relative Policy Optimization
 
+`accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
+
 ```python
 from trl import GRPOTrainer
 from datasets import load_dataset

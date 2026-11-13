@@ -68,7 +68,7 @@ class TestLogCompletionsCallback(TrlTestCase):
         # Get the current run
         completions_path = wandb.run.summary.completions["path"]
         json_path = os.path.join(wandb.run.dir, completions_path)
-        with open(json_path) as f:
+        with open(json_path, encoding="utf-8") as f:
             completions = json.load(f)
 
         # Check that the columns are correct

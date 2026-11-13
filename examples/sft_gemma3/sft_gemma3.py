@@ -24,7 +24,7 @@
 """
 Train Gemma-3 on the Codeforces COTS dataset.
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/sft_gemma3/sft_gemma3.py
+torchrun --nproc_per_node 8 examples/sft_gemma3/sft_gemma3.py
 """
 
 from datasets import load_dataset
@@ -38,22 +38,23 @@ def main():
     train_dataset = load_dataset("open-r1/codeforces-cots", split="train")
     train_dataset = train_dataset.remove_columns("prompt")
 
-    # Load model
+    # Created before the model, so that DeepSpeed ZeRO-3 partitions the weights while they load
     model_id = "google/gemma-3-12b-it"
-    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager")
-
-    # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
         bf16=True,
-        use_liger_kernel=True,
         max_length=8192,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
         dataset_num_proc=32,
         num_train_epochs=1,
+        deepspeed="examples/deepspeed_configs/zero3.json",
     )
 
+    # Load model
+    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager", use_kernels=True)
+
+    # Train model
     trainer = SFTTrainer(
         args=training_args,
         model=model,

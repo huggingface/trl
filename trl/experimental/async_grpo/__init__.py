@@ -12,5 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .async_grpo_config import AsyncGRPOConfig
-from .async_grpo_trainer import AsyncGRPOTrainer
+import warnings
+from dataclasses import dataclass
+
+from ...trainer import AsyncGRPOConfig as _AsyncGRPOConfig
+from ...trainer import AsyncGRPOTrainer as _AsyncGRPOTrainer
+from ...trainer.async_grpo_trainer import AsyncRolloutLoop, Rollout
+
+
+__all__ = ["AsyncGRPOConfig", "AsyncGRPOTrainer", "AsyncRolloutLoop", "Rollout"]
+
+
+@dataclass
+class AsyncGRPOConfig(_AsyncGRPOConfig):
+    def __post_init__(self):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `AsyncGRPOConfig` has been promoted to the stable API. "
+            "Update your imports to `from trl import AsyncGRPOConfig`.",
+            FutureWarning,
+            stacklevel=3,
+        )
+        super().__post_init__()
+
+
+@dataclass
+class AsyncGRPOTrainer(_AsyncGRPOTrainer):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "This import path is deprecated and will be removed in v2.0.0. "
+            "The `AsyncGRPOTrainer` has been promoted to the stable API. "
+            "Update your imports to `from trl import AsyncGRPOTrainer`.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

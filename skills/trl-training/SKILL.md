@@ -47,7 +47,7 @@ SFTConfig(
     max_length=1024,        # truncation length; None disables truncation
     packing=True,           # pack sequences into max_length blocks: fewer pad tokens, higher throughput
     padding_free=True,      # flatten batch, no padding; requires FlashAttention; implied by packing
-    use_liger_kernel=True,  # fused Liger kernels, reduces peak memory
+    model_init_kwargs={"use_kernels": True},  # Hub kernels for the model's layers
     assistant_only_loss=True,  # loss only on assistant turns (conversational datasets)
 )
 ```
@@ -70,8 +70,8 @@ Reward functions are called with keyword arguments `prompts`, `completions`, `co
 
 The generation batch is `per_device_train_batch_size × num_processes × steps_per_generation` (or set `generation_batch_size` directly) and must be divisible by `num_generations` (default 8). Generation is the usual bottleneck — enable vLLM with `use_vllm=True`: `vllm_mode="colocate"` shares the training GPUs (size with `vllm_gpu_memory_utilization`); `vllm_mode="server"` uses a separate `trl vllm-serve --model <model_id>`.
 
-`AsyncGRPOTrainer` (`trl.experimental.async_grpo`) implements the same algorithm with generation decoupled from training: a background worker streams completions from a vLLM server while the training loop consumes them, so the two overlap instead of alternating.
+`AsyncGRPOTrainer` (`trl`) implements the same algorithm with generation decoupled from training: a background worker streams completions from a vLLM server while the training loop consumes them, so the two overlap instead of alternating.
 
 ## CLI
 
-Flags mirror the config fields: `trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara`. YAML via `--config`; distributed presets via `--accelerate_config zero3` (Python scripts: `accelerate launch train.py`).
+Flags mirror the config fields: `trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara`. YAML via `--config`; multi-GPU via `--nproc_per_node 8`, DeepSpeed via `--deepspeed examples/deepspeed_configs/zero3.json`, FSDP via `--fsdp` (Python scripts: `torchrun --nproc_per_node 8 train.py`).
