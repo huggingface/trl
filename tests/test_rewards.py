@@ -261,6 +261,18 @@ class TestAccuracyReward:
         # The grading process is restarted after the timeout, so the next answer is still graded
         assert results == [0.0, 1.0]
 
+    @require_math_latex
+    def test_accuracy_reward_after_grading_process_died(self):
+        """If the grading process died (e.g. out of memory), the next call starts a new one."""
+        from trl.rewards import accuracy_rewards
+
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solutions = [r"\frac{1}{3}"]
+        assert accuracy_reward(completions, solutions) == [1.0]
+        accuracy_rewards._grader._process.kill()
+        accuracy_rewards._grader._process.wait()
+        assert accuracy_reward(completions, solutions) == [1.0]
+
 
 class TestReasoningAccuracyReward:
     @require_math_latex

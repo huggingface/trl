@@ -107,8 +107,15 @@ class _Grader:
             # A forked trainer process can't share its parent's pipes, so it starts its own grading process
             if self._process is None or self._process.poll() is not None or self._pid != os.getpid():
                 self._start()
-            self._process.stdin.write(json.dumps([solution, content]) + "\n")
-            self._process.stdin.flush()
+            request = json.dumps([solution, content]) + "\n"
+            try:
+                self._process.stdin.write(request)
+                self._process.stdin.flush()
+            except OSError:
+                # The grading process died since the check above (e.g. out of memory), so start a new one
+                self._start()
+                self._process.stdin.write(request)
+                self._process.stdin.flush()
             try:
                 line = self._lines.get(timeout=GRADE_TIMEOUT)
             except queue.Empty:
