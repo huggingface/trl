@@ -14,8 +14,7 @@
 
 import os
 from collections.abc import Callable
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -155,6 +154,26 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
+class ServerModeGeneration:
+    """Stands in for the trainer's `vllm_generation` in server mode, as the vLLM server cannot run in the tests.
+
+    Args:
+        generate (`Callable`, *optional*):
+            Takes the place of [`~trl.generation.vllm_generation.VLLMGeneration.generate`].
+
+    Attributes:
+        weight_syncs (`int`):
+            Number of weight syncs the trainer asked for.
+    """
+
+    def __init__(self, generate=None):
+        self.generate = generate
+        self.weight_syncs = 0
+
+    def sync_weights(self):
+        self.weight_syncs += 1
+
+
 class TestGRPORolloutDispatch(TrlTestCase):
     def _make_rollout_func(self, **output):
         # A plain callable, as a user passes, recording the calls it gets
@@ -195,12 +214,12 @@ class TestGRPORolloutDispatch(TrlTestCase):
         trainer = self._make_trainer(rollout_func)
         # Stand in for the vLLM server, which cannot run here, and start from the step __init__ sets with use_vllm=True
         trainer.use_vllm = True
-        trainer.vllm_generation = MagicMock()
+        trainer.vllm_generation = ServerModeGeneration()
         trainer._last_loaded_step = -1
 
         trainer._generate(["prompt"])
 
-        trainer.vllm_generation.sync_weights.assert_called_once()
+        assert trainer.vllm_generation.weight_syncs == 1
         assert trainer._last_loaded_step == trainer.state.global_step
         assert rollout_func.calls == [(["prompt"], trainer)]
 
@@ -3526,7 +3545,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.use_vllm = True
         trainer._last_loaded_step = trainer.state.global_step
-        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock(), generate=fake_server_generate)
+        trainer.vllm_generation = ServerModeGeneration(generate=fake_server_generate)
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
