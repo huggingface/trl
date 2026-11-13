@@ -382,7 +382,7 @@ def patch_tree_gdn(model) -> bool:
     Returns:
         `bool`: whether the model's modeling module has those functions.
     """
-    modeling = sys.modules[type(model).__module__]
+    modeling = sys.modules[type(model).forward.__module__]
     conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
     if conv is None or chunk is None:
         return False
