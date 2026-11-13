@@ -2903,8 +2903,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         loop = _rollout_loop(reward_funcs=[two_reward])
         samples = asyncio.run(loop._score_group(group))
 
-        assert samples[0].metrics["reward_kept"] == 1.0
-        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
+        assert samples[0].metrics["reward_trained"] == 1.0
+        assert samples[1].metrics["reward_trained"] == 3.0 and samples[2].metrics["reward_trained"] == 3.0
         assert samples[0].metrics["reward_group_std"] == pytest.approx(1.0)
         # Each reward function's mean counts the forked conversation once, as GRPO counts a completion once
         assert loop._rates["rewards/two_reward/mean"] == [4.0, 2]  # rewards 1.0 and 3.0
@@ -2926,9 +2926,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
-        assert math.isnan(samples[0].metrics["reward_kept"])
+        assert math.isnan(samples[0].metrics["reward_trained"])
         assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
-        assert samples[1].metrics["reward_kept"] == 2.0
+        assert samples[1].metrics["reward_trained"] == 2.0
 
 
 def constant_reward(completions, **kwargs):
@@ -2980,14 +2980,14 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
         assert items[0] == 0
         assert [s.group_id for s in items[1:]] == [1, 1]
-        assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
+        assert metrics["frac_zero_std_groups"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
         # So does each reward function's mean, except for a group the function didn't score
         assert metrics["rewards/dummy_reward_func/mean"] == ([reward, (4.0, 2)] if reward[1] else [(4.0, 2)])
         assert metrics["tools/call_frequency"] == [(4, 2), (1, 2)]
         assert metrics["tools/failure_frequency"] == [(4, 4), (0, 1)]
 
-    def test_reward_dropped_and_duplicate_frac(self):
+    def test_reward_zero_std_groups_and_duplicate_frac(self):
         # The first token of each completion is its reward, and 0 means the reward func cannot score it.
         def first_token_reward(completion_ids, **kwargs):
             return [float(ids[0]) if ids[0] else None for ids in completion_ids]
@@ -2999,9 +2999,9 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [4, 10]])))  # dropped, one scored
         asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # dropped, unscorable
 
-        assert loop._rates["frac_reward_zero_std"] == [3, 4]
+        assert loop._rates["frac_zero_std_groups"] == [3, 4]
         # Only the dropped groups with a scored completion contribute the reward they are stuck at.
-        assert loop._rates["reward_dropped"] == [3.0 + 4.0, 2]
+        assert loop._rates["reward_zero_std_groups"] == [3.0 + 4.0, 2]
         # One of the eight completions repeats an earlier one of its group.
         assert loop._rates["completions/duplicate_frac"] == [1, 8]
 

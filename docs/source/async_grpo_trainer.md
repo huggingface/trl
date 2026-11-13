@@ -97,7 +97,7 @@ $$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
 There is no `scale_rewards` option: the advantage is always scaled by the group's standard deviation. A completion for which every reward function returned `None` is left out of the group's mean and standard deviation and gets an advantage of zero.
 
-A group whose rewards are all equal is dropped: with the default advantage it is zero everywhere, so training on it would cost a forward and backward pass and move nothing. The fraction of such groups is logged as `frac_reward_zero_std`. The step is filled from the groups that are kept, so many dropped groups means more generation per step. A dropped group still counts toward the epoch, which stays one pass over the prompts.
+A group whose rewards are all equal is dropped: with the default advantage it is zero everywhere, so training on it would cost a forward and backward pass and move nothing. The fraction of such groups is logged as `frac_zero_std_groups`. The step is filled from the groups that are kept, so many dropped groups means more generation per step. A dropped group still counts toward the epoch, which stays one pass over the prompts.
 
 ### Computing the loss
 
@@ -144,11 +144,11 @@ While training, we record the following metrics:
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over every completion it scored, including the groups that are then dropped. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
 - `rewards/{reward_func_name}/group_std`: The standard deviation of the reward from a specific reward function, computed within each group and averaged over the trained samples.
-- `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
+- `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_trained` leaves out the groups whose rewards are all equal.
 - `reward_group_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples. It is what the advantage is divided by, unlike GRPO's `reward_std`, which is taken over the whole batch.
-- `reward_kept`: The average reward of the trained samples, which excludes the dropped groups.
-- `reward_dropped`: The average reward of the groups that were dropped, the reward they are stuck at. See [Saturation and duplicates](#saturation-and-duplicates) to read it with `frac_reward_zero_std` and `reward`.
-- `frac_reward_zero_std`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
+- `reward_trained`: The average reward of the samples the trainer trained on. It leaves out the groups whose rewards are all equal and the samples dropped for exceeding `max_staleness`.
+- `reward_zero_std_groups`: The average reward of the groups whose rewards are all equal, which are dropped: the reward they are stuck at. See [Saturation and duplicates](#saturation-and-duplicates) to read it with `frac_zero_std_groups` and `reward`.
+- `frac_zero_std_groups`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
 - `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over trained tokens.
 - `sampling/sampling_logp_difference/max`: The largest such absolute difference.
 - `sampling/importance_sampling_ratio/min`: The smallest importance sampling ratio  \\( r_{i,t}(\theta) \\) between the model and the sampler, over trained tokens, before the tokens outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are dropped.
@@ -324,14 +324,14 @@ The policy learns from the differences between the rollouts of a group: each adv
 
 | metric | question |
 | --- | --- |
-| `frac_reward_zero_std` | what share of groups carry no signal |
-| `reward_dropped` | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
+| `frac_zero_std_groups` | what share of groups carry no signal |
+| `reward_zero_std_groups` | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
 | `reward` | how well the policy does over every scored group, dropped ones included |
 | `completions/duplicate_frac` | whether sampling still gives different rollouts for the same prompt |
 
 Read the first three together, against the range of your reward:
 
-| `frac_reward_zero_std` | `reward_dropped` | `reward` | diagnosis | what to do |
+| `frac_zero_std_groups` | `reward_zero_std_groups` | `reward` | diagnosis | what to do |
 | --- | --- | --- | --- | --- |
 | low | any (noisy over few groups) | any | **healthy**: most groups produce a gradient | nothing |
 | climbing | near the top of the range | climbing | **saturating at the top**: the prompts have become too easy for the policy, which is how a successful run usually ends | stop the run, or move to harder prompts |
@@ -339,7 +339,7 @@ Read the first three together, against the range of your reward:
 | climbing | falling | falling | **regression**: groups that used to pass now fail together | check `completions/duplicate_frac` and `entropy` for a collapse |
 | high | in the middle | any | **a mix**: with 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts |
 
-`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. Identical rollouts get identical rewards, so duplicates also push `frac_reward_zero_std` up.
+`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. Identical rollouts get identical rewards, so duplicates also push `frac_zero_std_groups` up.
 
 | `completions/duplicate_frac` | diagnosis |
 | --- | --- |
@@ -347,7 +347,7 @@ Read the first three together, against the range of your reward:
 | jumps towards `(num_generations - 1) / num_generations` | **sampling is no longer random**: every group comes back as copies of one rollout. For example, a temperature of 0, or data-parallel vLLM engines decoding the same text because they share a sampling seed (the worker sends a unique seed with every request to prevent this) |
 | climbs slowly, with `entropy` falling | **collapse**: the policy is converging onto one answer per prompt |
 
-These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_reward_zero_std`, but it has no reward, so `reward_dropped` leaves it out.
+These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_zero_std_groups`, but it has no reward, so `reward_zero_std_groups` leaves it out.
 
 ### Tree packing
 
