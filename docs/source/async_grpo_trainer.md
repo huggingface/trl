@@ -168,7 +168,7 @@ The other metrics describe the asynchronous pipeline.
 
 Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
 
-- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `inference/generated_tokens_per_s` is the total tokens divided by the total seconds.
 - Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
 - A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
 - Any other metric is the mean of the values recorded in the window.
@@ -183,7 +183,6 @@ Units:
 ### Rollout metrics
 
 - `rollout/duration_s`: The wall time of one rollout, from dispatch until the rollout loop collects it.
-- `rollout/generated_tokens_per_s`: The generation throughput, in generated tokens per second, since the previous report.
 - `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
 - `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
 - `rollout/turns_mean`, `rollout/turns_max`: The average and maximum number of turns per rollout.
@@ -196,11 +195,17 @@ Units:
 - `rollout/score_wait_s`: The time a completed group waited before being scored.
 - `rollout/score_block_s`: The time generation was blocked because the scoring queue was full.
 - `rollout/backpressure_s`: The time generation waited to start a rollout because it was `max_staleness` steps ahead of training, averaged over the waits in the logging window. See [Concurrency](#concurrency).
-- `rollout/vllm_retry_count`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
-- `rollout/vllm_kv_cache_usage_frac`: The vLLM KV cache usage (maximum over engines), averaged over the polls in the logging window.
-- `rollout/vllm_running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
-- `rollout/vllm_queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
-- `rollout/vllm_preemption_count`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
+
+### Inference metrics
+
+These describe the vLLM server the rollout worker generates with. The first four are read from the server's `/metrics` endpoint every 5 seconds; the last two are measured by the worker on its own requests.
+
+- `inference/kv_cache_usage_frac`: The vLLM KV cache usage (maximum over engines), averaged over the polls in the logging window.
+- `inference/running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
+- `inference/queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
+- `inference/preemption_count`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
+- `inference/retry_count`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
+- `inference/generated_tokens_per_s`: The generation throughput, in generated tokens per second, since the previous report.
 
 ### Tool metrics
 
@@ -300,7 +305,7 @@ If it's too low, generation slows down. A rollout keeps its slot while it runs t
 >
 > - `rollout/backpressure_s` above zero: the staleness limit. Generation is ahead of training, which is expected when inference is faster than training.
 > - `rollout/concurrency` at `rollout/concurrency_cap`, below `max_concurrent_rollouts`: the vLLM server's load.
-> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/vllm_kv_cache_usage_frac` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
+> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `inference/kv_cache_usage_frac` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
 
 ### The rollout queue
 
@@ -313,7 +318,7 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 The last two are mirror images. Read together with the queue size, they tell you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high: **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_queue_size`.
+- queue near empty, `perf/rollout_wait_s` high: **generation-bound**. The trainer is starving; look at `inference/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_queue_size`.
 - queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high: **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
 - both high: the `max_staleness` limit itself is too tight. The rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero: balanced.

@@ -1451,9 +1451,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                     groups.append(group)
             assert groups and all(len(group.completions) == 2 for group in groups)
             payloads = [loop._metrics_queue.get(timeout=5) for _ in range(loop._metrics_queue.qsize())]
-            preemptions = [
-                p["rollout/vllm_preemption_count"] for p in payloads if "rollout/vllm_preemption_count" in p
-            ]
+            preemptions = [p["inference/preemption_count"] for p in payloads if "inference/preemption_count" in p]
             # The first poll only records the server's running total; each later poll reports what was added since
             assert preemptions[0] == 0 and set(preemptions[1:]) == {1}
         finally:

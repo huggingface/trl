@@ -1114,10 +1114,10 @@ class AsyncRolloutLoop:
             self._push_metrics(
                 {
                     "rollout/concurrency_cap": float(self._kv_cap),
-                    "rollout/vllm_kv_cache_usage_frac": usage,
-                    "rollout/vllm_running_requests": running,
-                    "rollout/vllm_queued_requests": queued,
-                    "rollout/vllm_preemption_count": preemptions - preemptions_seen,
+                    "inference/kv_cache_usage_frac": usage,
+                    "inference/running_requests": running,
+                    "inference/queued_requests": queued,
+                    "inference/preemption_count": preemptions - preemptions_seen,
                 }
             )
             preemptions_seen = preemptions
@@ -1360,7 +1360,7 @@ class AsyncRolloutLoop:
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
                     "rollout/concurrency": float(self._concurrency),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
-                    "rollout/generated_tokens_per_s": (
+                    "inference/generated_tokens_per_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),
                         now - self._pushed_at,
                     ),
@@ -1415,7 +1415,7 @@ class AsyncRolloutLoop:
                     isinstance(e, aiohttp.ClientResponseError) and 400 <= e.status < 500
                 ):
                     raise
-                self._counters["rollout/vllm_retry_count"] += 1
+                self._counters["inference/retry_count"] += 1
                 sleep = min(2 ** min(attempt, 4), 16)
                 logger.warning(
                     f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
