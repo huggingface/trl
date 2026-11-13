@@ -633,6 +633,7 @@ class _AsyncRolloutLoop:
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
+            "cache_salt": f"v{self.model_version}",
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
             # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
             # per request keeps them independent.

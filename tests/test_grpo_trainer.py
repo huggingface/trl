@@ -36,6 +36,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
+from trl.generation.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
@@ -2355,8 +2356,21 @@ class TestGRPOTrainer(TrlTestCase):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
 
     @require_vllm
-    def test_vllm_server_structured_outputs_raises(self):
-        # In server mode, the trainer gets no candidate set from vLLM, so the importance ratio would be ~0
+    @pytest.mark.parametrize(
+        "server_returns_sampling_mask",
+        [
+            False,
+            pytest.param(
+                True,
+                marks=pytest.mark.skipif(
+                    not is_vllm_available(min_version="0.28.0"),
+                    reason="returning the candidate set of each sampled token requires vLLM >= 0.28",
+                ),
+            ),
+        ],
+    )
+    def test_vllm_server_structured_outputs_needs_sampling_mask(self, server_returns_sampling_mask):
+        # Without the candidate sets the grammar leaves, the importance ratio would be ~0
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -2366,13 +2380,29 @@ class TestGRPOTrainer(TrlTestCase):
             top_k=10,
             vllm_structured_outputs_regex=r"\d+",
         )
-        with pytest.raises(ValueError, match="vllm_mode='colocate'"):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=str_length_reward,
-                args=training_args,
-                train_dataset=dataset,
-            )
+        model_config = {"logprobs_mode": "processed_logprobs", "return_sampling_mask": server_returns_sampling_mask}
+        with (  # stand in for the vLLM server
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "Qwen/Qwen2.5-0.5B-Instruct"}]}),
+            patch.object(VLLMClient, "init_communicator"),
+            patch.object(VLLMClient, "get_server_info", return_value={"model_config": model_config}),
+        ):
+            if server_returns_sampling_mask:
+                trainer = GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs=str_length_reward,
+                    args=training_args,
+                    train_dataset=dataset,
+                )
+                assert trainer.vllm_generation.return_sampling_mask
+            else:
+                with pytest.raises(ValueError, match="--return-sampling-mask"):
+                    GRPOTrainer(
+                        model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                        reward_funcs=str_length_reward,
+                        args=training_args,
+                        train_dataset=dataset,
+                    )
 
     def test_vllm_repetition_penalty_requires_no_importance_sampling_correction(self):
         with pytest.raises(ValueError, match="repetition_penalty"):
@@ -5189,7 +5219,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
-    @pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)")
     @require_response_parsing
     def test_train_with_tools_deepseekv3(self):
         # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one

@@ -759,6 +759,46 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer = self._train_one_step_and_save(fsdp=True)
         assert trainer.is_fsdp_enabled
 
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_train_expert_parallel_body(self, monkeypatch):
+        from transformers.distributed import DistributedConfig
+
+        monkeypatch.setattr(
+            async_grpo_trainer_module, "AsyncRolloutWorker", partial(_StubRolloutWorker, samples_per_weight_sync=30)
+        )
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        experts = trainer.model.get_parameter("model.language_model.layers.0.mlp.experts.gate_up_proj")
+        assert experts.to_local().shape[0] == experts.shape[0] // world_size
+        previous = {n: p.full_tensor().clone() for n, p in trainer.model.named_parameters() if p.requires_grad}
+
+        trainer.train()
+
+        for name, param in previous.items():
+            assert not torch.equal(param, trainer.model.get_parameter(name).full_tensor()), f"{name} has not changed."
+
     @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
@@ -2347,6 +2387,21 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["prompt"] == [1, 2, 3]
         assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
+
+    @pytest.mark.parametrize("top_k", [0, 4])
+    def test_prefix_cache_is_salted_by_model_version(self, top_k):
+        loop = _rollout_loop(top_k=top_k)
+        if top_k:
+            logprobs = {
+                "content": [{"token": "token_id:4", "logprob": -0.1}, {"token": "token_id:5", "logprob": -0.2}]
+            }
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": logprobs, "sampling_mask": [[4], [5]]}]}
+        else:
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+        requests, _ = self._generate(loop, response)
+        loop._model_version_value.value = 3
+        requests += self._generate(loop, response)[0]
+        assert [payload["cache_salt"] for _, payload in requests] == ["v0", "v3"]
 
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)

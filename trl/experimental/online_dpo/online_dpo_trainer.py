@@ -628,7 +628,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             model.gradient_checkpointing_enable()
 
-        model.enable_input_require_grads()
+        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if Version(transformers.__version__) < Version("5.0.0"):
+            model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):
