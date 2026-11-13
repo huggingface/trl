@@ -88,7 +88,7 @@ test = [
     "pytest",
 ]
 vllm = [
-    "vllm>=0.22.1,<0.34.0",
+    "vllm>=0.23.0,<0.34.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -120,7 +120,8 @@ dev = [
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
-    # vllm: not included in dev by default due to CUDA error; see GH-4228
+    # vllm: not included in dev by default due to CUDA error; see GH-4228. The async rollout workers only need aiohttp
+    "aiohttp>=3.13.3",
     # vlm
     "Pillow",
     "torchvision",

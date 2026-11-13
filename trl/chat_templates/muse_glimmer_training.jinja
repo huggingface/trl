@@ -2,6 +2,8 @@
     Modifications vs the original:
       - Added {% generation %} / {% endgeneration %} around assistant message output to support
         assistant-only loss masking in SFT training.
+      - Emitted the `<|start|>assistant` that the generation prompt pre-fills before {% generation %}, so that
+        assistant-only loss doesn't train it.
 -#}
 {#
   Template: Muse Glimmer ATEM Chat Template
@@ -182,7 +184,7 @@
         {{- render_content(message['content']) -}}
         {{- '\n</tool_output><|eot|>' -}}
     {%- elif role == 'assistant' -%}
-        {%- generation %}
+        {%- set turn -%}
         {%- if message.get('reasoning_content') -%}
             {{- '<|start|>assistant to=self<|message|>' + message['reasoning_content'] + '<|eom|>' -}}
         {%- endif -%}
@@ -210,6 +212,10 @@
             {{- render_content(message['content']) -}}
             {{- ('<|eot|>' if end_turn else '<|eom|>') -}}
         {%- endif -%}
+        {%- endset -%}
+        {{- '<|start|>assistant' -}}
+        {%- generation %}
+        {{- turn[('<|start|>assistant' | length):] -}}
         {%- endgeneration %}
     {%- endif -%}
 {%- endfor -%}

@@ -1,5 +1,5 @@
 {#- Training variant of the SmolVLM chat template (see smolvlm.jinja for the original).
-    Also used for SmolVLM2, which ships a byte-identical chat template.
+    Also used for SmolVLM2-500M-Video-Instruct, and SmolVLM2-2.2B-Instruct before 2026-11-11.
     Modifications vs the original:
     - Split the assistant message into its own branch so the {% generation %} / {% endgeneration %}
       markers wrap the assistant content (everything after the 'Assistant:' prompt cue, up to and

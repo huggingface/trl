@@ -25,9 +25,8 @@
 pip install pillow
 
 # Tested on 8x H100 GPUs
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_visual_chat/sft_visual_chat.py \
+torchrun --nproc_per_node 8 examples/sft_visual_chat/sft_visual_chat.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --gradient_accumulation_steps 8 \
@@ -40,9 +39,8 @@ For LLaVA-NeXT, use:
 For meta-llama/Llama-3.2-11B-Vision-Instruct, use:
     --model_name_or_path meta-llama/Llama-3.2-11B-Vision-Instruct
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_visual_chat/sft_visual_chat.py \
+torchrun --nproc_per_node 8 examples/sft_visual_chat/sft_visual_chat.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path HuggingFaceTB/SmolVLM-Instruct \
     --per_device_train_batch_size 1 \
