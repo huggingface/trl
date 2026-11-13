@@ -1831,19 +1831,6 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer._generate = generate_with_one_unscorable_token
 
-        # Snapshot the divergence metric as soon as it is produced. Reading `_metrics` after training is useless,
-        # because the dict is cleared on every log.
-        original_score = trainer._generate_and_score_completions
-        recorded_metrics = []
-
-        def record_metrics(inputs):
-            outputs = original_score(inputs)
-            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
-                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
-            return outputs
-
-        trainer._generate_and_score_completions = record_metrics
-
         # Capture the off-policy mask, the third consumer of the sampling logprobs.
         original_off_policy_mask = trainer.get_off_policy_mask
         off_policy_masks = []
@@ -1856,13 +1843,18 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.get_off_policy_mask = record_off_policy_mask
 
         # Assert on every loss the trainer actually returns. The aggregate reported in `log_history` is not a
-        # reliable witness here, since it can stay finite while an individual step's loss carries NaN.
+        # reliable witness here, since it can stay finite while an individual step's loss carries NaN. Snapshot the
+        # divergence metric at the same time: reading `_metrics` after training is useless, because the dict is
+        # cleared on every log.
         original_compute_loss = trainer._compute_loss
         losses = []
+        recorded_metrics = []
 
         def record_loss(model, inputs):
             loss = original_compute_loss(model, inputs)
             losses.append(loss)
+            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+                recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
             return loss
 
         trainer._compute_loss = record_loss
