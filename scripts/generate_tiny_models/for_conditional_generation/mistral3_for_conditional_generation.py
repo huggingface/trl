@@ -12,24 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import tempfile
 
 import torch
+from safetensors.torch import save_file
 from torch import nn
-from transformers import (
-    AutoConfig,
-    AutoProcessor,
-    FineGrainedFP8Config,
-    GenerationConfig,
-    Mistral3ForConditionalGeneration,
-)
-from transformers.integrations.finegrained_fp8 import FP8Linear
+from transformers import AutoConfig, AutoProcessor, GenerationConfig, Mistral3ForConditionalGeneration
 
 from .._common import (
     check_dtype_pattern,
     check_transformers_version,
     print_config_diff,
-    push_to_hub,
+    push_dir_to_hub,
     set_seed,
     smoke_test,
 )
@@ -63,9 +58,8 @@ vision_config = {
 config = AutoConfig.from_pretrained(MODEL_ID)
 config.text_config.update(text_config)
 config.vision_config.update(vision_config)
-# FP8 weights, like the reference checkpoint: build the model in bfloat16, then quantize it at load with the
-# reference's quantization config, which computes each weight's scale (needs a GPU with FP8 support)
-quantization_config = FineGrainedFP8Config.from_dict(config.quantization_config)
+# Set aside: the model is built in bfloat16, then quantized below
+quantization_config = config.quantization_config
 del config.quantization_config
 model = Mistral3ForConditionalGeneration(config).to(dtype=torch.bfloat16)
 
@@ -86,15 +80,25 @@ model(**processor.apply_chat_template(conversation, tokenize=True, return_dict=T
 for hook in hooks:
     hook.remove()
 
-with tempfile.TemporaryDirectory() as tmp_dir:
-    model.save_pretrained(tmp_dir)
-    model = Mistral3ForConditionalGeneration.from_pretrained(
-        tmp_dir, quantization_config=quantization_config, device_map="cuda"
-    )
+# FP8 weights, like the reference checkpoint: quantize the language model's linears (the reference keeps the vision
+# tower, the projector and lm_head in bfloat16) per tensor, with the weight and input scales stored in bfloat16
+fp8_max = torch.finfo(torch.float8_e4m3fn).max
+state_dict = model.state_dict()
 for name, module in model.named_modules():
-    if isinstance(module, FP8Linear):
-        module.activation_scale.data.fill_(inputs_absmax[name] / torch.finfo(torch.float8_e4m3fn).max)
-smoke_test(model, processor)
-check_dtype_pattern(MODEL_ID, model)
+    if isinstance(module, nn.Linear) and name.startswith("model.language_model."):
+        weight = module.weight.float()
+        scale = weight.abs().max() / fp8_max
+        state_dict[f"{name}.weight"] = (weight / scale).to(torch.float8_e4m3fn)
+        state_dict[f"{name}.weight_scale_inv"] = scale.to(torch.bfloat16)
+        state_dict[f"{name}.activation_scale"] = torch.tensor(inputs_absmax[name] / fp8_max, dtype=torch.bfloat16)
+config.quantization_config = quantization_config
+check_dtype_pattern(MODEL_ID, state_dict)
 print_config_diff(MODEL_ID, model)
-push_to_hub(model, processor, generation_config, "tiny")
+
+with tempfile.TemporaryDirectory() as tmp_dir:
+    # Written with the in-memory names, which are the reference's (`save_pretrained` writes the legacy layout)
+    config.save_pretrained(tmp_dir)
+    save_file(state_dict, os.path.join(tmp_dir, "model.safetensors"), metadata={"format": "pt"})
+    model = Mistral3ForConditionalGeneration.from_pretrained(tmp_dir, device_map="cuda")
+    smoke_test(model, processor)
+    push_dir_to_hub(tmp_dir, model, processor, generation_config, "tiny")
