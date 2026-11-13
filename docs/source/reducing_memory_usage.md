@@ -6,7 +6,7 @@ Below, we outline these techniques and recommend experimenting with different co
 
 Each method includes examples for the supported trainers. If you're unsure whether a technique is compatible with your trainer, please take a look at the corresponding trainer documentation.
 
-For additional strategies, such as **gradient checkpointing**, which is supported across all trainers, see the [`transformers` performance guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).
+For additional strategies, such as **activation checkpointing**, which is supported across all trainers, see the [`transformers` optimization guide](https://huggingface.co/docs/transformers/optimization_overview).
 
 ## Truncation
 
@@ -274,18 +274,18 @@ training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
 
 Offloading the vLLM weights and cache helps keep GPU memory usage low, which can be particularly beneficial when training large models or using limited GPU resources. However, waking the vLLM engine from sleep mode introduces some host–device transfer latency, which may slightly impact training speed.
 
-## Gradient checkpointing
+## Activation checkpointing
 
-Gradient checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
+Activation checkpointing trades compute for memory by not storing all intermediate activations during the forward pass, recomputing them during the backward pass instead.
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., gradient_checkpointing=True)
+training_args = SFTConfig(..., activation_checkpointing=True)
 ```
 
 > [!NOTE]
-> Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+> Activation checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `activation_checkpointing=False` if needed.
 
 ### Selective activation checkpointing
 
@@ -296,8 +296,8 @@ from trl import SFTConfig
 
 training_args = SFTConfig(
     ...,
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"selective": True},
+    activation_checkpointing=True,
+    activation_checkpointing_kwargs={"selective": True},
 )
 ```
 
