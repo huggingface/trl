@@ -138,8 +138,9 @@ While training, we record the following metrics:
 - `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
-- `completions/clipped_ratio`: The ratio of truncated (clipped) completions, whose last turn does not end with an EOS token.
+- `completions/truncated_frac`: The fraction of completions whose last turn does not end with an EOS token, i.e. was cut off by `max_completion_length`. GRPO logs the same quantity as `completions/clipped_ratio`.
 - `completions/duplicate_frac`: The fraction of rollouts that repeat an earlier rollout of their group token for token. See [Saturation and duplicates](#saturation-and-duplicates).
+- `completions/mean_turns`, `completions/max_turns`: The average and maximum number of assistant turns per completion.
 - `tools/call_frequency`: The average number of tool calls per completion, over every rollout, including the groups that are then dropped. Logged only when the trainer has tools.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
 - `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over every completion it scored, including the groups that are then dropped. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
@@ -168,7 +169,7 @@ The other metrics describe the asynchronous pipeline.
 
 Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
 
-- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- A mean measured per rollout, sample or call, like `reward`, `completions/mean_turns` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
 - Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
 - A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
 - Any other metric is the mean of the values recorded in the window.
@@ -186,7 +187,6 @@ Units:
 - `rollout/generated_tokens_per_s`: The generation throughput, in generated tokens per second, since the previous report.
 - `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
 - `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
-- `rollout/turns_mean`, `rollout/turns_max`: The average and maximum number of turns per rollout.
 - `rollout/samples_per_rollout`: The number of training samples per rollout. Above `1.0`, some rollouts were forked; below `1.0`, some produced no trained token. See [Multi-turn rollouts](#multi-turn-rollouts).
 - `rollout/fork_frac`: The fraction of turn transitions whose prompt does not start with the held tokens, so the turn started a new sample.
 - `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`: The number of held tokens a fork re-rendered, averaged over turn transitions (one that does not fork counts as `0`). The new sample shares the tokens before the divergence, so this is what each fork adds to the forward.
@@ -335,7 +335,7 @@ Read the first three together, against the range of your reward:
 | --- | --- | --- | --- | --- |
 | low | any (noisy over few groups) | any | **healthy**: most groups produce a gradient | nothing |
 | climbing | near the top of the range | climbing | **saturating at the top**: the prompts have become too easy for the policy, which is how a successful run usually ends | stop the run, or move to harder prompts |
-| high | near the bottom of the range | low and flat | **stuck at the bottom**: the prompts are too hard, or the reward function never gives credit | check `completions/clipped_ratio` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them |
+| high | near the bottom of the range | low and flat | **stuck at the bottom**: the prompts are too hard, or the reward function never gives credit | check `completions/truncated_frac` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them |
 | climbing | falling | falling | **regression**: groups that used to pass now fail together | check `completions/duplicate_frac` and `entropy` for a collapse |
 | high | in the middle | any | **a mix**: with 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts |
 
