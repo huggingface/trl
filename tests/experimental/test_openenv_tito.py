@@ -46,8 +46,8 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
+from trl.experimental.async_grpo import AsyncGRPOConfig, async_grpo_trainer, openenv_harness
+from trl.experimental.async_grpo.async_grpo_trainer import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
 
 from ..testing_utils import is_ampere_or_newer, require_vllm
 
@@ -140,6 +140,7 @@ def make_loop():
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
             model_version_value=mp.Value("i", 0),
+            token_allowance=mp.Value("q", 10**12),
             heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
@@ -494,7 +495,7 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     session = Session(captured_entry())
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     monkeypatch.setattr(
-        async_rollout_worker, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+        async_grpo_trainer, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
     )
     with pytest.raises(ValueError, match="invalid training sequence"):
         loop._run()

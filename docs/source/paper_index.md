@@ -779,7 +779,7 @@ trainer = A2POTrainer(
 trainer.train()
 ```
 
-## Direct Policy Optimization
+## Direct Preference Optimization
 
 Papers relating to the [`DPOTrainer`]
 
@@ -1262,6 +1262,33 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="sigmoid_norm",
+)
+```
+
+### Unbiased Alignment for Large Language Models with Noisy Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2607.03248
+
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the policy trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased DPO (UDPO) loss, called α-UDPO in the paper:
+
+$$
+\mathcal{L}_{\text{UDPO}} = -\alpha \log \frac{e^{z} + a}{e^{z} + 1}, \quad z = \beta \left( \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
+$$
+
+which is the DPO loss for  \\( a = 0 \\). The constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as for DPO. Unlike [Robust DPO](#provably-robust-dpo-aligning-language-models-with-noisy-feedback), the paper shows that the optimum stays unbiased when the true flip probability is lower than the assumed  \\( \varepsilon \\) (Corollary 4.7), so  \\( \varepsilon \\) does not have to be estimated exactly. In TRL,  \\( \varepsilon \\) is set with `label_smoothing`. To use  \\( a = 0.8 \\), the value the paper recommends to practitioners:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="udpo",
+    label_smoothing=4 / 9,  # flip probability ε, for a = ε / (1 - ε) = 0.8 as recommended in Appendix B.1 of the paper
+    beta=0.1,  # 0.1 for HH and UltraFeedback, 0.5 for TL;DR (Appendix B.1 of the paper)
+    learning_rate=5e-6,  # 5e-6 for Llama-3.2-3B and Qwen3-1.7B, 1e-6 for 8B models (Appendix B.1 of the paper)
+    num_train_epochs=3,  # Appendix B.1 of the paper
+    per_device_train_batch_size=16,  # total batch size of 128 on 8 GPUs (Appendix B.1 of the paper)
+    max_grad_norm=10.0,  # Appendix B.1 of the paper
+    warmup_ratio=0.1,  # Appendix B.1 of the paper
 )
 ```
 

@@ -13,5 +13,4 @@
 # limitations under the License.
 
 from .async_grpo_config import AsyncGRPOConfig
-from .async_grpo_trainer import AsyncGRPOTrainer
-from .async_rollout_worker import AsyncRolloutLoop, Rollout
+from .async_grpo_trainer import AsyncGRPOTrainer, AsyncRolloutLoop, Rollout
