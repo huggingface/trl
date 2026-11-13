@@ -21,6 +21,7 @@ import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -60,6 +61,7 @@ if is_peft_available():
 _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
     reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
     strict=True,
+    run=Version(torch.__version__) >= Version("2.13.0"),  # torch<2.13 leaks checkpoint hooks into later tests (#8302)
 )
 
 
@@ -898,8 +900,9 @@ class TestSFTTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
                 0.0,
                 False,
-                marks=pytest.mark.xfail(
-                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="FP8 dequantization requires transformers>=5.0.0",
                 ),
             ),
             pytest.param(
@@ -972,6 +975,28 @@ class TestSFTTrainer(TrlTestCase):
         aux_update = router_update(4, 1, 1.0) - router_update(4, 1, 0.0)
         accumulated_aux_update = router_update(2, 2, 1.0) - router_update(2, 2, 0.0)
         torch.testing.assert_close(accumulated_aux_update, aux_update, rtol=1e-3, atol=1e-6)
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @require_peft
     def test_train_peft_model(self):

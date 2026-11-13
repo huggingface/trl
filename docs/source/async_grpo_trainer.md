@@ -27,14 +27,15 @@ from datasets import load_dataset
 from trl.experimental.async_grpo import AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3.5-2B",
-    reward_funcs=accuracy_reward,
-    train_dataset=dataset,
-)
-trainer.train()
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+    )
+    trainer.train()
 ```
 
 Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
@@ -141,7 +142,7 @@ While training, we record the following metrics:
 - `completions/duplicate_frac`: The fraction of rollouts that repeat an earlier rollout of their group token for token. See [Saturation and duplicates](#saturation-and-duplicates).
 - `tools/call_frequency`: The average number of tool calls per completion, over every rollout, including the groups that are then dropped. Logged only when the trainer has tools.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
-- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over every completion it scored, including the groups that are then dropped. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
 - `rewards/{reward_func_name}/group_std`: The standard deviation of the reward from a specific reward function, computed within each group and averaged over the trained samples.
 - `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
 - `reward_group_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples. It is what the advantage is divided by, unlike GRPO's `reward_std`, which is taken over the whole batch.
@@ -427,15 +428,16 @@ from peft import LoraConfig
 from trl.experimental.async_grpo import AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+if __name__ == "__main__":
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3.5-2B",
-    reward_funcs=accuracy_reward,
-    train_dataset=dataset,
-    peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
-)
-trainer.train()
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
+    )
+    trainer.train()
 ```
 
 Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
@@ -615,13 +617,14 @@ def coding_reward_func(prompts, completions, task, **kwargs):
     return rewards
 
 # Use both task-specific reward functions
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    reward_funcs=[math_reward_func, coding_reward_func],
-    train_dataset=dataset,
-)
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        reward_funcs=[math_reward_func, coding_reward_func],
+        train_dataset=dataset,
+    )
 
-trainer.train()
+    trainer.train()
 ```
 
 In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`experimental.async_grpo.AsyncGRPOTrainer`] will continue with the valid functions and tasks. This allows the [`experimental.async_grpo.AsyncGRPOTrainer`] to handle multiple reward functions with different applicability.
@@ -715,7 +718,7 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
-Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
+Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level and keep the training code under `if __name__ == "__main__":`. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
 ### Resuming from a checkpoint
 
@@ -825,12 +828,13 @@ class IncrementEnv:
         self.counter += step
         return self.counter
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3-0.6B",
-    args=AsyncGRPOConfig(max_steps=1000, chat_template_kwargs={"enable_thinking": False}),
-    environment_factory=IncrementEnv,
-)
-trainer.train()
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        args=AsyncGRPOConfig(max_steps=1000, chat_template_kwargs={"enable_thinking": False}),
+        environment_factory=IncrementEnv,
+    )
+    trainer.train()
 ```
 
 An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
@@ -871,12 +875,13 @@ class IncrementEnv:
         self.counter += step
         return self.counter
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3-0.6B",
-    train_dataset=dataset,  # the dataset owns the task; the "target" column reaches reset(target=...)
-    environment_factory=IncrementEnv,
-)
-trainer.train()
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        train_dataset=dataset,  # the dataset owns the task; the "target" column reaches reset(target=...)
+        environment_factory=IncrementEnv,
+    )
+    trainer.train()
 ```
 
 ### Rewards
@@ -938,16 +943,17 @@ class GameEnv:
         ...
 
 # The dataset only routes: each row picks the environment for that rollout
-dataset = Dataset.from_dict({"environment": ["coding", "game"] * 500})
+if __name__ == "__main__":
+    dataset = Dataset.from_dict({"environment": ["coding", "game"] * 500})
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3-0.6B",
-    args=AsyncGRPOConfig(chat_template_kwargs={"enable_thinking": False}),
-    train_dataset=dataset,
-    reward_funcs=reward_func,
-    environment_factory={"coding": CodingEnv, "game": GameEnv},
-)
-trainer.train()
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        args=AsyncGRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+        train_dataset=dataset,
+        reward_funcs=reward_func,
+        environment_factory={"coding": CodingEnv, "game": GameEnv},
+    )
+    trainer.train()
 ```
 
 Environment instances are reused across steps (reset between episodes), so an expensive `__init__` is paid once rather than every step. The `environment` field is consumed by the trainer and is **not** forwarded to `reset`.
@@ -998,9 +1004,9 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, ...) can be trained on **tex
 
 ## TurnRecord
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.TurnRecord
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.TurnRecord
 
 ## RolloutGroup
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutGroup
 
