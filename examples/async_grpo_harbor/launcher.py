@@ -16,10 +16,11 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv[harbor]==0.7.0",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
+#     "kernels",
 #     "transformers>=5.2",
 #     "huggingface_hub>=1.22",
 # ]
@@ -88,7 +89,7 @@ TRAIN_SCRIPT_URL = (
     "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py"
 )
 DATA_ROOT = pathlib.Path(os.environ.get("DATA_ROOT", "/data"))
-OPENENV_REVISION = "86a180ede21e044f7929b9a7783ad83aa67d83a3"
+OPENENV_REVISION = "v0.7.0"
 
 _children: list[subprocess.Popen] = []
 _stopping = threading.Event()
@@ -185,7 +186,7 @@ def _serve_cmd(args: argparse.Namespace) -> list[str]:
 def start_harbor_server(args: argparse.Namespace, log: pathlib.Path) -> str:
     """Start the server and return its verified public proxy URL."""
     # The factory keeps one metadata connection in addition to its rollout sessions.
-    _spawn(_serve_cmd(args), log, env={"MAX_CONCURRENT_ENVS": str(args.max_inflight + 1)})
+    _spawn(_serve_cmd(args), log, env={"MAX_CONCURRENT_ENVS": str(args.max_concurrent_rollouts + 1)})
     return wait_for_public_proxy(log, args.capture_port)
 
 
@@ -273,7 +274,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--split", default="AdithyaSK/data_agent_rl_environment_train")
     p.add_argument("--harness", default="mini-swe-agent")
     p.add_argument("--sandbox", default="e2b")
-    p.add_argument("--max-inflight", type=int, default=8)
+    p.add_argument("--max-concurrent-rollouts", type=int, default=8)
     p.add_argument("--server-port", type=int, default=8200)
     p.add_argument("--capture-port", type=int, default=8300)
     p.add_argument("--vllm-port", type=int, default=8000)
@@ -337,7 +338,7 @@ def main() -> None:
             str(source),
             "fetch",
             "--depth=1",
-            "https://github.com/huggingface/OpenEnv.git",
+            "https://github.com/openenv/OpenEnv.git",
             OPENENV_REVISION,
         ],
         check=True,
@@ -391,7 +392,7 @@ def main() -> None:
         "--split", args.split,
         "--harness", args.harness,
         "--sandbox", args.sandbox,
-        "--max-inflight", str(args.max_inflight),
+        "--max-concurrent-rollouts", str(args.max_concurrent_rollouts),
         "--run-name", run_name,
         "--output-dir", str(data_root / "runs" / run_name),
         *forwarded,

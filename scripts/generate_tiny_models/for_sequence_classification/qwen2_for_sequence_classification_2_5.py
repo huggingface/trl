@@ -45,6 +45,7 @@ config = AutoConfig.from_pretrained(
 )
 # Bug in transformers: it ignores num_hidden_layers to build layer_types
 config.layer_types = config.layer_types[:2]
+config.head_dim = 8  # a multiple of 8, as Flash Attention requires
 model = Qwen2ForSequenceClassification(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 smoke_test(model, tokenizer)

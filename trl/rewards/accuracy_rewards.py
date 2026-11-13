@@ -62,7 +62,9 @@ def accuracy_reward(
     ```
     """
     if not is_math_verify_available():
-        raise ImportError("Please install the `math_verify` package to use accuracy_reward")
+        raise ImportError(
+            "`accuracy_reward` requires the `math-verify` library. Install it with `pip install trl[math_verify]`."
+        )
 
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
@@ -278,7 +280,9 @@ def reasoning_accuracy_reward(
         ```
     """
     if not is_math_verify_available():
-        raise ImportError("Please install the `math_verify` package to use reasoning_accuracy_reward")
+        raise ImportError(
+            "`reasoning_accuracy_reward` requires the `math-verify` library. Install it with `pip install trl[math_verify]`."
+        )
 
     if reasoning_delimiters is None:
         # Use sensible defaults for majority of reasoning models

@@ -19,6 +19,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
@@ -47,7 +49,6 @@ from transformers.utils import is_peft_available
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
-    has_generation_markers,
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
@@ -70,13 +71,14 @@ from .utils import (
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
+    model_accepts_images,
     pad,
 )
 
 
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -711,7 +713,8 @@ class SFTTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
 
@@ -867,36 +870,88 @@ class SFTTrainer(_BaseTrainer):
                     "peft, or load the model with `device_map=None`. See "
                     "https://github.com/huggingface/peft/issues/2821."
                 )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
+                )
+            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and any(
+                    isinstance(module, torch.nn.Linear)
+                    and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                    for name, module in model.named_modules()
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                logger.warning(
+                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
+                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
-        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing before DeepSpeed 0.19.3. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703 and
+        # https://github.com/deepspeedai/DeepSpeed/pull/8148.
+        # Can be removed once the minimum supported DeepSpeed version is 0.19.3.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
+            and Version(version("deepspeed")) < Version("0.19.3")
         ):
             if (args.gradient_checkpointing_kwargs or {}).get("selective"):
                 raise ValueError(
                     "`gradient_checkpointing_kwargs={'selective': True}` is not supported with PEFT + DeepSpeed "
-                    "ZeRO-3, which requires reentrant gradient checkpointing while SAC requires non-reentrant "
-                    "checkpointing."
+                    "ZeRO-3 on DeepSpeed < 0.19.3, which requires reentrant gradient checkpointing while SAC requires "
+                    "non-reentrant checkpointing. Upgrade DeepSpeed to 0.19.3 or later to use SAC."
                 )
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
                     "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
-                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
-                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training with "
+                    "DeepSpeed < 0.19.3. To remove this warning, upgrade DeepSpeed to 0.19.3 or later, unset "
+                    "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
-        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -936,10 +991,9 @@ class SFTTrainer(_BaseTrainer):
                 "supported for conversational datasets."
             )
 
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers if needed
+        if args.assistant_only_loss:
+            self.chat_template = get_training_chat_template(processing_class, require_prefix_preservation=False)
         else:
             self.chat_template = None
 
@@ -996,12 +1050,6 @@ class SFTTrainer(_BaseTrainer):
                 )
 
         # Dataset
-        if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
-            raise ValueError(
-                "When `padding_free=True` without packing, `max_length` is not enforced. Either enable packing "
-                "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
-                "`max_length=None`."
-            )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         self._skip_prepare_dataset = (

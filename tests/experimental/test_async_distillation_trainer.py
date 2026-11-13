@@ -19,27 +19,29 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import time
 from collections import OrderedDict, defaultdict
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
 import requests
 import torch
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoTokenizer, TrainerControl
+from safetensors import safe_open
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
+from trl.experimental.async_distillation import async_distillation_trainer as async_distillation_trainer_module
+from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
-    FixedCountBatcher,
-    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _add_tail_bucket,
-    _balance_by_squared_length,
     _chunked_jsd_loss,
     _EpochStopCallback,
     _iter_vllm_named_params,
@@ -52,13 +54,15 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
+    _spawn_stop_watcher,
 )
+from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, is_bf16_supported, require_peft, require_vllm
 
 
 TEACHER_TOP_K = 4
@@ -94,13 +98,15 @@ def _make_teacher_topk(
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation, bypassing real vLLM/network."""
 
-    def __init__(self, tokenizer, dataset, vocab_size: int, samples_per_weight_sync: int = 10):
+    def __init__(self, *, dataset, processing_class, samples_per_weight_sync: int = 10, **kwargs):
         self.rollout_buffer = queue.Queue()
+        self.token_allowance = mp.Value("q", 0)
+        self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
-        self._vocab_size = vocab_size
-        self._sample_iter = self._make_sample_iter(tokenizer, dataset)
+        self._vocab_size = len(processing_class)
+        self._sample_iter = self._make_sample_iter(processing_class, dataset)
 
     def _make_sample_iter(self, tokenizer, dataset):
         for idx, row in enumerate(itertools.cycle(dataset)):
@@ -152,6 +158,9 @@ class _StubRolloutWorker:
 
 class _StubWeightTransfer:
     """No-op weight transfer for testing the trainer without a real vLLM server."""
+
+    def __init__(self, **kwargs):
+        pass
 
     def init_weight_transfer(self):
         pass
@@ -304,8 +313,8 @@ class FakeVLLMTransport(BaseAdapter):
 def fake_vllm(monkeypatch) -> FakeVLLMServer:
     """A [`FakeVLLMServer`] that every `requests` call to `FakeVLLMServer.url` reaches, for this test only.
 
-    The one patch in this module. It swaps the transport for one URL, leaves every other request untouched, and is
-    undone by `monkeypatch` when the test ends.
+    It swaps the transport for one URL, leaves every other request untouched, and is undone by `monkeypatch` when the
+    test ends.
     """
     server = FakeVLLMServer()
     transport = FakeVLLMTransport(server)
@@ -316,6 +325,16 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
     monkeypatch.setattr(requests.Session, "get_adapter", get_adapter)
     return server
+
+
+@pytest.fixture(autouse=True)
+def stub_weight_transfer(monkeypatch):
+    monkeypatch.setattr(async_distillation_trainer_module, "WeightTransferClient", _StubWeightTransfer)
+
+
+@pytest.fixture(autouse=True)
+def stub_rollout_worker(monkeypatch):
+    monkeypatch.setattr(async_distillation_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
 
 
 def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
@@ -340,17 +359,6 @@ class TestPackingAwareBatching:
     run without a GPU. The teacher-candidate padding in the collator is new and is the focus here.
     """
 
-    def test_fixed_count_batcher_yields_balanced_fixed_count_micro_batches(self):
-        source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
-        batcher = FixedCountBatcher(source, num_processes=2, microbatch_size=4)
-
-        micro_batches = list(itertools.islice(iter(batcher), 3))
-        assert len(micro_batches) == 3
-        for groups in micro_batches:
-            assert len(groups) == 2
-            assert all(len(group) > 0 for group in groups)
-            assert sum(len(group) for group in groups) == 4
-
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
@@ -361,12 +369,6 @@ class TestPackingAwareBatching:
             assert len(groups) == 2
             assert all(len(group) > 0 for group in groups)
             assert all(sum(len(s["input_ids"]) for s in group) <= 8 for group in groups)
-
-    def test_balance_equalizes_squared_length(self):
-        samples = [_rollout_sample(length) for length in (3, 3, 2, 2)]
-        groups = _balance_by_squared_length(samples, num_groups=2)
-        loads = [sum(len(s["input_ids"]) ** 2 for s in group) for group in groups]
-        assert loads[0] == loads[1]
 
     def test_collator_pads_teacher_candidates_and_masks_prompt_positions(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=1)
@@ -431,7 +433,7 @@ class TestMetricReduction:
         ("key", "values", "expected"),
         [
             ("perf/fwd_bwd_s", [1.0, 2.0, 6.0], 3.0),  # gauge -> window mean
-            ("sample/dropped_stale_total", [1.0, 1.0, 1.0], 3.0),  # counter -> sum of the pushed deltas
+            ("sample/dropped_stale_count", [1.0, 1.0, 1.0], 3.0),  # counter -> sum of the pushed deltas
             ("sample/forwarded_tokens_max", [3.0, 9.0, 5.0], 9.0),
             # A `max`/`min` WORD, not a suffix, so the upstream spellings reduce correctly too...
             ("completions/max_length", [3.0, 9.0, 5.0], 9.0),
@@ -440,21 +442,14 @@ class TestMetricReduction:
             ("perf/maximal_s", [2.0, 4.0], 3.0),
             # Rates reduce as Σnum / Σden. These two windows ran at 1 and 100 tok/s; meaning the ratios would report
             # 50.5, the defect that made `training_tok/s` unusable.
-            ("perf/forwarded_tok_s_wall_clock", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
+            ("perf/wall_clock_forwarded_tokens_per_s", [(100.0, 100.0), (100.0, 1.0)], 200 / 101),
         ],
     )
     def test_reduces_by_shape_and_name(self, key, values, expected):
         assert _reduce_metric(key, values) == pytest.approx(expected)
 
     def test_rate_with_zero_denominator_is_nan(self):
-        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_wall_clock", [(0.0, 0.0)]))
-
-
-class TestRolloutWorkerProtocol:
-    def test_stub_worker_exposes_every_protocol_attribute(self):
-        # A stub that falls behind the protocol breaks training, and only the GPU-gated trainer test would notice.
-        stub = _StubRolloutWorker(tokenizer=None, dataset=[], vocab_size=8)
-        assert not [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
+        assert math.isnan(_reduce_metric("perf/wall_clock_forwarded_tokens_per_s", [(0.0, 0.0)]))
 
 
 def _position(*entries):
@@ -498,6 +493,7 @@ def _rollout_loop(**kwargs):
         "eos_token_ids": [tokenizer.eos_token_id],
         "rollout_buffer": mp.Queue(),
         "model_version_value": mp.Value("i", 0),
+        "token_allowance": mp.Value("q", 10**12),
         "heartbeat_value": mp.Value("d", 0.0),
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
@@ -507,15 +503,83 @@ def _rollout_loop(**kwargs):
     return _AsyncRolloutLoop(**kwargs)
 
 
-def _scoring_loop(tokenizer, teacher_server_urls):
+@pytest.fixture
+def fake_vllm_server():
+    """A vLLM server that serves both the student and the teacher: the student always answers with the same two tokens."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    async def completions(request):
+        payload = await request.json()
+        if "prompt_logprobs" in payload:  # the teacher scoring the sequence
+            return web.json_response(
+                {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+            )
+        return web.json_response({"choices": [{"token_ids": [7, 8]}]})
+
+    async def models(request):
+        return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+
+    app = web.Application()
+    app.router.add_post("/v1/completions", completions)
+    app.router.add_get("/v1/models", models)
+    return TestServer(app)
+
+
+class TestTokenAllowance:
+    def test_generation_stops_at_the_allowance(self, fake_vllm_server):
+        # Every sample has the same length, so the number of rollouts the allowance admits is exact
+        PartialState()
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "hi"}]]})
+        loop = _rollout_loop(dataset=dataset, token_allowance=mp.Value("q", 1))
+
+        def drain():
+            return [loop.rollout_buffer.get(timeout=5) for _ in range(loop.rollout_buffer.qsize())]
+
+        async def settled(worker, expected):
+            deadline = time.monotonic() + 10
+            while loop.rollout_buffer.qsize() < expected:
+                if worker.done():
+                    worker.result()  # raises the worker's error instead of timing out
+                assert time.monotonic() < deadline, (
+                    f"{loop.rollout_buffer.qsize()} samples queued, expected {expected}"
+                )
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.3)  # nothing more is generated
+            assert loop.rollout_buffer.qsize() == expected
+
+        async def run():
+            async with fake_vllm_server as server:
+                url = str(server.make_url("")).rstrip("/")
+                loop.vllm_server_url = url
+                loop.teacher_server_urls = {"default": url}
+                stop_event = asyncio.Event()
+                worker = asyncio.create_task(loop._run_loops(stop_event))
+                # Any allowance above 0 admits the first rollout
+                await settled(worker, 1)
+                sample_tokens = len(drain()[0].input_ids)
+                # The allowance now has room for 2.5 more rollouts: the worker starts 3 and stops there
+                loop._token_allowance.value = sample_tokens + sample_tokens * 5 // 2
+                await settled(worker, 3)
+                stop_event.set()
+                await worker
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
+
+
+def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
     loop = _rollout_loop(
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
         teacher_top_k=TEACHER_TOP_K,
-        request_timeout=30,
+        vllm_server_timeout=30,
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
+    loop.teacher_max_model_lens = teacher_max_model_lens or dict.fromkeys(teacher_server_urls, 32768)
     return loop
 
 
@@ -531,14 +595,14 @@ class TestWorkerMetrics:
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = self._loop()
-        loop._counters["rollout/vllm_retry_total"] += 2
+        loop._counters["rollout/vllm_retry_count"] += 2
         loop._rates["rollout/score_s"][0] += 3.0
         loop._rates["rollout/score_s"][1] += 2
-        loop._push_metrics({"rollout/inflight": 4.0})
+        loop._push_metrics({"rollout/concurrency": 4.0})
 
         assert loop._metrics_queue.get(timeout=5) == {
-            "rollout/inflight": 4.0,
-            "rollout/vllm_retry_total": 2.0,
+            "rollout/concurrency": 4.0,
+            "rollout/vllm_retry_count": 2.0,
             "rollout/score_s": (3.0, 2.0),
         }
         # Counters and rates carry deltas, so what one push reported must not ride along on the next.
@@ -548,7 +612,7 @@ class TestWorkerMetrics:
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = self._loop(maxsize=1)
         for _ in range(50):
-            loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
+            loop._push_metrics({"rollout/concurrency": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
         ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),
@@ -569,9 +633,14 @@ class TestWorkerMetrics:
         assert payload["completions/mean_length"] == (3.0, 1.0)
         assert payload["completions/max_length"] == 3.0
         assert payload["completions/clipped_ratio"] == (clipped, 1.0)
+        # Only a completion that ended on EOS counts in the terminated lengths, as in GRPO
+        assert ("completions/mean_terminated_length" in payload) is ends_on_eos
+        if ends_on_eos:
+            assert payload["completions/mean_terminated_length"] == (3.0, 1.0)
+            assert payload["completions/min_terminated_length"] == payload["completions/max_terminated_length"] == 3.0
         assert payload["rollout/score_s"] == (0.25, 1.0)
         # A per-teacher latency series only exists under MOPD; with one teacher the blended mean is the whole story.
-        assert ("teacher_score_s/math" in payload) is per_teacher
+        assert ("teacher/math/score_s" in payload) is per_teacher
 
 
 class TestMultiTeacherRouting:
@@ -580,13 +649,13 @@ class TestMultiTeacherRouting:
     Multiple teachers enable MOPD: each row's `teacher_id` column selects among them; a missing or unmapped
     `teacher_id` is a configuration error, not a silent fallback. Each request must carry the URL *and* the served
     model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher serves
-    its own.
+    its own, and the sequence must fit that teacher's `max_model_len`.
     """
 
-    def _run(self, teacher_server_urls, *teacher_ids):
+    def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_lens=None):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _scoring_loop(tokenizer, teacher_server_urls)
+        loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
@@ -634,6 +703,21 @@ class TestMultiTeacherRouting:
     def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
         with pytest.raises(ValueError, match=match):
             self._run(TWO_TEACHERS, teacher_id)
+
+    def test_raises_when_the_teacher_has_no_room_to_score_the_sequence(self):
+        (sample,), _ = self._run(ONE_TEACHER, None)
+        sequence_length = len(sample.input_ids)
+        # Scoring asks for one throwaway token past the sequence, so a teacher needs one more position than its length.
+        # Each row is checked against its own teacher's limit: math has room for this sequence, code does not.
+        max_model_lens = {"math": sequence_length + 1, "code": sequence_length}
+        self._run(TWO_TEACHERS, "math", teacher_max_model_lens=max_model_lens)
+        with pytest.raises(ValueError, match="'code'.*--max-model-len"):
+            self._run(TWO_TEACHERS, "code", teacher_max_model_lens=max_model_lens)
+
+    def test_skips_the_length_check_when_the_teacher_does_not_report_max_model_len(self):
+        # Only vLLM adds `max_model_len` to `/v1/models`
+        _, requests = self._run(ONE_TEACHER, None, teacher_max_model_lens={"default": None})
+        assert [url for url, _ in requests] == ["http://default:8001"]
 
 
 class TestBetaRange:
@@ -872,7 +956,7 @@ class TestSparseGeneralizedJSDMatchesFullVocabReference:
 
 class TestPerTeacherStats:
     """MOPD's per-teacher breakdown: `_chunked_jsd_loss` returns a `(count, jsd_sum, teacher_entropy_sum)` triple per
-    teacher, which `compute_loss` turns into `teacher_jsd/{id}`. Packing concatenates several teachers' tokens into one
+    teacher, which `compute_loss` turns into `teacher/{id}/jsd`. Packing concatenates several teachers' tokens into one
     row and then splits that row into fixed-size chunks, so the partition has to survive a teacher's positions being
     spread across chunk boundaries.
     """
@@ -935,18 +1019,67 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
         AsyncDistillationTrainer(
             model=model_id,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
 
-    def test_train(self):
+    def _train_one_step_and_save(self, fsdp=False):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            save_steps=1,
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,
+            token_budget=160,
+            fsdp=fsdp,
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        return trainer
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
+        trainer = self._train_one_step_and_save()
+
+        assert trainer.model.dtype == torch.float32
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "float32"
+
+    @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_fsdp_checkpoint_body(self):
+        self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
+        trainer = self._train_one_step_and_save(fsdp=True)
+        assert trainer.is_fsdp_enabled
+
+    @pytest.mark.parametrize(
+        ("model_id", "instantiated"),
+        [
+            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", False),
+            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
+        ],
+    )
+    def test_train(self, model_id, instantiated):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        model = model_id
+        if instantiated:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id, dtype="float32", device_map=None, attn_implementation="eager"
+            )
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -955,36 +1088,51 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
-            token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            token_budget=160,
+            logging_steps=1,
             report_to="none",
         )
         trainer = AsyncDistillationTrainer(
-            model=model_id,
+            model=model,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
+        if instantiated:
+            assert trainer.model is model
+            assert trainer.model.config._attn_implementation.startswith("kernels-community/")
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.rollout_worker.token_allowance.value > trainer._rollout_dataset.consumed_tokens > 0
+        if "Moe" in model_id:
+            # The MoE config declares a `router_aux_loss_coef`, so the load-balancing loss is on by default
+            aux_losses = [log["aux_loss"] for log in trainer.state.log_history if "aux_loss" in log]
+            assert aux_losses and all(math.isfinite(aux) and aux > 0 for aux in aux_losses)
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_router_aux_loss_coef_on_a_dense_model_raises(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
+            AsyncDistillationTrainer(
+                model=model_id,
+                args=AsyncDistillationConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.01, report_to="none"),
+                train_dataset=dataset,
+            )
+
     def test_resume_from_checkpoint(self):
-        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
-        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are covered by
-        # TestRolloutStateCheckpoint.
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
+        # covered by TestRolloutStateCheckpoint.
         # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
         # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
         model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         def build_trainer(**overrides):
             args = AsyncDistillationConfig(
@@ -992,7 +1140,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,
                 teacher_top_k=TEACHER_TOP_K,
                 max_completion_length=8,
-                token_budget=-1,  # FixedCountBatcher, so a step consumes a fixed, predictable number of samples
+                token_budget=160,
                 vllm_server_timeout=5.0,
                 report_to="none",
                 **overrides,
@@ -1001,8 +1149,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 model=model_id,
                 args=args,
                 train_dataset=dataset,
-                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-                weight_transfer=_StubWeightTransfer(),
             )
 
         # First run: train for 2 steps, which saves a checkpoint at step 1.
@@ -1023,7 +1169,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # checking grad_norm/loss stay finite throughout, not just that training completes.
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -1032,7 +1177,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,
-            token_budget=-1,
+            token_budget=160,
             beta=beta,
             report_to="none",
         )
@@ -1040,8 +1185,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
 
@@ -1055,17 +1198,12 @@ class TestAsyncDistillationTrainer(TrlTestCase):
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
     model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
     trainer = AsyncDistillationTrainer(
         model=model_id,
         args=AsyncDistillationConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
-        rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-        weight_transfer=_StubWeightTransfer(),
     )
-    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
-    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    trainer.rollout_worker._loop_kwargs["dataset_start_index"] = dataset_start_index
     return trainer
 
 
@@ -1139,7 +1277,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
-        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             assert json.load(f)["prompt_index"] == expected
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
@@ -1162,7 +1300,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -1181,13 +1319,13 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # under a name a still-running vLLM server already holds, and strand the previous run's directories outside
         # the eviction window.
         assert trainer.model_version == 42
-        trainer.rollout_worker.update_model_version.assert_called_once_with(42)
+        assert trainer.rollout_worker._model_version == 42
 
     def test_inner_training_loop_defaults_model_version_for_old_checkpoints(self):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 5}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -1246,21 +1384,19 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         peft_config,
         lora_config=None,
         data_parallel_size=1,
-        weight_transfer=None,
-        rollout_worker="stub",
+        weight_transfer=_StubWeightTransfer,
+        rollout_worker=_StubRolloutWorker,
         **config_kwargs,
     ):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
-        With `weight_transfer=None` the trainer owns weight sync, which is what makes it probe the server and pick a
-        mode. Pass a `weight_transfer` to exercise the send itself — an injected backend deliberately keeps adapter
-        sync off. `rollout_worker="stub"` injects `_StubRolloutWorker`; `None` lets the trainer build the real
-        `AsyncRolloutWorker`, which is cheap until `start()` and useful for reading what it was told.
+        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker` is the class the trainer
+        builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it was
+        told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         config_kwargs.setdefault("max_staleness", 1)
         args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -1268,25 +1404,22 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             per_device_train_batch_size=3,
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
-            token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            token_budget=160,
             vllm_server_base_url=fake.url,
             vllm_server_timeout=5.0,
             report_to="none",
             **config_kwargs,
         )
-        if rollout_worker == "stub":
-            rollout_worker = _StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer))
-        return AsyncDistillationTrainer(
-            model=self.model_id,
-            args=args,
-            train_dataset=dataset,
-            peft_config=peft_config,
-            rollout_worker=rollout_worker,
-            weight_transfer=weight_transfer,
-        )
+        with (
+            patch.object(async_distillation_trainer_module, "WeightTransferClient", weight_transfer),
+            patch.object(async_distillation_trainer_module, "AsyncRolloutWorker", rollout_worker),
+        ):
+            return AsyncDistillationTrainer(
+                model=self.model_id, args=args, train_dataset=dataset, peft_config=peft_config
+            )
 
     def test_train_peft_config(self, fake_vllm):
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_StubWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config())
         previous_params = {n: p.clone() for n, p in trainer.model.named_parameters()}
 
         trainer.train()
@@ -1312,29 +1445,21 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
 
-    def test_an_injected_weight_transfer_keeps_adapter_sync_off(self, fake_vllm):
-        # An injected backend owns weight sync and may be a no-op that disables it; adapter sync must not run behind
-        # its back, and the server is not consulted.
-        trainer = self._build(
-            fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG, weight_transfer=_StubWeightTransfer()
-        )
-        assert trainer._lora_sync is False
-        assert fake_vllm.requests == []
-
     def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
         # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
         # would leave the other ranks waiting in the collective that shares the sync mode.
         with pytest.raises(ValueError, match="--max-lora-rank"):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, and distilled against the teacher as if it were the student. The real worker is built here
         # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it.
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
-        assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
+        trainer = self._build(
+            fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=AsyncRolloutWorker
+        )
+        assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
 
@@ -1397,7 +1522,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
                 sent.extend(name for name, _ in iterator)
 
         trainer = self._build(
-            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer()
+            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer
         )
         trainer._sync_weight()
 
@@ -1417,11 +1542,16 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert len(sent) == len(set(sent))
 
     @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
-    def test_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
+    def test_vllm_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
-        trainer = self._build(fake_vllm, self._lora_config(modules_to_save=["lm_head"]), lora_config=None)
+        trainer = self._build(
+            fake_vllm,
+            self._lora_config(modules_to_save=["lm_head"]),
+            lora_config=None,
+            weight_transfer=WeightTransferClient,
+        )
         manifest = trainer.weight_transfer._weight_update_info
 
         assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
@@ -1436,7 +1566,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
                 merged_during_send.append(_any_adapter_merged(trainer.model))
                 raise RuntimeError("transfer blew up")
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
         with pytest.raises(RuntimeError, match="transfer blew up"):
             trainer._sync_weight()
 
@@ -1449,3 +1579,102 @@ def _any_adapter_merged(model) -> bool:
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+
+
+def _tensors_handed_to_producer(info, stream):
+    """Return the tensors `send_weights` passes to the packed NCCL producer.
+
+    The producer itself is replaced so the test does not open an NCCL group. `model_update_group` is set only so
+    `send_weights` does not return before touching the iterator.
+    """
+    # `send_weights` logs through accelerate, which raises until a state exists, even for a debug record.
+    PartialState()
+
+    class _Server:
+        server_url = "http://127.0.0.1:9"
+
+        def start_weight_update(self):
+            return None
+
+        def update_weights(self, update_info):
+            return None
+
+        def finish_weight_update(self):
+            return None
+
+    client = WeightTransferClient(_Server(), info)
+    client.model_update_group = object()
+    sent = []
+
+    def capture_iterator(*, iterator, trainer_args):
+        sent.extend(iterator)
+
+    def capture_packed(*, iterator, group, src, post_iter_func):
+        sent.extend((name, post_iter_func((name, tensor))) for name, tensor in iterator)
+
+    if weight_transfer_module._HAS_STATEFUL_TRAINER_ENGINE:
+        patcher = patch.object(weight_transfer_module, "packed_nccl_broadcast_producer", capture_packed)
+    else:
+        patcher = patch.object(
+            weight_transfer_module.NCCLWeightTransferEngine, "trainer_send_weights", capture_iterator
+        )
+    with patcher:
+        client.send_weights(iter(stream))
+    return sent
+
+
+@require_vllm  # WeightTransferClient's constructor requires vLLM
+class TestVLLMManifestWeightStream:
+    def test_send_weights_streams_in_the_manifest_dtype(self):
+        model = torch.nn.Sequential(
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+        ).to(torch_device)
+        original = [(name, param.detach().clone()) for name, param in _iter_vllm_named_params(model)]
+        info = {
+            "names": [name for name, _ in original],
+            "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in original],
+            "shapes": [list(tensor.shape) for _, tensor in original],
+        }
+        # Accelerate upcasts low-precision FSDP2 parameters to fp32 after the manifest is collected.
+        model.to(dtype=torch.float32)
+        streamed = [(name, param.detach()) for name, param in _iter_vllm_named_params(model)]
+
+        sent = _tensors_handed_to_producer(info, streamed)
+
+        assert [(name, tensor.dtype, list(tensor.shape)) for name, tensor in sent] == [
+            (name, torch.bfloat16, list(tensor.shape)) for name, tensor in original
+        ]
+        for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
+            assert torch.equal(sent_tensor, original_tensor)
+
+
+def _start_stop_watcher_and_exit(stop_event):
+    _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+    time.sleep(0.5)  # let the watcher start before the process exits
+
+
+class TestStopWatcher:
+    def test_stop_event_can_be_set_after_the_worker_exited(self):
+        # A worker that dies (e.g. on an exception) leaves its stop watcher behind, and the trainer's `stop()` then
+        # sets the stop event
+        ctx = mp.get_context("spawn")
+        stop_event = ctx.Event()
+        worker = ctx.Process(target=_start_stop_watcher_and_exit, args=(stop_event,))
+        worker.start()
+        worker.join(timeout=60)
+        # In a process rather than a thread, so a hanging `set()` can be killed and the test fails instead of hanging
+        setter = ctx.Process(target=stop_event.set)
+        setter.start()
+        setter.join(timeout=10)
+        hung = setter.is_alive()
+        setter.kill()
+        assert not hung
+
+    def test_watcher_exits_once_the_stop_event_is_set(self):
+        # `_child_main` sets the stop event and joins the watcher when `run()` returns or raises
+        stop_event = mp.get_context("spawn").Event()
+        watcher = _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+        stop_event.set()
+        watcher.join(timeout=5)
+        assert not watcher.is_alive()
