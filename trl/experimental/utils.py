@@ -856,7 +856,9 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
     return model
 
 
-def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
+def enable_gradient_checkpointing(
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
+) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
     # Enable gradient checkpointing on the base model for PEFT
     if is_peft_model(model):
@@ -865,8 +867,11 @@ def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     else:
         model.gradient_checkpointing_enable()
 
-    # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
-    if Version(transformers.__version__) < Version("5.0.0"):
+    # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558),
+    # but is dropping it for reentrant checkpointing, the only mode that needs it
+    if Version(transformers.__version__) < Version("5.0.0") or (gradient_checkpointing_kwargs or {}).get(
+        "use_reentrant"
+    ):
         model.enable_input_require_grads()
 
     return model
@@ -907,7 +912,7 @@ def prepare_peft_model(
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
         args.gradient_checkpointing = False
     elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model)
+        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 
     # Create PEFT model
     if peft_config is not None:

@@ -231,8 +231,12 @@ class ORPOTrainer(_BaseTrainer):
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
             # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer
-            # handles this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
-            elif args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            # handles this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558), but transformers is
+            # dropping it for reentrant checkpointing, the only mode that needs it
+            elif args.gradient_checkpointing and (
+                Version(transformers.__version__) < Version("5.0.0")
+                or (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+            ):
                 model.enable_input_require_grads()
 
             # get peft model with the given config

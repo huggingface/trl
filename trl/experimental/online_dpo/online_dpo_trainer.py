@@ -628,8 +628,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             model.gradient_checkpointing_enable()
 
-        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
-        if Version(transformers.__version__) < Version("5.0.0"):
+        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558),
+        # but is dropping it for reentrant checkpointing, the only mode that needs it
+        if Version(transformers.__version__) < Version("5.0.0") or (args.gradient_checkpointing_kwargs or {}).get(
+            "use_reentrant"
+        ):
             model.enable_input_require_grads()
         return model
 
