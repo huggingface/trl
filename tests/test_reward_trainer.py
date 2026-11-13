@@ -123,7 +123,7 @@ class TestRewardTrainer(TrlTestCase):
             # num_labels=2,  # Defaults to 2 num_labels for causal models
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         with pytest.raises(ValueError, match=r"reward models require `num_labels=1`"):
@@ -138,7 +138,7 @@ class TestRewardTrainer(TrlTestCase):
         ],
     )
     def test_train(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(model=model_id, args=training_args, train_dataset=dataset)
@@ -152,11 +152,15 @@ class TestRewardTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # The reward is read at the last token, so in the last layer only the experts that token is routed to
+            # get a gradient
+            if f"layers.{trainer.model.config.num_hidden_layers - 1}.mlp.experts" in n:
+                continue
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
             max_steps=1,  # running the training loop once is enough
@@ -187,10 +191,12 @@ class TestRewardTrainer(TrlTestCase):
     def test_evaluate_with_eval_dataset(self, eval_dataset_type):
         # `evaluate` accepts a raw (unprepared) dataset passed directly, not only a preprocessed `eval_dataset` set
         # at init. See https://github.com/huggingface/trl/issues/6115.
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        train_dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train"
+        )
         streaming = "iterable" in eval_dataset_type
         eval_split = load_dataset(
-            "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="test", streaming=streaming
+            "trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="test", streaming=streaming
         )
         if eval_dataset_type in ("dataset", "iterable_dataset"):
             eval_dataset = eval_split
@@ -213,7 +219,7 @@ class TestRewardTrainer(TrlTestCase):
             assert metrics["eval_data2_loss"] is not None
 
     def test_trust_remote_code(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
         with pytest.raises(ValueError, match="custom code"):
@@ -267,7 +273,7 @@ class TestRewardTrainer(TrlTestCase):
             dtype="float32",
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -284,7 +290,7 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_from_sequence_classification_model(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(
@@ -305,7 +311,7 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_model_dtype(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
@@ -342,7 +348,7 @@ class TestRewardTrainer(TrlTestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
 
@@ -370,7 +376,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -408,7 +414,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_train_peft_dora_and_quantization(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
@@ -458,7 +464,7 @@ class TestRewardTrainer(TrlTestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
 
@@ -488,7 +494,7 @@ class TestRewardTrainer(TrlTestCase):
     @require_peft
     def test_peft_init_is_seeded(self):
         # Two trainers with the same seed start from the same adapter weights
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
         adapters = []
         for global_seed in range(2):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
@@ -518,7 +524,7 @@ class TestRewardTrainer(TrlTestCase):
         lora_config = LoraConfig()
         model = get_peft_model(model, lora_config)
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RewardTrainer(model=model, args=training_args, train_dataset=dataset)
@@ -546,7 +552,7 @@ class TestRewardTrainer(TrlTestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
 
@@ -578,7 +584,7 @@ class TestRewardTrainer(TrlTestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
@@ -654,7 +660,7 @@ class TestRewardTrainer(TrlTestCase):
 
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train", streaming=True
+            "trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train", streaming=True
         )
 
         training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
@@ -849,7 +855,7 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_eval(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = RewardTrainer(
@@ -864,7 +870,7 @@ class TestRewardTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
 
     def test_train_with_multiple_eval_dataset(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
         trainer = RewardTrainer(
@@ -885,7 +891,10 @@ class TestRewardTrainer(TrlTestCase):
             train_dataset = None
         else:
             train_dataset = load_dataset(
-                "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train", streaming=streaming
+                "trl-internal-testing/zen",
+                "conversational_implicit_prompt_preference",
+                split="train",
+                streaming=streaming,
             )
             if train_dataset_type == "unsupported_dataset_dict":
                 # `DatasetDict` is representative of any unsupported type here; not exhaustive
@@ -927,14 +936,19 @@ class TestRewardTrainer(TrlTestCase):
         ],
     )
     def test_init_with_eval_dataset(self, eval_dataset_type):
-        train_dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        train_dataset = load_dataset(
+            "trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train"
+        )
 
         if eval_dataset_type == "none":
             eval_dataset = None
         else:
             streaming = "iterable" in eval_dataset_type
             eval_split = load_dataset(
-                "trl-internal-testing/zen", "standard_implicit_prompt_preference", split="test", streaming=streaming
+                "trl-internal-testing/zen",
+                "conversational_implicit_prompt_preference",
+                split="test",
+                streaming=streaming,
             )
             if eval_dataset_type in ("dataset", "iterable_dataset"):
                 eval_dataset = eval_split
@@ -963,7 +977,7 @@ class TestRewardTrainer(TrlTestCase):
             assert "chosen_ids" in next(iter(trainer.eval_dataset))
 
     def test_train_with_compute_metrics(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference")
 
         def dummy_compute_metrics(eval_pred):
             return {"my_metric": 0.123}
@@ -990,7 +1004,7 @@ class TestRewardTrainer(TrlTestCase):
     # `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
     def test_train_with_gradient_checkpointing(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
         trainer = RewardTrainer(
@@ -1012,7 +1026,7 @@ class TestRewardTrainer(TrlTestCase):
 
     @pytest.mark.parametrize("use_reentrant", [True, False])
     def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(
             output_dir=self.tmp_dir,
@@ -1039,7 +1053,7 @@ class TestRewardTrainer(TrlTestCase):
 
     @require_torch_accelerator
     def test_train_with_fp16(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, fp16=True, report_to="none")
         trainer = RewardTrainer(
@@ -1058,7 +1072,7 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_tag_added(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1070,7 +1084,7 @@ class TestRewardTrainer(TrlTestCase):
 
     @require_peft
     def test_tag_added_peft(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1082,11 +1096,11 @@ class TestRewardTrainer(TrlTestCase):
             assert tag in trainer.model.model_tags
 
     def test_train_with_margin(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         def add_margin(example):
             # dummy margin based on the length of the chosen summary
-            return {"margin": len(example["chosen"])}
+            return {"margin": len(example["chosen"][-1]["content"])}
 
         dataset = dataset.map(add_margin)
 
@@ -1109,7 +1123,7 @@ class TestRewardTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_center_rewards_coefficient(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, center_rewards_coefficient=0.01, report_to="none")
         trainer = RewardTrainer(
@@ -1132,7 +1146,7 @@ class TestRewardTrainer(TrlTestCase):
     def test_eos_token_id_synced_with_model_config(self):
         # The trainer sets the requested eos token on the tokenizer. The model config must follow: otherwise
         # `Trainer` realigns it at train time and reports it as a change the user did not make.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
         training_args = RewardConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
         trainer = RewardTrainer(
