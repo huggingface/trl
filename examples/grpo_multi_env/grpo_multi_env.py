@@ -135,7 +135,7 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=MultiEnv.wordle_url)
+            self._wordle_client = TextArenaEnv(base_url=MultiEnv.wordle_url).sync()
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
@@ -146,7 +146,7 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=MultiEnv.catch_url)
+            self._catch_client = OpenSpielEnv(base_url=MultiEnv.catch_url).sync()
             result = self._catch_client.reset()
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
