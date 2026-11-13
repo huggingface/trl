@@ -987,7 +987,7 @@ class DPOTrainer(_BaseTrainer):
             self.aux_loss_enabled
             and args.gradient_checkpointing
             and (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
-            and Version(transformers.__version__) >= Version("5.23.0.dev0")
+            and Version(transformers.__version__) >= Version("5.24.0")
         ):
             raise ValueError(
                 "The MoE auxiliary loss needs router logits, which transformers does not support with reentrant "

@@ -945,8 +945,8 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.aux_loss_enabled
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.23.0.dev0"),
-        reason="transformers rejects router logits under reentrant checkpointing from 5.23",
+        Version(transformers.__version__) < Version("5.24.0"),
+        reason="transformers rejects router logits under reentrant checkpointing from 5.24",
     )
     def test_aux_loss_fails_with_reentrant_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
