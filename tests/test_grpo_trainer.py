@@ -37,7 +37,7 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.generation.vllm_client import VLLMClient
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_vllm_available, is_vllm_bnb_plugin_available
 
 from .testing_utils import (
     TrlTestCase,
@@ -2509,6 +2509,8 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             peft_config=lora_config,
         )
+        # vLLM can't serve `modules_to_save`, so the adapter is merged and the full weights are synced
+        assert not trainer.vllm_generation.lora_sync
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -2523,6 +2525,196 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             else:
                 assert torch.equal(param, new_param), f"Parameter {n} has changed."
+
+    @require_bitsandbytes
+    @require_peft
+    @require_torch_accelerator
+    @pytest.mark.skipif(
+        not is_vllm_available(min_version="0.28.0") or is_vllm_bnb_plugin_available(),
+        reason="vLLM < 0.28.0 loads bitsandbytes models without the plugin",
+    )
+    def test_vllm_lora_sync_quantized_model_without_bnb_plugin_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16
+        )
+        with pytest.raises(ImportError, match="vllm-bnb-plugin"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                quantization_config=quantization_config,
+                peft_config=LoraConfig(),
+            )
+
+    @require_bitsandbytes
+    @require_peft
+    @require_vllm
+    def test_train_vllm_lora_sync_fp4_model_syncs_merged_weights(self):
+        # vLLM quantizes 4-bit bases as NF4, so an FP4 base can't be served as is
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=1,
+            report_to="none",
+            use_vllm=True,
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="fp4", bnb_4bit_compute_dtype=torch.bfloat16
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        assert not trainer.vllm_generation.lora_sync
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.parametrize(
+        "quant_type", [None, pytest.param("fp4", marks=[require_bitsandbytes, require_torch_accelerator])]
+    )
+    @require_peft
+    @require_vllm
+    def test_vllm_lora_sync_mismatched_server_quantization_raises(self, quant_type):
+        # A server started with `--quantization bitsandbytes` holds an NF4 base, which only an NF4 trainer base matches
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True, vllm_mode="server")
+        quantization_config = None
+        if quant_type is not None:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_quant_type=quant_type, bnb_4bit_compute_dtype=torch.bfloat16
+            )
+        server_info = {
+            "lora_config": {"max_lora_rank": 16},
+            "model_config": {"quantization": "bitsandbytes", "logprobs_mode": "processed_logprobs"},
+        }
+        with (
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "model"}]}),
+            patch.object(VLLMClient, "get_server_info", return_value=server_info),
+            pytest.raises(ValueError, match="NF4"),
+        ):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                quantization_config=quantization_config,
+                peft_config=LoraConfig(),
+            )
+
+    @require_peft
+    @require_vllm
+    def test_vllm_lora_sync_numbers_on_from_a_previous_run(self):
+        # The server still holds the last adapter of a previous run, so this run must not publish the same name again
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True, vllm_mode="server")
+        server_info = {
+            "lora_config": {"max_lora_rank": 16},
+            "model_config": {"quantization": None, "logprobs_mode": "processed_logprobs"},
+        }
+        models = {"data": [{"id": "model"}, {"id": "trl-policy-v3"}]}
+        with (
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value=models),
+            patch.object(VLLMClient, "get_server_info", return_value=server_info),
+        ):
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+        assert trainer.vllm_generation.lora_name == "trl-policy-v3"  # the first sync publishes v4 and unloads it
+
+    @require_peft
+    @require_vllm
+    def test_train_vllm_lora_sync(self):
+        """Test that only the LoRA adapter is synced to vLLM when it can be served as is."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=3,
+            report_to="none",
+            use_vllm=True,
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        assert trainer.vllm_generation.lora_sync
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora_" in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+        # Check that the adapter was saved for vLLM to load
+        sync_dir = os.path.join(self.tmp_dir, "_vllm_lora_sync")
+        assert os.listdir(sync_dir)
+        for adapter_dir in os.listdir(sync_dir):
+            assert os.path.isfile(os.path.join(sync_dir, adapter_dir, "adapter_model.safetensors"))
+
+    @require_peft
+    @require_vllm
+    def test_train_vllm_lora_sync_sleep_mode_with_eval(self):
+        # With adapter-only sync, sleep mode offloads the weights to CPU. Evaluation generates several batches in a
+        # step without syncing in between, so generate() has to bring the weights back itself.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=2,
+            eval_strategy="steps",
+            eval_steps=1,
+            report_to="none",
+            use_vllm=True,
+            vllm_enable_sleep_mode=True,
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        assert trainer.vllm_generation.lora_sync
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @pytest.mark.skipif(
         not is_vllm_available(min_version="0.28.0"),
