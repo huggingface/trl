@@ -286,45 +286,9 @@ class IncrementEnvironment:
         return self._counter
 
 
-class IncrementRewardEnvironment:
-    def reset(self, **kwargs):
-        self._counter = 0
-
-    def increment(self, step: int) -> int:
-        """
-        Increment the internal counter.
-
-        Args:
-            step: Value to add to the counter.
-
-        Returns:
-            The updated counter value.
-        """
-        self._counter += step
-        return self._counter
-
+class IncrementRewardEnvironment(IncrementEnvironment):
     def get_reward(self) -> float:
         return float(self._counter)
-
-
-class GuessRewardEnvironment:
-    def reset(self, **kwargs):
-        self._solved = False
-
-    def guess(self, word: str) -> str:
-        """
-        Submit a guess.
-
-        Args:
-            word: The guessed word.
-
-        Returns:
-            Feedback about the guess.
-        """
-        return "nope"
-
-    def get_reward(self) -> float:
-        return 1.0 if self._solved else 0.0
 
 
 class PropertyEnvironment:
@@ -370,22 +334,6 @@ class ScoredEnvironment:  # owns its reward
 
     def get_reward(self) -> float:
         return 1.0
-
-
-class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
-    def reset(self, **kwargs): ...
-
-    def play(self, x: int) -> int:
-        """
-        Play.
-
-        Args:
-            x: A value.
-
-        Returns:
-            The value.
-        """
-        return x
 
 
 class GuessTheWordEnvironment:
@@ -4128,17 +4076,17 @@ class TestGRPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
-            environment_factory=GuessRewardEnvironment,
+            environment_factory=IncrementRewardEnvironment,
         )
 
         # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
         # a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "GuessRewardEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "IncrementRewardEnvironment"]
         assert trainer.reward_weights.tolist() == [0.5, 1.0]
         assert len(trainer.reward_funcs) == 2
-        # `get_reward` is not exposed as a tool; `guess` is.
+        # `get_reward` is not exposed as a tool; `increment` is.
         tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "guess" in tool_names
+        assert "increment" in tool_names
         assert "get_reward" not in tool_names
 
     @pytest.mark.xfail(
@@ -4174,7 +4122,11 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
-            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
+            environment_factory={
+                "scored": ScoredEnvironment,
+                "scored2": ScoredEnvironment,
+                "plain": IncrementEnvironment,
+            },
         )
 
         # No tool call. Distinct-length completions within the group give reward variance, so advantages are non-zero.
@@ -4186,7 +4138,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
         # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
-        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising.
+        # `ScoredEnvironment`: an `IncrementEnvironment` rollout is left out instead of raising.
         logged = trainer.state.log_history[-1]
         reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
         assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
