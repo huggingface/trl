@@ -417,11 +417,11 @@ class RLOOTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21.3 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.4")
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and any(
                     isinstance(module, torch.nn.Linear)
@@ -437,7 +437,7 @@ class RLOOTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
+                    "With transformers v5 and peft>=0.19.0,<0.21.4, LoRA `target_modules` skip the dense and shared "
                     "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
                     "train them too. See https://github.com/huggingface/trl/issues/7767."
                 )
