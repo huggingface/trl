@@ -537,6 +537,7 @@ class SDPOTrainer(_BaseTrainer):
                 accelerator=self.accelerator,
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
+                lora_sync_output_dir=args.output_dir,
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
@@ -1378,6 +1379,9 @@ class SDPOTrainer(_BaseTrainer):
         sequences, prompt_lengths, _ = build_teacher_request_inputs(
             teacher_input_ids, teacher_attention_mask, prompt_attention_mask
         )
+        # With adapter-only LoRA sync, the trained weights are in the last adapter published, selected by name
+        if self.vllm_generation.lora_sync:
+            self.teacher_client.model = self.vllm_generation.lora_name
         result = self.teacher_client.get_sequence_logprobs(
             sequences=sequences,
             prompt_lengths=prompt_lengths,
