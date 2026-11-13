@@ -3873,7 +3873,10 @@ class TestGRPOTrainer(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
+        prompts = []
+
         def fake_generate(input_ids, **kwargs):
+            prompts.append(trainer.processing_class.decode(input_ids[0]))
             if input_ids.shape[0] == 3:  # first call
                 # fmt: off
                 completion_ids = torch.tensor(
@@ -3909,6 +3912,10 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset`
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4031,7 +4038,10 @@ class TestGRPOTrainer(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
+        prompts = []
+
         def fake_generate(input_ids, **kwargs):
+            prompts.append(trainer.processing_class.decode(input_ids[0]))
             if input_ids.shape[0] == 3:  # first call
                 # fmt: off
                 completion_ids = torch.tensor(
@@ -4068,6 +4078,10 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["reward"] == pytest.approx(1 / 3)
         # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset` or `get_reward`
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4214,6 +4228,8 @@ class TestGRPOTrainer(TrlTestCase):
         reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
         assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
         assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+        # 6 of the 9 rollouts are bound to `ScoredEnvironment`, so the env reward adds 1.0 to two thirds of them
+        assert logged["reward"] == pytest.approx(logged["rewards/str_length_reward/mean"] + 2 / 3)
 
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
