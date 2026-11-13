@@ -265,3 +265,27 @@ training_args = RLOOConfig(
 
 > [!WARNING]
 > To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](reducing_memory_usage#vllm-sleep-mode).
+
+### Syncing only the LoRA adapter
+
+When you train a LoRA adapter, TRL loads the adapter into vLLM after each optimizer step, instead of merging it into the model and pushing the full weights. Only the adapter is written, a few megabytes, and the base weights in vLLM stay as they are.
+
+In colocate mode, this is automatic: the trainer enables LoRA on the engine it creates. In server mode, the server must be launched with LoRA enabled, and allowed to load adapters at runtime:
+
+```sh
+VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen2.5-7B \
+    --enable-lora --max-lora-rank 16 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
+```
+
+`--max-lora-rank` must be at least the rank of the adapter, and vLLM only accepts one of `1`, `8`, `16`, `32`, `64`, `128`, `256`, `320` and `512`. With `--data-parallel-size` above 1, also pass `--api-server-count 1`, since vLLM can only load adapters at runtime with a single API server.
+
+The trainer saves each adapter under `<output_dir>/_vllm_lora_sync`, which the server must be able to read, as must every node in colocate mode. A server launched without `--enable-lora` still works: the trainer warns and syncs the merged weights instead.
+
+Only a single LoRA adapter can be served as is, without `modules_to_save`, DoRA, bias, `target_parameters`, a LoRA on `lm_head` or `embed_tokens`, or a rank above 512. Any other PEFT configuration is merged and synced in full, as before, with a warning.
+
+With [sleep mode](reducing_memory_usage#vllm-sleep-mode), the base weights are offloaded to CPU memory rather than discarded, since they are never synced again, so every process holds a CPU copy of its share of them.
+
+This also covers QLoRA, where the adapter is never merged into the quantized base weights. vLLM then quantizes its copy of the base model with bitsandbytes as well, which from vLLM 0.28.0 requires its plugin, `pip install vllm-bnb-plugin`. vLLM always quantizes it as NF4, so an FP4 base is merged and synced in full instead. In server mode, pass `--quantization bitsandbytes` to `vllm serve`: TRL checks that it matches the trainer's base, and syncs the merged weights to a server holding an unquantized base.
