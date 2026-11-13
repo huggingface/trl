@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = PhimoeConfig(
     vocab_size=32064,
-    hidden_size=8,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
@@ -48,11 +48,11 @@ config = PhimoeConfig(
     rope_theta=10000.0,
     original_max_position_embeddings=4096,
     sliding_window=131072,
-    # One value per frequency band: length is `head_dim // 2`, values are the reference's first band.
+    # One value per frequency band: length is `head_dim // 2`, values are the reference's first bands.
     rope_scaling={
         "type": "longrope",
-        "short_factor": [1.0],
-        "long_factor": [1.0199999809265137],
+        "short_factor": [1.0, 1.0399999618530273, 1.0399999618530273, 1.0399999618530273],
+        "long_factor": [1.0199999809265137, 1.0299999713897705, 1.0399999618530273, 1.0499999523162842],
         "short_mscale": 1.243163121016122,
         "long_mscale": 1.243163121016122,
         "original_max_position_embeddings": 4096,

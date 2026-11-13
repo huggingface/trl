@@ -20,8 +20,8 @@ from collections import Counter
 import torch
 from accelerate.logging import get_logger
 
-from ...import_utils import is_vllm_available
-from .vllm_client import VLLMClient
+from ..import_utils import is_vllm_available
+from .async_vllm_client import AsyncVLLMClient
 
 
 if is_vllm_available():
@@ -49,7 +49,7 @@ class WeightTransferClient:
     and the abandoned thread dies with the process.
 
     Args:
-        vllm_client ([`VLLMClient`]):
+        vllm_client ([`AsyncVLLMClient`]):
             Client for the vLLM server that receives the weights.
         weight_update_info (`dict`):
             Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
@@ -61,7 +61,7 @@ class WeightTransferClient:
 
     def __init__(
         self,
-        vllm_client: VLLMClient,
+        vllm_client: AsyncVLLMClient,
         weight_update_info: dict,
         compute_dtype: str | None = None,
     ):
@@ -78,7 +78,6 @@ class WeightTransferClient:
         self.vllm.wait_for_server_ready()
         # Trainer and server precisions should agree: the precision gap between the two biases the importance ratio
         # https://huggingface.co/papers/2510.26788
-        # https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch
         train_dtype = self.compute_dtype or Counter(self._weight_update_info["dtype_names"]).most_common(1)[0][0]
         vllm_dtype = self.vllm.get_dtype().removeprefix("torch.")
         if vllm_dtype != train_dtype:
