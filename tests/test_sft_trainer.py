@@ -782,12 +782,15 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    @pytest.mark.skipif(
+    # peft main has the #7767 fix, but no release has it yet: strict, so a release with the fix fails loudly
+    @pytest.mark.xfail(
         Version(transformers.__version__) >= Version("5.0.0")
         and is_peft_available()
-        and Version(peft.__version__) < Version("0.21.4.dev0"),
-        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.21.4 the dense and shared "
+        and Version(peft.__version__) < Version("0.22.0")
+        and not Version(peft.__version__).is_devrelease,
+        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.22 the dense and shared "
         "expert layers (#7767)",
+        strict=True,
     )
     def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
         # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
@@ -860,8 +863,8 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.0.0")
         or not is_peft_available()
-        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.21.4.dev0"),
-        reason="Only transformers v5 with peft 0.19 to 0.21.3 skips the dense and shared expert layers (#7767)",
+        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0"),
+        reason="Only transformers v5 with peft 0.19 to 0.21 skips the dense and shared expert layers (#7767)",
     )
     # peft 0.21.0 to 0.21.3 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
     @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
