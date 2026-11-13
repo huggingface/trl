@@ -818,6 +818,10 @@ class KTOTrainer(_BaseTrainer):
                     "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
         # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
