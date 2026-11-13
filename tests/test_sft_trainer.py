@@ -60,6 +60,7 @@ if is_peft_available():
 _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
     reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
     strict=True,
+    run=Version(torch.__version__) >= Version("2.13.0"),  # torch<2.13 leaks checkpoint hooks into later tests (#8302)
 )
 
 
