@@ -17,6 +17,8 @@
 import logging
 import math
 import os
+import re
+import shutil
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -26,6 +28,7 @@ from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.tensor import DTensor
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
     is_peft_available,
@@ -37,7 +40,7 @@ from transformers.utils import (
 
 from ..distributed import DistributedBackend
 from ..extras.profiling import ProfilingContext
-from ..import_utils import is_vllm_available
+from ..import_utils import is_vllm_available, is_vllm_bnb_plugin_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
@@ -49,6 +52,7 @@ if is_peft_available():
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.lora.request import LoRARequest
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -139,6 +143,153 @@ if TYPE_CHECKING:
     from peft import PeftModel
 
 
+# Ranks vLLM builds stacked LoRA buffers for. Any other value crashes engine construction.
+VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
+
+
+def round_lora_rank(adapter_rank: int) -> int:
+    """
+    Round a LoRA rank up to the smallest `max_lora_rank` vLLM accepts.
+
+    `max_lora_rank` is a capacity bound rather than the served rank, so an `r=4` adapter is served correctly under `8`.
+
+    Args:
+        adapter_rank (`int`):
+            Rank of the adapter to serve.
+
+    Returns:
+        `int`:
+            Smallest value in `VLLM_LORA_RANKS` greater than or equal to `adapter_rank`.
+
+    Examples:
+
+    ```python
+    >>> round_lora_rank(4)
+    8
+    ```
+    """
+    for rank in VLLM_LORA_RANKS:
+        if rank >= adapter_rank:
+            return rank
+    raise ValueError(
+        f"LoRA rank {adapter_rank} is larger than the largest rank vLLM can serve ({VLLM_LORA_RANKS[-1]}). Lower `r` "
+        f"(and `rank_pattern`) to sync the adapter to vLLM, or sync merged weights instead."
+    )
+
+
+def validate_lora_for_vllm_sync(model: "PeftModel") -> "LoraConfig":
+    """
+    Return the active adapter's config, checking it can be served as a plain vLLM LoRA adapter.
+
+    vLLM's LoRA manager only knows about `lora_A` / `lora_B` deltas on a fixed set of linear layers. Anything else a
+    PEFT config can express — fully-trained modules, DoRA magnitudes, trained biases, fused-MoE parameter LoRA — has no
+    home in the adapter checkpoint vLLM loads, and is silently ignored (or worse, misread) at serving time. Every such
+    config is rejected here so the caller can fall back to syncing merged weights, which handles all of them.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model whose active adapter is checked.
+
+    Returns:
+        [`~peft.LoraConfig`]:
+            Config of the single active adapter.
+    """
+    if len(model.active_adapters) != 1:
+        raise ValueError(
+            f"Adapter-only vLLM sync serves a single adapter, but {len(model.active_adapters)} are active "
+            f"({model.active_adapters}). Activate one adapter, or sync merged weights instead."
+        )
+    peft_config = model.peft_config[model.active_adapters[0]]
+    if not isinstance(peft_config, LoraConfig):
+        raise ValueError(
+            f"Adapter-only vLLM sync supports LoRA adapters only, got `{type(peft_config).__name__}`. Sync merged "
+            f"weights instead."
+        )
+    if peft_config.modules_to_save:
+        raise ValueError(
+            f"`modules_to_save={peft_config.modules_to_save}` cannot ride in a LoRA adapter: those modules are "
+            f"fully trained, not a low-rank delta, so vLLM would keep serving the base checkpoint's copy. Sync "
+            f"merged weights instead."
+        )
+    if peft_config.use_dora:
+        raise ValueError(
+            "DoRA adapters are not servable by vLLM: the magnitude vector has no slot in the adapter format. Sync "
+            "merged weights instead."
+        )
+    if peft_config.bias != "none":
+        raise ValueError(
+            f"`bias='{peft_config.bias}'` trains bias terms, which are not part of a LoRA adapter and would be "
+            f"dropped on the way to vLLM. Use `bias='none'`, or sync merged weights instead."
+        )
+    if peft_config.target_parameters:
+        raise ValueError(
+            f"`target_parameters={peft_config.target_parameters}` (fused-MoE parameter LoRA) needs the adapter to be "
+            f"declared with `is_3d_lora_weight=True` against a server started with "
+            f"`--enable-mixed-moe-lora-format`. vLLM does not inspect the checkpoint, so a wrong declaration loads "
+            f"the weights into the wrong stacked buffers and silently produces garbage. Sync merged weights instead."
+        )
+    target_modules = peft_config.target_modules or []
+    if isinstance(target_modules, str):  # a regex matching module names, rather than a collection of them
+        target_modules = [target_modules]
+    if any("lm_head" in module or "embed_tokens" in module for module in target_modules):
+        raise ValueError(
+            f"`target_modules={peft_config.target_modules}` targets the head or the embeddings. vLLM restricts LoRA "
+            f"on those layers and drops the head delta from `prompt_logprobs` entirely "
+            f"(https://github.com/vllm-project/vllm/issues/51594), so the trainer and the server would disagree on "
+            f"every logprob. Sync merged weights instead."
+        )
+    return peft_config
+
+
+def save_lora_adapter(model: "PeftModel", accelerator: "Accelerator", adapter_name: str, dest_dir: str) -> None:
+    """
+    Save one PEFT adapter to `dest_dir`, gathering sharded parameters as needed.
+
+    This is a collective: every process must call it, not only the main one, because materializing a sharded parameter
+    all-gathers across ranks.
+
+    `dest_dir` is named after the adapter and holds `adapter_config.json` at its root, the layout vLLM's filesystem
+    LoRA resolver expects when it serves `<cache_dir>/<adapter_name>`. It is published with an atomic rename, so a
+    server reading it over a shared filesystem never observes a half-flushed adapter.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model holding the adapter.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator whose device sharded parameters are gathered on.
+        adapter_name (`str`):
+            Name of the adapter to save.
+        dest_dir (`str`):
+            Directory the adapter is published to. Replaced if it already exists.
+    """
+    state_dict = {
+        name: param for name, param in model.state_dict().items() if "lora_" in name and f".{adapter_name}." in name
+    }
+    materialized = {}
+    for name, param in state_dict.items():
+        # With `fsdp_offload_params`, the local shard lives on CPU; the all-gather needs it on device.
+        if param.is_cpu:
+            param = param.to(accelerator.device)
+        if isinstance(param, DTensor):  # FSDP2
+            param = param.full_tensor()
+        materialized[name] = param.detach().cpu()
+
+    if not accelerator.is_main_process:
+        return
+    # Staged under a dot-prefixed name: `dest_dir`'s parent is an adapter namespace, so a plain `<name>.tmp` sibling
+    # would be a half-written adapter sitting in it, and a crash mid-save would leak one there permanently.
+    tmp_dir = os.path.join(os.path.dirname(dest_dir), f".{os.path.basename(dest_dir)}.tmp")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    model.save_pretrained(tmp_dir, selected_adapters=[adapter_name], state_dict=materialized, safe_serialization=True)
+    # PEFT nests every adapter but `"default"` in a subdirectory, while vLLM expects `adapter_config.json` at the root
+    # of the path it is handed.
+    saved_dir = tmp_dir if adapter_name == "default" else os.path.join(tmp_dir, adapter_name)
+    shutil.rmtree(dest_dir, ignore_errors=True)
+    os.rename(saved_dir, dest_dir)  # atomic within one filesystem
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
@@ -169,6 +320,9 @@ class VLLMGeneration:
 
         structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
+        lora_sync_output_dir (`str`, *optional*, defaults to `"."`):
+            Directory under which the LoRA adapter is saved for vLLM to load, when only the adapter is synced. The vLLM
+            server, or every node in `"colocate"` mode, must be able to read it.
 
         > Parameters for "server" vLLM mode:
 
@@ -260,6 +414,7 @@ class VLLMGeneration:
         # vLLM configuration
         mode: str = "colocate",
         structured_outputs_regex: str | None = None,
+        lora_sync_output_dir: str = ".",
         # Server mode configuration
         server_base_url: str | None = None,
         server_host: str = "0.0.0.0",
@@ -293,6 +448,7 @@ class VLLMGeneration:
         # vLLM configuration
         self.mode = mode
         self.structured_outputs_regex = structured_outputs_regex
+        self.lora_sync_output_dir = lora_sync_output_dir
 
         # Server mode configuration
         self.server_base_url = server_base_url
@@ -340,6 +496,15 @@ class VLLMGeneration:
         # it requires gathering the parameters, and constant afterwards.
         self._weight_metadata = None
 
+        # Whether only the LoRA adapter is synced, instead of the merged weights. Decided in `_init_vllm`.
+        self.lora_sync = False
+        # Each sync publishes the adapter under a new name, `trl-policy-v{N}`. `lora_name` is the one last published,
+        # which server requests select as their model.
+        self.lora_name = None
+        self._lora_version = 0
+        # The adapter colocated generation runs with, set by `sync_weights`
+        self._lora_request = None
+
         if is_peft_model(model):
             # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
             # LoRA biases don't fit
@@ -374,7 +539,30 @@ class VLLMGeneration:
                 "`pip install trl[vllm]` to use it."
             )
 
+        # vLLM can serve a plain LoRA adapter as is, so syncing the adapter is enough: no need to merge it and push the
+        # full weights. `unservable` says why the adapter can't be, `None` if it can.
+        unservable = None
+        if is_peft_model(model):
+            try:
+                peft_config = validate_lora_for_vllm_sync(model)
+                # `rank_pattern` can lift individual modules above the base `r`.
+                adapter_rank = max([peft_config.r, *peft_config.rank_pattern.values()])
+                max_lora_rank = round_lora_rank(adapter_rank)
+            except ValueError as error:
+                unservable = str(error)
+
+        # Adapter sync never replaces vLLM's copy of the base weights, so a 4-bit base must be quantized in vLLM as in
+        # the trainer, or the two disagree from the first step. vLLM quantizes it as NF4, whatever the trainer's 4-bit
+        # type.
+        quant_types = set()
+        if is_bitsandbytes_available():
+            quant_types = {
+                module.weight.quant_type for module in model.modules() if isinstance(module, bnb.nn.Linear4bit)
+            }
+
         if self.mode == "server":
+            error = None
+            lora_version = 0
             if accelerator.is_main_process:
                 if self.server_base_url is not None:
                     base_url = self.server_base_url
@@ -383,6 +571,65 @@ class VLLMGeneration:
                 self.vllm_client = VLLMClient(
                     base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
                 )
+                server_info = self.vllm_client.get_server_info()
+                # `lora_config` is `None` unless the server was started with `--enable-lora`
+                server_lora_config = server_info["lora_config"]
+                server_quantization = server_info["model_config"]["quantization"]
+                if server_lora_config is None:
+                    lora_sync = False
+                    if is_peft_model(model):
+                        logger.warning(
+                            "Training a PEFT model against a vLLM server started without `--enable-lora`: every "
+                            "weight sync has to merge the adapter into the base model and push the full weights. "
+                            "Restart the server with `--enable-lora --max-lora-rank <r>` and "
+                            "`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment to push only the adapter instead."
+                        )
+                elif not is_peft_model(model):
+                    lora_sync = False
+                elif unservable is not None:
+                    lora_sync = False
+                    logger.warning(f"Falling back to merged-weight vLLM sync. {unservable}")
+                elif server_lora_config["max_lora_rank"] < adapter_rank:
+                    lora_sync = False
+                    error = (
+                        f"The adapter has rank {adapter_rank}, but the vLLM server was started with `--max-lora-rank "
+                        f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank {max_lora_rank}`."
+                    )
+                # Merged weights can't be pushed into a server holding a 4-bit base either, so these can't sync at all
+                elif server_quantization == "bitsandbytes" and quant_types != {"nf4"}:
+                    lora_sync = False
+                    error = (
+                        "The vLLM server quantizes its base model as NF4 (`--quantization bitsandbytes`), but the "
+                        f"trainer's base is {', '.join(sorted(quant_types)) or 'not quantized'}, so the two would "
+                        "disagree on every logprob. Quantize the trainer's base as NF4, or restart the server without "
+                        "`--quantization`."
+                    )
+                elif server_quantization is None and quant_types:
+                    lora_sync = False
+                    logger.warning(
+                        "Falling back to merged-weight vLLM sync. The trainer's base is quantized in 4-bit but the vLLM "
+                        "server's isn't, so the two would disagree on every logprob. Restart the server with "
+                        "`--quantization bitsandbytes` and an NF4 base to sync only the adapter."
+                    )
+                else:
+                    lora_sync = True
+                    # A previous run against this server may have left its last adapter loaded, and loading another
+                    # one under the same name fails. Numbering on from it avoids that, and the first sync unloads it.
+                    served = self.vllm_client._get(f"{self.vllm_client.base_url}/v1/models")["data"]
+                    versions = [re.fullmatch(r"trl-policy-v(\d+)", model["id"]) for model in served]
+                    lora_version = max((int(match[1]) for match in versions if match), default=0)
+            else:
+                lora_sync = None
+            # Every process takes part in syncing the weights, so they must all agree on how, and fail together
+            obj_list = [lora_sync, error, lora_version]
+            broadcast_object_list(obj_list, from_process=0)
+            self.lora_sync, error, lora_version = obj_list
+            if error is not None:
+                raise ValueError(error)
+            if lora_version:
+                self._lora_version = lora_version
+                self.lora_name = f"trl-policy-v{lora_version}"
+            if accelerator.is_main_process and not self.lora_sync:
                 self.vllm_client.init_communicator(device=accelerator.device)
 
         elif self.mode == "colocate":
@@ -416,6 +663,27 @@ class VLLMGeneration:
                     if isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
+            # The trainer owns the engine, so it enables LoRA on it whenever the adapter can be served as is
+            self.lora_sync = is_peft_model(model) and unservable is None
+            if is_peft_model(model) and unservable is not None:
+                logger.warning(f"Falling back to merged-weight vLLM sync. {unservable}")
+
+            quantization = None
+            if self.lora_sync and quant_types and quant_types != {"nf4"}:
+                self.lora_sync = False
+                logger.warning(
+                    f"Falling back to merged-weight vLLM sync. vLLM quantizes 4-bit bases as NF4, but this model is "
+                    f"quantized as {', '.join(sorted(quant_types))}, so the two would disagree on every logprob."
+                )
+            elif self.lora_sync and quant_types:
+                quantization = "bitsandbytes"
+                # Without the plugin, vLLM fails with "Unknown quantization method: bitsandbytes"
+                if is_vllm_available("0.28.0") and not is_vllm_bnb_plugin_available():
+                    raise ImportError(
+                        "vLLM 0.28.0 moved bitsandbytes support to a plugin, which syncing the LoRA adapter of a "
+                        "quantized model requires. Install it with `pip install vllm-bnb-plugin`."
+                    )
+
             # Build LLM initialization kwargs
             self.llm = LLM(
                 model=model.name_or_path,
@@ -432,13 +700,18 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
+                quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
                 # Not passed otherwise: vLLM < 0.28 doesn't accept it
                 **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
+                **({"enable_lora": True, "max_lora_rank": max_lora_rank} if self.lora_sync else {}),
             )
+            # Sleep level 2 discards the weights, which are pushed back at every sync. With adapter-only sync, the base
+            # weights are never pushed, so level 1 offloads them to CPU instead, and waking up restores them.
+            self._sleep_level = 1 if self.lora_sync else 2
             if self.enable_sleep_mode:
-                self.llm.sleep(level=2)
-            # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
+                self.llm.sleep(level=self._sleep_level)
+            # Track whether the weights are off the device, so that generate() knows it must bring them back
             self._llm_weights_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
@@ -580,6 +853,42 @@ class VLLMGeneration:
 
         accelerator = self.accelerator
 
+        if self.lora_sync:
+            model = self.model
+            previous_name = self.lora_name
+            self._lora_version += 1
+            self.lora_name = f"trl-policy-v{self._lora_version}"
+            # The leading underscore keeps it out of what `Trainer.push_to_hub` uploads from the output directory. Only
+            # the main process writes it, so it must be on a filesystem every reader can see, as for checkpoints.
+            lora_dir = os.path.join(self.lora_sync_output_dir, "_vllm_lora_sync")
+            adapter_dir = os.path.join(lora_dir, self.lora_name)
+            # Every process calls this, not just the main one: gathering a sharded parameter is a collective
+            with self._dist.gather_params([param for param in model.parameters() if param.requires_grad]):
+                save_lora_adapter(model, accelerator, model.active_adapters[0], adapter_dir)
+            accelerator.wait_for_everyone()
+
+            # Each sync publishes a new name instead of overwriting the previous adapter in place, because
+            # `load_inplace=True` makes vLLM < 0.33 re-read the adapter from disk at every step
+            # (https://github.com/vllm-project/vllm/pull/41482). A new name is also a fresh prefix cache namespace, so
+            # the cache needs no reset.
+            if self.mode == "server":
+                if accelerator.is_main_process:
+                    self.vllm_client.load_lora_adapter(self.lora_name, adapter_dir)
+                    # The server applies the adapter to the requests that name it as their model
+                    self.vllm_client.model = self.lora_name
+                    if previous_name is not None:
+                        self.vllm_client.unload_lora_adapter(previous_name)
+            elif self.mode == "colocate":
+                self._lora_request = LoRARequest(self.lora_name, self._lora_version, adapter_dir)
+                self.llm.llm_engine.add_lora(self._lora_request)
+                if self._lora_version > 1:
+                    self.llm.llm_engine.remove_lora(self._lora_version - 1)
+            accelerator.wait_for_everyone()
+            # vLLM resolves the adapter files lazily, so they outlive the unload by one sync
+            if accelerator.is_main_process and self._lora_version > 2:
+                shutil.rmtree(os.path.join(lora_dir, f"trl-policy-v{self._lora_version - 2}"), ignore_errors=True)
+            return
+
         if self.mode == "server":
             # The server must know every tensor it is about to receive before the first one is broadcast, so the
             # parameters are walked once to collect their metadata, and streamed on subsequent passes.
@@ -672,11 +981,20 @@ class VLLMGeneration:
         repetition_penalty = self.repetition_penalty
         max_completion_length = self.max_completion_length
 
-        # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the training
-        # model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint from disk rather
-        # than the current training weights. See https://github.com/vllm-project/vllm/issues/29341
+        # Bring back the weights a previous generate() put to sleep. sync_weights() does it as well, but the trainer
+        # only calls it when the training step advanced, so a second generate() within a step has to do it here.
         if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
-            self.sync_weights()
+            if self._sleep_level == 2:
+                # Sleep level 2 discards the weights, so waking up isn't enough: they must be re-pushed from the
+                # training model. vLLM's `reload_weights` can't be used here, as it reloads the initial checkpoint
+                # from disk rather than the current training weights.
+                # See https://github.com/vllm-project/vllm/issues/29341
+                self.sync_weights()
+            else:
+                # Sleep level 1 offloads the weights to CPU, and the adapter is still loaded, so waking up is enough.
+                # Only done when asleep: waking up maps the memory again even if it is already mapped.
+                self.llm.wake_up(tags=["weights"])
+                self._llm_weights_sleeping = False
 
         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
         if self.mode == "server":
@@ -818,7 +1136,9 @@ class VLLMGeneration:
                 torch.distributed.barrier(device_ids=[accelerator.local_process_index])
 
             with profiler:
-                all_outputs = self.llm.generate(vllm_prompts, sampling_params=sampling_params, use_tqdm=False)
+                all_outputs = self.llm.generate(
+                    vllm_prompts, sampling_params=sampling_params, lora_request=self._lora_request, use_tqdm=False
+                )
 
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
@@ -847,7 +1167,7 @@ class VLLMGeneration:
                 sampling_mask = all_sampling_mask
 
             if self.enable_sleep_mode:
-                self.llm.sleep(level=2)
+                self.llm.sleep(level=self._sleep_level)
                 self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids, sampling_mask
