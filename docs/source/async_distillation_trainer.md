@@ -1,78 +1,43 @@
 # Async Distillation
 
 > [!IMPORTANT]
-> This trainer requires `vllm>=0.22.0` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm`, `transformers>=5.2.0` and `kernels` (training loads FlashAttention from the Hub through it). For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
-> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
+> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first, then force-install transformers, then add `kernels` through TRL's extra, which pins the version transformers accepts:
 >
 > ```bash
-> pip install 'vllm>=0.22.0'
+> pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
+> pip install 'trl[kernels]'
 > ```
 
 ## Overview
 
-[`AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`],
-architected like [`AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy
-completions and scores them against a teacher, while training proceeds concurrently instead of alternating between
-generation and gradient updates. Unlike the synchronous trainer, the teacher is never loaded locally — only a vLLM
-server URL is needed, so the teacher can run on entirely separate hardware from the student and trainer, or even be
-a much larger model than would otherwise fit alongside the student.
+[`experimental.async_distillation.AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected like [`AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy completions and scores them against a teacher, while training proceeds concurrently instead of alternating between generation and gradient updates. Unlike the synchronous trainer, the teacher is never loaded locally — only a vLLM server URL is needed, so the teacher can run on entirely separate hardware from the student and trainer, or even be a much larger model than would otherwise fit alongside the student.
 
-`compute_loss` minimizes a generalized Jensen-Shannon Divergence between the student's and teacher's per-position
-token distributions (`beta=0.0` is forward KL, `beta=1.0` is reverse KL, values in between interpolate), the same
-objective [`~trl.experimental.distillation.DistillationTrainer`] and
-[`~trl.experimental.server_distillation.ServerDistillationTrainer`] use. Training is always on-policy: the student
-generates every completion it trains on.
+`compute_loss` minimizes a generalized Jensen-Shannon Divergence between the student's and teacher's per-position token distributions (`beta=0.0` is forward KL, `beta=1.0` is reverse KL, values in between interpolate), the same objective [`~trl.experimental.distillation.DistillationTrainer`] and [`~trl.experimental.server_distillation.ServerDistillationTrainer`] use. Training is always on-policy: the student generates every completion it trains on.
 
 ### Multi-teacher on-policy distillation (MOPD)
 
-MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective
-is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in
-[MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then
-independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single
-student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must
-already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you
-point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's
-default `beta=0.0` (forward KL).
+MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training]( https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's default `beta=0.0` (forward KL).
 
-`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher
-(plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which
-teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a
-code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never
-averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently
-falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable two-teacher
-example.
+`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_mopd/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_mopd/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
 
 > [!WARNING]
-> Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the
-> candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from
-> the same model family as the student (as in the MOPD example, where a Qwen2.5 student is fused from Qwen2.5 and
-> Qwen2.5-Coder experts) satisfy this; a teacher with a different vocabulary trains the student against the wrong
-> tokens, silently unless its vocabulary is larger than the student's.
+> Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from the same model family as the student (as in the MOPD example, where a SmolLM3 student is fused from SmolLM3 experts trained from the same checkpoint) satisfy this; a teacher with a different vocabulary trains the student against the wrong tokens, silently unless its vocabulary is larger than the student's.
+
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
 
 ## How it differs from [`~trl.experimental.distillation.DistillationTrainer`]
 
-In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation,
-teacher forward pass, and the gradient update all happen sequentially in the same process.
-[`AsyncDistillationTrainer`] separates these concerns the same way [`AsyncGRPOTrainer`] separates GRPO's rollout
-from its update:
+In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation, teacher forward pass, and the gradient update all happen sequentially in the same process. [`experimental.async_distillation.AsyncDistillationTrainer`] separates these concerns the same way [`AsyncGRPOTrainer`] separates GRPO's rollout from its update:
 
-- **Rollout worker** (background process) — generates completions from the student's vLLM server, sends the full
-  sequence back to the resolved teacher's `/v1/completions` with `prompt_logprobs` for teacher-forced scoring (no new
-  tokens generated by the teacher), and pushes ready-to-train samples into a queue.
-- **Training loop** (main process) — pulls samples from the queue, computes the generalized-JSD loss, and updates
-  the student's weights.
+- **Rollout worker** (background process) — generates completions from the student's vLLM server, sends the full sequence back to the resolved teacher's `/v1/completions` with `prompt_logprobs` for teacher-forced scoring (no new tokens generated by the teacher), and pushes ready-to-train samples into a queue.
+- **Training loop** (main process) — pulls samples from the queue, computes the generalized-JSD loss, and updates the student's weights.
 
-Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its
-distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`AsyncDistillationConfig`]'s
-`beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher
-logprob for at each `beta` regime.
+Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`experimental.async_distillation.AsyncDistillationConfig`]'s `beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher logprob for at each `beta` regime.
 
-After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via
-NCCL. As with [`AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale
-policy; `max_staleness` controls how many weight updates a sample can lag behind before being discarded.
+After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via NCCL. As with [`AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale policy; `max_staleness` controls how many weight updates a sample can lag behind before being dropped.
 
 ## Quick start
 
@@ -81,20 +46,17 @@ policy; `max_staleness` controls how many weight updates a sample can lag behind
 from datasets import load_dataset
 from trl.experimental.async_distillation import AsyncDistillationTrainer
 
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-trainer = AsyncDistillationTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    train_dataset=dataset,
-)
-trainer.train()
+    trainer = AsyncDistillationTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        train_dataset=dataset,
+    )
+    trainer.train()
 ```
 
-The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm
-serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode
-processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k`
-can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer
-enabled so the trainer can push updated weights into it:
+The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k` can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer enabled so the trainer can push updated weights into it. Scoring sends the student's whole sequence and asks the teacher for one more token, so the teacher's `--max-model-len` (or its default) must be larger than the student's:
 
 ```bash
 # Terminal 1: teacher server on GPU 0 (static, never updated)
@@ -113,8 +75,45 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instr
 
 ```bash
 # Terminal 3: training on GPU 2
-CUDA_VISIBLE_DEVICES=2 accelerate launch train_async_distillation.py
+CUDA_VISIBLE_DEVICES=2 python train_async_distillation.py
 ```
+
+## LoRA
+
+Pass a `peft_config` to train a LoRA adapter on the student instead of the full model:
+
+```python
+from peft import LoraConfig
+
+trainer = AsyncDistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    train_dataset=dataset,
+    peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
+)
+```
+
+Every weight sync has to get the updated student to its server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the student's vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+    --port 8000 \
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --enable-lora \
+    --max-lora-rank 32 \
+    --max-loras 6
+```
+
+`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Add `VLLM_WORKER_MULTIPROC_METHOD=spawn` if you serve tensor-parallel, and keep `--weight-transfer-config` either way: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback. The teacher server is unaffected: it is never updated.
+
+`--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
+
+vLLM loads adapters from disk rather than over the network, so the trainer writes each version under `<output_dir>/.vllm_lora/` and gives the server the path. If the server runs on a different machine, that directory has to be on a filesystem both of them can see.
+
+> [!WARNING]
+> `<output_dir>/.vllm_lora/` is a serving cache, not where your trained adapter is kept. It only holds the most recent versions, and each one is deleted shortly after it falls out of the staleness window. Checkpoints are what preserve the adapter you trained, so do not turn them off: with `save_strategy="no"` a multi-hour run finishes and leaves nothing behind. `output_dir` also has to be readable by the server and has to outlive the job, so node-local scratch will not work, even though it would keep syncs off a slow shared filesystem.
+
+> [!TIP]
+> Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
 ## Logged metrics
 
@@ -153,13 +152,29 @@ So we split our metrics based on which stage (or _entity_) they are about:
 | `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)  |
 | `perf/`        | measured seconds and FLOPs                                                  |
 
-Everything the loss itself measures is logged unprefixed (`jsd`, `entropy`, `teacher_entropy`), with a `teacher_*/<teacher_id>` breakdown under MOPD — see [the divergence](#the-divergence) below.
+Everything the loss itself measures is logged unprefixed (`jsd`, `entropy`, `teacher_entropy`), with a `teacher/<teacher_id>/*` breakdown under MOPD — see [the divergence](#the-divergence) below.
 
 Let's also define some terms to make token metrics unambiguous:
 
 - **generated** tokens are what the student produced (`completions/*`).
 - **forwarded** tokens are every token the _forward_ pass processes: the prompt and the generated tokens.
 - **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. Trained ≠ generated: a completion position the teacher scored no candidate for is masked out of the divergence but still forwarded.
+
+Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
+
+- A mean measured per rollout, sample or call, like `rollout/duration_s` and `rollout/score_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
+- Any other metric is the mean of the values recorded in the window.
+
+Units:
+
+- `_s`: seconds.
+- `tokens_per_s`: tokens per second.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: amount in one optimizer step, averaged over the steps in the window.
+
+Metrics that [`GRPOTrainer`] also logs keep their GRPO names (`completions/mean_length`, `completions/clipped_ratio`).
 
 ### How the batch numbers compose
 
@@ -193,15 +208,16 @@ The worker pushes scored samples into a queue and the trainer pulls from it. Fou
 
 | metric                      | question                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sample/rollout_queue_size` | how many samples are waiting right now                                                                  |
+| `rollout/queue_size`        | how many samples are waiting right now                                                                  |
 | `sample/time_in_queue_s`    | how long **a single sample** sat there before being trained on — the seconds half of its off-policyness |
 | `perf/rollout_wait_s`       | how long training sat blocked because the queue was **empty**                                            |
-| `rollout/backpressure_s`    | how long generation (the worker) sat blocked because the queue was **full**                              |
+| `rollout/backpressure_s`    | how long generation (the worker) waited because it was `max_staleness` steps ahead of training           |
 
-The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
+The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images. Reading them together with the queue size tells you which side is the bottleneck:
 
-- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/inflight` and `rollout/score_s`.
-- queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
+- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_s`.
+- queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high → **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
+- both high → the `max_staleness` limit itself is too tight: the rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
 - both near zero → balanced !
 
 ### Completions
@@ -213,6 +229,7 @@ A **completion** is what the student's vLLM server generated for one prompt.
 | `completions/mean_length`                          | generated tokens per rollout                                                                        |
 | `completions/min_length`, `completions/max_length` | shortest and longest completion in the window                                                       |
 | `completions/clipped_ratio`                        | fraction of completions that did not end on EOS, i.e. were cut off by `max_completion_length`        |
+| `completions/mean_terminated_length`, `completions/min_terminated_length`, `completions/max_terminated_length` | the same lengths, over the completions that ended on EOS |
 
 ### Rollouts
 
@@ -222,11 +239,12 @@ A **rollout** is one prompt taken all the way through: generated by the student,
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rollout/duration_s`       | wall time for one rollout, from dispatch to a scored sample: generation **and** the teacher call                                                                                                                                              |
 | `rollout/score_s`          | of that, the time the teacher's `/v1/completions` call took                                                                                                                                                                                  |
-| `teacher_score_s/<id>`     | MOPD only: the same, per teacher. One slow expert throttles only the rollouts routed to it, which the blended mean hides                                                                                                                     |
-| `rollout/generated_tok_s`  | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
-| `rollout/inflight`         | rollouts in flight, i.e. generating or being scored                                                                                                                                                                                          |
-| `rollout/vllm_retry_total` | retried vLLM requests, to either the student's server or a teacher's. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to a server, not generated text     |
-| `rollout/backpressure_s`   | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
+| `teacher/<id>/score_s`     | MOPD only: the same, per teacher. One slow expert throttles only the rollouts routed to it, which the blended mean hides                                                                                                                     |
+| `rollout/generated_tokens_per_s`  | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
+| `rollout/concurrency`      | rollouts in flight, i.e. generating or being scored                                                                                                                                                                                          |
+| `rollout/vllm_retry_count` | retried vLLM requests, to either the student's server or a teacher's. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to a server, not generated text     |
+| `rollout/backpressure_s`   | how long generation waited because it was `max_staleness` steps ahead. See [the rollout queue](#the-rollout-queue)                                                                                                                           |
+| `rollout/queue_size`       | scored samples waiting in the rollout queue, measured where the trainer pulls them. See [the rollout queue](#the-rollout-queue)                                                                                                              |
 
 ### Samples arriving from the queue
 
@@ -236,10 +254,9 @@ Each sample is one `RolloutSample`: a prompt, the student's completion, and the 
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max` | tokens in one **sample**: prompt + generated. Packing is a row-level concern, see `batch/row_*`                                                      |
 | `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
-| `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `jsd` shows the _effect_ of off-policyness on the loss; this shows the cause                            |
-| `sample/dropped_stale_total`                                  | samples discarded for exceeding `max_staleness`                                                                                                     |
+| `sample/dropped_stale_count`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
 
 ### Batches
 
@@ -255,7 +272,7 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 | `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                             |
 | `batch/row_imbalance`                                                    | `max Σ Lᵢ² / mean Σ Lᵢ²` across rows. Attention is O(L²), so this predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
 | `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                     |
-| `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                          |
+| `batch/dropped_oversize_count`                                           | samples dropped for exceeding `token_budget`                                                                                          |
 
 ### The divergence
 
@@ -266,37 +283,41 @@ What the objective itself measures, averaged over the trained tokens of the wind
 | `jsd`                           | the generalized JSD the loss minimizes, at the configured `beta`. Falling means the student's distribution is converging on the teacher's                             |
 | `entropy`                       | the student's own predictive entropy. A collapse here with a falling `jsd` is the student narrowing rather than learning                                             |
 | `teacher_entropy`               | the teacher's entropy over the candidates it reported. Bounded below the true value, since only `teacher_top_k` candidates cross the wire                             |
-| `teacher_jsd/<id>`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
-| `teacher_entropy/<id>`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `teacher/<id>/jsd`              | MOPD only: `jsd` restricted to the tokens that teacher scored. Teachers in different domains can diverge at very different rates, which the blended `jsd` conflates  |
+| `teacher/<id>/entropy`          | MOPD only: the same breakdown of `teacher_entropy`                                                                                                                  |
+| `teacher/<id>/token_frac`       | MOPD only: the share of scored tokens that teacher took. Routing skew is otherwise invisible: a teacher starved of rows still reports a healthy `teacher/<id>/jsd`   |
+| `aux_loss` | the MoE router's load-balancing loss per micro-batch, averaged over ranks, logged when the model returns router logits and `router_aux_loss_coef` isn't 0. Unlike the rows above, it isn't a per-token average |
 
 There is no per-teacher `entropy`: the student's entropy is a property of its own policy, not of which teacher scored the sample, so the blended metric already covers it.
 
 ### Performance
 
-Throughput and MFU are each reported **twice**, over the same optimizer step, differing only in what they divide by. The suffix names the denominator:
+Throughput measures how many tokens the trainer processes per second. **Model FLOPs Utilization (MFU)** estimates the percentage of the training devices' theoretical compute capacity used for model forward and backward passes. The capacity used for this estimate depends on the hardware and training precision.
 
-- `_fwd_bwd` divides by `perf/fwd_bwd_s` — the compute alone. _How efficiently does the trainer run when it has data?_ If it is low, the trainer is the problem.
-- `_wall_clock` divides by `perf/step_s` — the whole step, including the time spent waiting for rollouts. _What fraction of the allocation actually became training?_ If this is far below the `_fwd_bwd` one, generation is probably the bottleneck.
+Throughput and MFU are reported on two time bases:
 
-The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync time. But it's useful to look at both: looking only at `_fwd_bwd` hides the GPU-hours spent generating rollouts and scoring them, and quoting only `_wall_clock` could blame the trainer for the generator's or the teacher's latency.
+- **`fwd_bwd_`** measures performance during the forward and backward passes.
+- **`wall_clock_`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+
+The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
+
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL). Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
-| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
+| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `fwd_bwd_` metric below                                    |
 | `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
 | `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
 | `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
 | `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
-| `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
-| `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                            |
-| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+| `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s` | forwarded tokens per second on each basis                                                                                                             |
+| `perf/wall_clock_trained_tokens_per_s`                                   | the same, counting only tokens the loss saw                                                                                                            |
+| `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`                         | model FLOPs utilisation on each basis                                                                                                                 |
 
 ## Design philosophy
 
-This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a
-feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs
-directly. New features will only be considered when there is significant community demand.
+This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
 
 ## AsyncDistillationConfig
 

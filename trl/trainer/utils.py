@@ -17,13 +17,17 @@ import copy
 import functools
 import hashlib
 import importlib.resources as pkg_resources
+import inspect
+import json
 import os
 import random
+import re
 import socket
 import threading
 import types
 from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -33,30 +37,39 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
+from torch.distributed.tensor import DTensor
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     BitsAndBytesConfig,
+    FineGrainedFP8Config,
+    Mxfp4Config,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
+from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..trainer.model_config import ModelConfig
 
 
 if is_comet_available():
     import comet_ml
+
+
+if is_triton_available():
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 
 
 if is_peft_available():
@@ -193,10 +206,10 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
     `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
     its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
-    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
-    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
-    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
-    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+    This gathers the given parameters for the duration of a direct access, so the matmul sees the full weight. Fused
+    losses compute and stash their gradients during the forward; custom autograd functions that recompute during the
+    backward must enter this context again. The backward's gradient reduction relies on the ZeRO-3 pre-forward hooks
+    being armed, so the caller must run the loss inside the model's forward (e.g. via `_ForwardRedirection`).
 
     Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
     embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
@@ -231,6 +244,20 @@ def get_callable_name(func: Callable) -> str:
     while isinstance(func, functools.partial):
         func = func.func
     return getattr(func, "__name__", type(func).__name__)
+
+
+def is_async_callable(func: Callable) -> bool:
+    """
+    Return whether calling `func` returns a coroutine, for the same forms as [`get_callable_name`]: module-level
+    functions, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to
+    the wrapped callable), and callable class instances (which carry the `async` on their `__call__`).
+
+    `inspect.iscoroutinefunction` alone covers only the first two: it inspects the instance itself, not its `__call__`,
+    so an async callable class reads as synchronous and its coroutine is never awaited.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(func.__call__)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
@@ -311,18 +338,18 @@ def generate_model_card(
             Weights & Biases run URL.
         trackio_url (`str` or `None`):
             Trackio Space URL.
-        comet_url (`str` or `None`):
-            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`, defaults to `None`):
+        trainer_citation (`str`, *optional*):
             Trainer citation as a BibTeX entry.
-        template_file (`str` *optional*):
+        template_file (`str`, *optional*):
             Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
-        paper_title (`str` or `None`, defaults to `None`):
+        paper_title (`str`, *optional*):
             Paper title.
-        paper_id (`str` or `None`, defaults to `None`):
+        paper_id (`str`, *optional*):
             ArXiv paper ID as `YYMM.NNNNN`.
+        comet_url (`str`, *optional*):
+            Comet experiment URL.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:
@@ -339,7 +366,7 @@ def generate_model_card(
     template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
+        template_str=pkg_resources.files("trl").joinpath(f"templates/{template_file}").read_text(encoding="utf-8"),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -477,7 +504,40 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index) -> torch.Tensor:
+def _supports_trl_loss_kernel(
+    logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
+) -> bool:
+    supported = (
+        logits.device.type in ("cuda", "xpu")
+        and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and 1 <= logits.ndim <= 3
+        and logits.stride(-1) == 1
+        and logits.shape[-1] > 0
+    )
+    if index is not None:
+        supported = (
+            supported
+            and index.shape == logits.shape[:-1]
+            and index.dtype in (torch.int32, torch.int64)
+            and index.device == logits.device
+        )
+    if row_mask is not None:
+        supported = (
+            supported
+            and index is not None
+            and row_mask.shape == index.shape
+            and row_mask.dtype in (torch.bool, torch.int32, torch.int64)
+            and row_mask.device == logits.device
+        )
+    return supported
+
+
+def selective_log_softmax(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -495,11 +555,23 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         index (`torch.Tensor`):
             Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
             output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero log-probability.
 
     Returns:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
+        return logprobs
+
+    if temperature != 1.0:
+        logits = logits / temperature
     squeeze = index.ndim == logits.ndim - 1
     if squeeze:
         index = index.unsqueeze(-1)
@@ -520,6 +592,8 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     if squeeze:
         per_token_logps = per_token_logps.squeeze(-1)
+    if row_mask is not None:
+        per_token_logps = per_token_logps.masked_fill(row_mask == 0, 0.0)
 
     return per_token_logps
 
@@ -545,6 +619,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
+    if is_triton_available() and _supports_trl_loss_kernel(logits):
+        index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
+        _, entropy = _fused_logprob_entropy(logits, index)
+        return entropy
+
     original_shape = logits.shape[:-1]  # all dims except num_classes
     num_classes = logits.shape[-1]
 
@@ -559,6 +638,75 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
+
+
+def strip_images_from_messages(messages):
+    """
+    Drop the image objects from a conversation, keeping its structure.
+
+    Each `{"type": "image", "image": <PIL.Image>}` content block becomes `{"type": "image"}`, so the conversation can
+    be logged or serialized. Messages with string content are returned unchanged.
+
+    Args:
+        messages (`list[dict]` or `str`):
+            Conversation to strip. Anything other than a list is returned as is.
+
+    Returns:
+        `list[dict]` or `str`: The conversation without the image objects.
+    """
+    if not isinstance(messages, list):
+        return messages
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = [{"type": block["type"]} if block.get("type") == "image" else block for block in content]
+            msg = {**msg, "content": content}
+        result.append(msg)
+    return result
+
+
+def selective_log_softmax_and_entropy(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    entropy_requires_grad: bool = True,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute selected log-probabilities and entropy in one pass over the logits.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Indices of shape `(...)` selecting one log-probability per row.
+        entropy_requires_grad (`bool`, *optional*, defaults to `True`):
+            Whether gradients should flow through the entropy output.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero outputs.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`:
+            The selected log-probabilities and per-row entropies.
+    """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
+        return logprobs, entropy if entropy_requires_grad else entropy.detach()
+    if temperature != 1.0:
+        logits = logits / temperature
+    logprobs = selective_log_softmax(logits, index, row_mask=row_mask)
+    if entropy_requires_grad:
+        entropy = entropy_from_logits(logits)
+    else:
+        with torch.no_grad():
+            entropy = entropy_from_logits(logits)
+    if row_mask is not None:
+        entropy = entropy.masked_fill(row_mask == 0, 0.0)
+    return logprobs, entropy
 
 
 def print_prompt_completions_sample(
@@ -641,22 +789,33 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
-                    # Chat message
-                    t.append(f"{role.upper()}\n", style="bold red")
+                t.append(f"{role.upper()}\n", style="bold red")
+                if "reasoning_content" in msg or "thinking" in msg:
                     reasoning = msg.get("reasoning_content") or msg.get("thinking")
                     if reasoning:
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
-                    if "content" in msg:
-                        t.append(msg["content"])
-                elif "name" in msg and "args" in msg:
-                    # Tool call
-                    t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(f"{msg['name']}({msg['args']})")
-                else:
-                    # Fallback
-                    t.append(str(msg))
+                if "content" in msg:
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        # VLM format: content is a list of typed blocks, e.g.
+                        # [{"type": "image", ...}, {"type": "text", "text": "..."}]
+                        for block in content:
+                            if block.get("type") == "text":
+                                t.append(block["text"])
+                            elif block.get("type") == "image":
+                                t.append("[IMAGE]", style="bold cyan")
+                    elif isinstance(content, str):
+                        t.append(content)
+                if "tool_calls" in msg:
+                    for k, tc in enumerate(msg["tool_calls"]):
+                        if k > 0:
+                            t.append("\n")
+                        fn = tc.get("function", {})
+                        raw = fn.get("arguments", {})
+                        args = raw if isinstance(raw, dict) else json.loads(raw)
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                        t.append(f"{fn.get('name', '?')}({args_str})")
                 if j < len(entry) - 1:
                     t.append("\n\n")
         else:
@@ -964,10 +1123,12 @@ def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -979,10 +1140,12 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -1151,18 +1314,31 @@ def create_model_from_path(
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+        architecture (`_BaseAutoModelClass`, *optional*):
             Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
             this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`. A checkpoint quantized in MXFP4 or FP8
+            is loaded dequantized, unless `'quantization_config'` is set.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
+    # The config decides how the weights load, so it comes from the revision they load from
+    config = AutoConfig.from_pretrained(
+        model_id, revision=kwargs.get("revision"), trust_remote_code=kwargs.get("trust_remote_code", False)
+    )
+    # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
+    # loaded dequantized, unless the caller chose how to load it with `quantization_config`
+    dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
+    quant_method = config.to_dict().get("quantization_config", {}).get("quant_method")
+    if quant_method in dequantizers and "quantization_config" not in kwargs:
+        if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
+            raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
+        kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
     dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
@@ -1173,13 +1349,18 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    # transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+    if kwargs.get("use_kernels") and Version("5.2.0") <= Version(transformers.__version__) < Version("5.4.0"):
+        raise ValueError(
+            "`use_kernels=True` requires transformers>=5.4.0: 5.2.0 and 5.3.0 fail to load the Hub kernels."
+        )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
     if "device_map" not in kwargs:
-        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
+        kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
         architecture = getattr(transformers, config.architectures[0], None)
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
@@ -1192,6 +1373,9 @@ def create_model_from_path(
             else:
                 architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
+    # transformers 5.3.0 skips tying remote-code tied embeddings, leaving them on meta (transformers#44469)
+    if Version(transformers.__version__) == Version("5.3.0"):
+        model.tie_weights()
     return model
 
 
@@ -1219,6 +1403,43 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+def model_accepts_images(model: PreTrainedModel) -> bool:
+    """
+    Whether a model takes images as input, so that its processing class is a processor rather than a tokenizer.
+
+    A multimodal checkpoint loaded as a language model alone (e.g. Qwen3.5 with `AutoModelForCausalLM`) does not.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to inspect.
+
+    Returns:
+        `bool`:
+            Whether the model takes images as input.
+    """
+    # Before transformers 5.21, several VLMs (e.g. Qwen3.5) report `input_modalities == "text"`, see
+    # huggingface/transformers#49677
+    if Version(transformers.__version__) < Version("5.21.0"):
+        return "vision_config" in model.config.sub_configs
+    else:
+        return "image" in model.input_modalities
+
+
+@contextmanager
+def global_then_local_main_first():
+    """
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
+
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
 
 
 @contextmanager
@@ -1313,243 +1534,277 @@ def shutdown_event_loop_in_daemon(
     thread.join(timeout=5)
 
 
-class _ChunkedLogProbFunction(torch.autograd.Function):
-    """Compute per-token log-probs and entropy without materializing [N, V] logits.
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
-    Processes the lm_head in chunks and uses online logsumexp
+
+@dataclass
+class FusedCausalLMOutput(ModelOutput):
+    """
+    Output of a model given a fused LM head with [`add_fused_lm_head`] and called with `fused_lm_head=True`. Every
+    per-token field is zero where the label is `-100`. Per-token fields not listed in `outputs` are `None`.
+
+    Args:
+        loss (`torch.Tensor`):
+            Negative log-likelihood under the temperature-scaled distribution, summed over the non-ignored tokens and
+            divided by `num_items_in_batch` (their count when not passed), plus the MoE load-balancing loss weighted by
+            the config's `router_aux_loss_coef` when router logits are requested. At `temperature=1.0`, this is the
+            loss the model's own forward computes.
+        log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
+            Log-probability of each next-token label.
+        entropy (`torch.Tensor`, same shape as `log_probs`):
+            Entropy of the next-token distribution.
+        log_sum_sq_probs (`torch.Tensor`, same shape as `log_probs`):
+            `log(sum_v p_v^2)` of the next-token distribution, without gradient.
+        mean_logits (`torch.Tensor`, same shape as `log_probs`):
+            Mean of the temperature-scaled next-token logits over the vocabulary, without gradient.
+        is_top1 (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is the most likely next token.
+        score_log_probs (`torch.Tensor` of shape `(*log_probs.shape, K)`):
+            Log-probability of each token of the `score_ids` given to the forward, normalized like `log_probs`, `0` at
+            padding.
+        label_mask (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
+            sequence than the caller's labels.
+        aux_loss (`torch.Tensor`, *optional*):
+            MoE load-balancing loss, when called with `output_router_logits=True`.
     """
 
-    @staticmethod
-    def forward(
-        ctx,
-        last_hidden: torch.Tensor,  # [N, H]
-        weight: torch.Tensor,  # [V, H]
-        targets: torch.Tensor,  # [N]
-        temperature: float,
-        chunk_size: int,
-        final_logit_softcapping: float | None = None,
-        logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        device = last_hidden.device
-        N, _ = last_hidden.shape
-        vocab, _ = weight.shape
-        inv_t = 1 / temperature
-
-        # NOTE(@aminediro): always acc in fp32 for stability
-        max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
-        sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
-        x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
-        target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
-
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
-
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
-            # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
-            w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
-            torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
-
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
-
-            logits_chunk.mul_(inv_t)  # [N, C]
-
-            # Online logsumexp update
-            chunk_max = logits_chunk.amax(dim=-1)  # [N]
-            max_new = torch.maximum(max_old, chunk_max)
-            rescale = torch.exp(max_old - max_new)
-            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
-
-            sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
-            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
-            max_old = max_new
-
-            # Gather target logits for labels in this chunk
-            in_chunk_cond = (targets >= start) & (targets < end)
-            local_idx = torch.clamp(targets - start, 0, end - start - 1)
-            # take the new logit if target_idx is in this chunk bounds else 0
-            target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
-
-        log_z = max_old + torch.log(sum_exp)
-        logprobs = target_logit - log_z
-        entropy = log_z - x_sum_exp / sum_exp
-
-        ctx.save_for_backward(last_hidden, weight, targets, log_z)
-        ctx.temperature = temperature
-        ctx.chunk_size = chunk_size
-        ctx.logit_scale = logit_scale
-        ctx.final_logit_softcapping = final_logit_softcapping
-
-        return logprobs, entropy
-
-    @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor, grad_entropy: torch.Tensor):  # type: ignore
-        hidden, weight, labels, log_z = ctx.saved_tensors
-        temperature: float = ctx.temperature
-        chunk_size: int = ctx.chunk_size
-        logit_scale: float = ctx.logit_scale
-        final_logit_softcapping: float = ctx.final_logit_softcapping
-        inv_t = 1 / temperature
-
-        N, _ = hidden.shape
-        vocab = weight.shape[0]
-
-        # NOTE(@aminediro): always acc in fp32 even if input is not
-        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
-
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
-
-        g = grad_logprobs.to(torch.float32)  # [N]
-        row_idx = torch.arange(N, device=hidden.device)
-
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            w_chunk = weight[start:end]  # [C, H]
-
-            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
-
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
-                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
-
-            logits_chunk.mul_(inv_t)  # [N, C]
-            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
-
-            # dL/d(logits) = g * (1_[label] - p)
-            grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
-
-            in_chunk_cond = (labels >= start) & (labels < end)
-            local_idx = torch.clamp(labels - start, 0, end - start - 1)
-            # If label in chunk add g to grad else it stays the same
-            grad_logits[row_idx, local_idx] += g * in_chunk_cond
-
-            grad_logits = grad_logits * inv_t
-            if final_logit_softcapping is not None:
-                grad_logits.mul_(1 - tanh_scaled.pow(2))
-
-            grad_logits = grad_logits * logit_scale
-
-            grad_hidden.add_(grad_logits @ w_chunk.float())
-            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
-
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
+    loss: torch.Tensor | None = None
+    log_probs: torch.Tensor | None = None
+    entropy: torch.Tensor | None = None
+    log_sum_sq_probs: torch.Tensor | None = None
+    mean_logits: torch.Tensor | None = None
+    is_top1: torch.Tensor | None = None
+    score_log_probs: torch.Tensor | None = None
+    label_mask: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
 
 
-def patch_chunked_lm_head(
-    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
+def add_fused_lm_head(
+    model: PreTrainedModel,
+    temperature: float = 1.0,
+    cast_lm_head_to_fp32: bool = False,
+    outputs: tuple[str, ...] = ("log_probs",),
 ) -> None:
-    final_logit_softcapping = getattr(model.config, "final_logit_softcapping", None)
+    """
+    Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
+    instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
 
-    def _chunked_forward(
-        self: torch.nn.Module,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        completion_mask: torch.Tensor | None = None,
-        use_cache: bool = False,
+    With `fused_lm_head=True`, the forward runs the backbone and projects through the LM head, in tiles, only the
+    positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted `shift_labels`,
+    as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
+    original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
+
+    `support_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the support each token was sampled
+    from: the tokens left after top-k/top-p truncation. Given, the log-probabilities are normalized over that set
+    rather than the whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
+
+    `score_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, asks for the log-probability of those
+    tokens at each position as well, returned as `score_log_probs` and normalized like `log_probs`. It is aligned and
+    shifted like `support_ids`.
+
+    For MoE models, `loss` includes the load-balancing loss weighted by `router_aux_loss_coef`, the one of the model
+    config unless passed to the forward.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Causal language model to patch.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature the logits are divided by.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to run the LM head projection in float32, outside autocast.
+        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs",)`):
+            Per-token fields of [`FusedCausalLMOutput`] the kernel computes, among `"log_probs"`, `"entropy"`,
+            `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
+            is always computed; each extra field costs a little on every call.
+    """
+    original_forward = model.forward
+    text_config = model.config.get_text_config()
+    final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+    # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+    # as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+    logit_scale = getattr(text_config, "logit_scale", None)
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
+    logit_scale = 1.0 if logit_scale is None else logit_scale
+    # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
+    # `base_model_prefix`.
+    backbone_attr = "base_model"
+    if text_config is not model.config and Version(transformers.__version__) < Version("5.0.0"):
+        backbone_attr = "model"
+
+    # Keep the original signature: `generate` validates its model kwargs against it
+    @functools.wraps(type(model).forward)
+    def _fused_forward(
+        self,
+        *args,
+        fused_lm_head=False,
+        labels=None,
+        shift_labels=None,
+        num_items_in_batch=None,
+        support_ids=None,
+        score_ids=None,
+        router_aux_loss_coef=None,
         **kwargs,
-    ) -> dict[str, torch.Tensor]:
-        assert labels is not None, "requires labels to not be None for logprob computation"
+    ):
+        if not fused_lm_head:
+            if labels is not None:
+                kwargs["labels"] = labels
+            if shift_labels is not None:
+                kwargs["shift_labels"] = shift_labels
+            if num_items_in_batch is not None:
+                kwargs["num_items_in_batch"] = num_items_in_batch
+            return original_forward(*args, **kwargs)
 
-        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
-        )
-        # NOTE(@aminediro): supporting Cohere2 models
-        logit_scale = getattr(self.config, "logit_scale", 1.0)
-        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
-
-        # Shift: predict next token
-        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
-        labels = labels[:, 1:]  # [B, S-1]
-
-        b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h)
-        targets_flat = labels.reshape(b * s)
-
-        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
-        valid_mask = None
-        if completion_mask is not None:
-            completion_mask = completion_mask[:, 1:]  # same shift as labels
-            valid_mask = completion_mask.bool().reshape(b * s)
-            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
-            targets_flat = targets_flat[valid_mask]  # [N_valid]
-
-        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat,
-            self.lm_head.weight,
-            targets_flat,
-            temperature,
-            chunk_size,
-            final_logit_softcapping,
-            logit_scale,
-        )
-
-        if valid_mask is not None:
-            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
-            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
-            logprobs[valid_mask] = logprobs_valid
-            entropy[valid_mask] = entropy_valid
+        # The backbone and the LM head are looked up on each call, since FSDP and PEFT replace them after patching
+        kwargs["use_cache"] = False
+        # MoE models: like the model's own forward, request router logits when the config asks for them
+        if getattr(text_config, "output_router_logits", False):
+            kwargs.setdefault("output_router_logits", True)
+        backbone_outputs = getattr(self, backbone_attr)(*args, **kwargs)
+        if shift_labels is None:
+            hidden_states = backbone_outputs.last_hidden_state[:, :-1]
+            labels = labels[:, 1:]
+            if support_ids is not None:
+                support_ids = support_ids[:, 1:]
+            if score_ids is not None:
+                score_ids = score_ids[:, 1:]
         else:
-            logprobs = logprobs_valid
-            entropy = entropy_valid
+            hidden_states = backbone_outputs.last_hidden_state
+            labels = shift_labels
+        lm_head = self.get_output_embeddings()
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        hidden_states = hidden_states.to(lm_head.weight.device)
+        labels = labels.to(lm_head.weight.device)
+        mask = labels != -100
+        autocast_ctx = nullcontext()
+        if cast_lm_head_to_fp32:
+            hidden_states = hidden_states.float()
+            autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
+
+        weight, bias = lm_head.weight, lm_head.bias
+        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
+        # head once before splitting tokens so every projection uses compatible tensor types.
+        if isinstance(weight, DTensor):
+            weight = weight.full_tensor()
+            if bias is not None:
+                bias = bias.full_tensor()
+        # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
+        # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
+        compact = _use_triton(hidden_states.device)
+        if support_ids is not None:
+            support_ids = support_ids.to(lm_head.weight.device)
+            support_ids = (
+                support_ids[mask] if compact else support_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
+            )
+        if score_ids is not None:
+            score_ids = score_ids.to(lm_head.weight.device)
+            score_ids = score_ids[mask] if compact else score_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
+        with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
+            per_token = _ChunkedLogProbFunction.apply(
+                hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
+                weight,
+                bias,
+                labels[mask] if compact else labels.clamp(min=0).reshape(-1),
+                temperature,
+                _CHUNKED_LOGPROB_CHUNK_SIZE,
+                final_logit_softcapping,
+                logit_scale,
+                outputs,
+                support_ids,
+                score_ids,
+            )
+        if compact:
+            # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+            # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            per_token = (
+                None
+                if x is None
+                else x.new_zeros(mask.shape + x.shape[1:]).masked_scatter(
+                    mask.view(mask.shape + (1,) * (x.dim() - 1)), x
+                )
+                for x in per_token
+            )
+        else:
+            per_token = (
+                None
+                if x is None
+                else x.view(mask.shape + x.shape[1:]).masked_fill(~mask.view(mask.shape + (1,) * (x.dim() - 1)), 0)
+                for x in per_token
+            )
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1, score_log_probs = per_token
+        loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
-        if output_router_logits:
-            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
-            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
-            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
-            # single import keeps us in lockstep with upstream for every family we test.
+        if kwargs.get("output_router_logits"):
+            # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = self.num_experts
-                num_experts_per_tok = self.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if self.config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
-                    transformers.__version__
-                ) < Version("5.6.0"):
-                    num_experts = self.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = self.num_experts_per_tok
                 else:
-                    num_experts = self.config.num_experts
-                num_experts_per_tok = self.config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(
-                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
-            )
+                    num_experts_per_tok = text_config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(
+                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                )
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
+            if router_aux_loss_coef is None:
+                router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
+            loss = loss + router_aux_loss_coef * aux_loss
 
-        return {
-            "log_probs": logprobs.reshape(b, s),
-            "entropy": entropy.reshape(b, s),
-            "aux_loss": aux_loss,
-        }
+        return FusedCausalLMOutput(
+            loss=loss,
+            log_probs=log_probs,
+            entropy=entropy,
+            log_sum_sq_probs=log_sum_sq_probs,
+            mean_logits=mean_logits,
+            is_top1=is_top1,
+            score_log_probs=score_log_probs,
+            label_mask=mask,
+            aux_loss=aux_loss,
+        )
 
-    model.forward = types.MethodType(_chunked_forward, model)
+    model.forward = types.MethodType(_fused_forward, model)
 
 
-def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
+# Model types whose layers `compute_flops_per_token` describes: full attention in every layer, and a gate/up/down MLP
+# or routed experts of that shape. For each, the estimate matches 6 FLOPs per active weight on real checkpoints.
+_FLOPS_PER_TOKEN_MODEL_TYPES = (
+    "gemma",
+    "granite",
+    "llama",
+    "olmo2",
+    "qwen2",
+    "qwen3",
+    "qwen3_moe",
+    "qwen3_vl_moe_text",
+    "qwen3_vl_text",
+    "smollm3",
+)
+
+
+def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int | None:
     """
     Estimate training FLOPs per token for a causal language model (forward + backward).
 
-    Supports dense and MoE architectures. Backward is assumed to cost 2× the forward pass, so total training FLOPs = 3
-    × forward FLOPs. The attention-score term uses the non-causal convention (every token attends to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT); pass the resulting MFU through [`adjusted_mfu`] for the Llama /
-    DeepSpeed Ulysses causal-corrected convention.
+    Supports the dense and MoE model types in `_FLOPS_PER_TOKEN_MODEL_TYPES`. Backward is assumed to cost 2× the
+    forward pass, so total training FLOPs = 3 × forward FLOPs. The attention-score term uses the non-causal convention
+    (every token attends to the full `seq_len`, matching PaLM / Megatron / nanoGPT).
 
     Args:
         config ([`~transformers.PretrainedConfig`]):
@@ -1558,8 +1813,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             The sequence length used for training.
 
     Returns:
-        `int`: Estimated training FLOPs per token.
+        `int` or `None`: Estimated training FLOPs per token, or `None` if the model type is unsupported.
     """
+    if config.model_type not in _FLOPS_PER_TOKEN_MODEL_TYPES:
+        return None
+
     h = config.hidden_size
     L = config.num_hidden_layers
     V = config.vocab_size
@@ -1595,18 +1853,91 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
         )
 
-    embed_flops = 2 * V * h
-    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+    # Embedding is a lookup (no FLOPs); lm_head is a 2*V*h matmul, tied or not.
+    lm_head_flops = 2 * V * h
 
-    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    forward_flops = total_layer_flops + lm_head_flops
     return 3 * forward_flops
+
+
+# Theoretical dense accelerator throughput. Values and sources follow TorchTitan's BF16 peak-FLOPs lookup, extended
+# with the additional NVIDIA GPUs offered by Hugging Face Jobs. More specific names must precede their prefixes.
+_PEAK_FLOPS_BY_DEVICE = (
+    # NVIDIA
+    ("GB300", {"bfloat16": 2.5e15}),
+    ("GB200", {"bfloat16": 2.5e15}),
+    ("B300", {"bfloat16": 2.25e15}),
+    ("B200", {"bfloat16": 2.25e15}),
+    ("H100 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H100 PCIe", {"float16": 756e12, "bfloat16": 756e12}),
+    ("H100", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H200 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H200", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H20", {"float16": 148e12, "bfloat16": 148e12}),
+    ("RTX PRO 6000", {"float16": 500e12, "bfloat16": 500e12}),
+    ("A100", {"float16": 312e12, "bfloat16": 312e12}),
+    ("A6000", {"float16": 154.85e12, "bfloat16": 154.85e12}),
+    ("A10G", {"float16": 125e12, "bfloat16": 125e12}),
+    ("A10", {"float16": 125e12, "bfloat16": 125e12}),
+    ("L40S", {"float16": 362e12, "bfloat16": 362e12}),
+    ("L4", {"float16": 121e12, "bfloat16": 121e12}),
+    ("T4", {"float16": 65e12}),
+    # AMD
+    ("MI355X", {"bfloat16": 2500e12}),
+    ("MI325X", {"bfloat16": 1300e12}),
+    ("MI300X", {"bfloat16": 1300e12}),
+    ("MI250X", {"bfloat16": 191.5e12}),
+)
+
+
+def get_peak_flops(device_name: str, dtype: str) -> float | None:
+    """
+    Get the theoretical dense accelerator peak FLOPs for a device and dtype.
+
+    Args:
+        device_name (`str`):
+            Device name as returned by the accelerator runtime.
+        dtype (`str`):
+            Floating-point dtype used by the model's matrix multiplications.
+
+    Returns:
+        `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
+    """
+    device_name = device_name.casefold()
+    for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
+        if re.search(rf"\b{re.escape(model_name.casefold())}\b", device_name):
+            return peak_flops_by_dtype.get(dtype)
+    return None
+
+
+def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | None:
+    """
+    Resolve the theoretical dense peak FLOPs for the local training device.
+
+    Args:
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator managing the training devices.
+        dtype (`str`):
+            Configured model dtype.
+
+    Returns:
+        `float` or `None`: Local device peak FLOPs, or `None` if the device or precision is unsupported.
+    """
+    device_name = torch.cuda.get_device_name(accelerator.device)
+    peak_flops = get_peak_flops(device_name, dtype)
+    if peak_flops is None:
+        logger.info(
+            "MFU metrics are disabled because the peak FLOPs are unknown for the local training device or "
+            "precision. Throughput and timing metrics are still reported."
+        )
+    return peak_flops
 
 
 def compute_mfu(
     flops_per_token: int,
     tokens_per_second: float,
     world_size: int,
-    peak_flops_per_device: float = 989.5e12,
+    peak_flops_per_device: float,
 ) -> float:
     """
     Compute Model FLOPs Utilization (MFU) as a percentage.
@@ -1622,37 +1953,10 @@ def compute_mfu(
             Aggregate tokens per second across all devices, after any parallelism corrections.
         world_size (`int`):
             Number of devices (GPUs).
-        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
-            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+        peak_flops_per_device (`float`):
+            Theoretical dense peak FLOPs per device for the training precision.
 
     Returns:
         `float`: MFU as a percentage (0-100).
     """
     return 100 * (flops_per_token * tokens_per_second) / (peak_flops_per_device * world_size)
-
-
-def adjusted_mfu(mfu: float, config: PretrainedConfig, seq_len: int) -> float:
-    """
-    Apply a causal-masking correction to an MFU computed with [`compute_flops_per_token`].
-
-    [`compute_flops_per_token`] uses the non-causal attention convention (every token treated as attending to the full
-    `seq_len`, matching PaLM / Megatron / nanoGPT). With causal masking, only half of the attention-score FLOPs (`Q·Kᵀ`
-    and `attn·V`) are actually performed. This function subtracts that half from the per-token total and rescales `mfu`
-    accordingly. Use it to compare against reports that follow the Llama 2/3 / DeepSpeed Ulysses convention.
-
-    Args:
-        mfu (`float`):
-            MFU as a percentage, computed via [`compute_mfu`] (i.e., using the non-causal [`compute_flops_per_token`]).
-        config ([`~transformers.PretrainedConfig`]):
-            The model configuration.
-        seq_len (`int`):
-            The sequence length used for training.
-
-    Returns:
-        `float`: Causal-corrected MFU as a percentage.
-    """
-    flops_full = compute_flops_per_token(config, seq_len)
-    # Half of the attention-score FLOPs (Q·Kᵀ and attn·V), per layer, ×3 for fwd+bwd.
-    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-    half_attn_score = config.num_hidden_layers * 3 * 2 * config.num_attention_heads * head_dim * seq_len
-    return mfu * (flops_full - half_attn_score) / flops_full

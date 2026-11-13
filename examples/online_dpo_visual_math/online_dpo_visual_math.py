@@ -24,12 +24,11 @@
 # ///
 
 """
-pip install math_verify
+pip install math_verify "deepspeed>=0.19.3"
 
 # For Qwen/Qwen2.5-VL-3B-Instruct
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/online_dpo_visual_math/online_dpo_visual_math.py \
+torchrun --nproc_per_node 8 examples/online_dpo_visual_math/online_dpo_visual_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --reward_model_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir online-dpo-Qwen2.5-VL-3B-Instruct \
@@ -47,9 +46,8 @@ accelerate launch \
 # For HuggingFaceTB/SmolVLM2-2.2B-Instruct
 pip install num2words==0.5.14
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/online_dpo_visual_math/online_dpo_visual_math.py \
+torchrun --nproc_per_node 8 examples/online_dpo_visual_math/online_dpo_visual_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --reward_model_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir online-dpo-SmolVLM2-2.2B-Instruct \
@@ -100,7 +98,9 @@ from trl.rewards import accuracy_reward, think_format_reward
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    # PEFT + DeepSpeed ZeRO-3 needs reentrant gradient checkpointing before DeepSpeed 0.19.3
+    # (https://github.com/deepspeedai/DeepSpeed/pull/8148). On older versions, uncomment the line below.
+    # training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
@@ -199,3 +199,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name="lmms-lab/multimodal-open-r1-8k-verified")
+
+    trainer.end()

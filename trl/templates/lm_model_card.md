@@ -13,7 +13,7 @@ It has been trained using [TRL](https://github.com/huggingface/trl).
 from transformers import pipeline
 
 question = "If you had a time machine, but could only go to the past or the future once and never return, which would you choose and why?"
-generator = pipeline("text-generation", model="{{ hub_model_id }}", device="cuda")
+generator = pipeline("text-generation", model="{{ hub_model_id }}", device_map="auto")
 output = generator([{"role": "user", "content": question}], max_new_tokens=128, return_full_text=False)[0]
 print(output["generated_text"])
 ```
@@ -47,7 +47,7 @@ Cite TRL as:
 ```bibtex
 {% raw %}@software{vonwerra2020trl,
   title   = {{TRL: Transformers Reinforcement Learning}},
-  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin and Dirhoussi, Amine and Villanova del Moral, Albert and Paniego Blanco, Sergio},
   license = {Apache-2.0},
   url     = {https://github.com/huggingface/trl},
   year    = {2020}

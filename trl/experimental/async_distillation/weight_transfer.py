@@ -12,18 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import threading
 import time
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
 from .vllm_client import VLLMClient
 
 
-if is_vllm_available(min_version="0.22.0"):
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
+if is_vllm_available():
     from vllm.utils.network_utils import get_ip, get_open_port
+
+# vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
+# `trainer_send_weights` with a stateful trainer engine and moved `packed` from the per-update info to the init info.
+# The rendezvous and packed-broadcast helpers the statics were built on are still exposed, so they are called directly.
+_HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
+if _HAS_STATEFUL_TRAINER_ENGINE:
+    from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
+    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
+elif is_vllm_available():
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 
 logger = get_logger(__name__)
@@ -32,23 +43,32 @@ logger = get_logger(__name__)
 class WeightTransferClient:
     """Streams the student's weights to its own vLLM server over NCCL.
 
-    Ported verbatim from [`~trl.experimental.async_grpo.weight_transfer.WeightTransferClient`]. Only the student is
-    ever targeted: the teacher is static and never receives a weight update, so no analogous client exists for it.
+    Ported verbatim from [`~trl.generation.weight_transfer.WeightTransferClient`]. Only the student is ever targeted:
+    the teacher is static and never receives a weight update, so no analogous client exists for it.
+
+    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the main
+    thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than a hang,
+    and the abandoned thread dies with the process.
+
+    Args:
+        vllm_client ([`VLLMClient`]):
+            Client for the vLLM server that receives the weights.
+        weight_update_info (`dict`):
+            Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
+            must describe exactly what [`send_weights`] streams.
     """
 
     def __init__(
         self,
         vllm_client: VLLMClient,
         weight_update_info: dict,
-        init_weight_transfer_timeout: int = 1800,
     ):
-        if not is_vllm_available(min_version="0.22.0"):
-            raise ImportError(
-                "vLLM >= 0.22.0 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.22.0'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use WeightTransferClient. Install it with: pip install vllm")
         self.vllm = vllm_client
-        self.init_weight_transfer_timeout = init_weight_transfer_timeout
         self._weight_update_info = weight_update_info
+        if not _HAS_STATEFUL_TRAINER_ENGINE:
+            self._weight_update_info = {**weight_update_info, "packed": True}
         self.model_update_group = None
 
     def init_weight_transfer(self) -> None:
@@ -63,19 +83,34 @@ class WeightTransferClient:
             "rank_offset": 1,
             "world_size": world_size,
         }
-        t_init = threading.Thread(
-            target=self.vllm.init_weight_transfer_engine,
-            args=(init_info, self.init_weight_transfer_timeout),
-        )
-        t_init.start()
-        self.model_update_group = NCCLWeightTransferEngine.trainer_init(
-            {
-                "master_address": master_address,
-                "master_port": master_port,
-                "world_size": world_size,
-            }
-        )
-        t_init.join()
+        if _HAS_STATEFUL_TRAINER_ENGINE:
+            init_info["packed"] = True
+
+        error: list[BaseException] = []
+
+        def trainer_init():
+            try:
+                if _HAS_STATEFUL_TRAINER_ENGINE:
+                    self.model_update_group = open_trainer_endpoint(init_info)
+                else:
+                    self.model_update_group = NCCLWeightTransferEngine.trainer_init(init_info)
+            except BaseException as exc:  # noqa: BLE001
+                error.append(exc)
+
+        thread = threading.Thread(target=trainer_init, daemon=True)
+        thread.start()
+        try:
+            self.vllm.init_weight_transfer_engine(init_info)
+            thread.join()
+            if error:
+                raise error[0]
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to set up the NCCL weight-transfer group with the vLLM server at {self.vllm.server_url}. "
+                "Check that the server was started with `VLLM_SERVER_DEV_MODE=1` and "
+                '`--weight-transfer-config \'{"backend":"nccl"}\'`, and that the trainer can reach it on the '
+                "port it advertises."
+            ) from exc
         logger.info("Initialised weight-transfer NCCL group with vLLM")
 
     def send_weights(self, iterator) -> None:
@@ -84,15 +119,44 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update()
-        # /update_weights drives the workers' blocking NCCL recv, so it runs on a thread
-        # concurrently with the trainer-side broadcast.
-        t_update = threading.Thread(target=self.vllm.update_weights, args=(self._weight_update_info,))
-        t_update.start()
-        NCCLWeightTransferEngine.trainer_send_weights(
-            iterator=iterator,
-            trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
-        )
-        t_update.join()
+        # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
+        # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
+        dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
+        iterator = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(iterator, dtypes, strict=True))
+
+        error: list[BaseException] = []
+
+        def trainer_send_weights():
+            try:
+                if _HAS_STATEFUL_TRAINER_ENGINE:
+                    packed_nccl_broadcast_producer(
+                        iterator=iterator, group=self.model_update_group, src=0, post_iter_func=lambda item: item[1]
+                    )
+                else:
+                    NCCLWeightTransferEngine.trainer_send_weights(
+                        iterator=iterator,
+                        trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
+                    )
+            except BaseException as exc:  # noqa: BLE001
+                error.append(exc)
+
+        thread = threading.Thread(target=trainer_send_weights, daemon=True)
+        thread.start()
+        try:
+            self.vllm.update_weights(self._weight_update_info)
+            thread.join()
+            if error:
+                raise error[0]
+        except Exception as exc:
+            # Best-effort: a failure to clean up must not mask the error below.
+            with contextlib.suppress(Exception):
+                self.vllm.finish_weight_update()
+            raise RuntimeError(
+                f"Weight sync to the vLLM server at {self.vllm.server_url} failed. The server keeps the partially "
+                "updated weights but stays paused, and a new run re-sends every parameter at start-up. If the "
+                "underlying error is a CUDA OOM on the server, restart it with a lower `--gpu-memory-utilization`: "
+                "receiving a transfer needs a few GB of headroom on top of the weights and the KV cache."
+            ) from exc
         self.vllm.finish_weight_update()
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 

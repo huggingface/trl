@@ -33,7 +33,7 @@ uv pip install git+https://huggingface.co/spaces/qgallouedec/echo_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git
+git clone https://github.com/openenv/OpenEnv.git
 cd OpenEnv/envs/echo_env
 uv pip install -e .
 ```
@@ -127,6 +127,8 @@ def main():
         environment_factory=EchoToolEnv,
     )
     trainer.train()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

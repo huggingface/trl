@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.3
+    rev: 9c89adb347f6b973f4905a4be0051eb2ecf85dea  # v0.13.3
     hooks:
       - id: ruff-check
         types_or: [ python, pyi ]
@@ -8,12 +8,9 @@ repos:
       - id: ruff-format
         types_or: [ python, pyi ]
 
-  - repo: local
+  - repo: https://github.com/huggingface/doc-builder
+    rev: ecdecfb9b66123f9078fa5ec62296cba6fdc971b  # v0.6.0
     hooks:
       - id: doc-builder-style
-        name: Check style with doc-builder
-        language: python
-        entry: doc-builder style trl tests docs/source --max_len 119
-        additional_dependencies: ["git+https://github.com/huggingface/doc-builder@af49b8dc3859c3d80c7220c8c0ba146431132e49"]
-        pass_filenames: false
-        types_or: [python, markdown, rst]
+        args: [--max_len, "119"]
+        files: ^(trl|tests|docs/source)/

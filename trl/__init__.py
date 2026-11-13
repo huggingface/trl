@@ -43,12 +43,13 @@ _import_structure = {
         "maybe_unpair_preference_dataset",
         "pack_dataset",
         "prepare_multimodal_messages",
-        "prepare_multimodal_messages_vllm",
         "unpair_preference_dataset",
     ],
     "models": ["create_reference_model"],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
+        "AsyncGRPOConfig",
+        "AsyncGRPOTrainer",
         "BEMACallback",
         "DistillationConfig",
         "DistillationTrainer",
@@ -92,12 +93,13 @@ if TYPE_CHECKING:
         maybe_unpair_preference_dataset,
         pack_dataset,
         prepare_multimodal_messages,
-        prepare_multimodal_messages_vllm,
         unpair_preference_dataset,
     )
     from .models import create_reference_model
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
+        AsyncGRPOConfig,
+        AsyncGRPOTrainer,
         BEMACallback,
         DistillationConfig,
         DistillationTrainer,

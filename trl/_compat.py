@@ -32,8 +32,10 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
     Check if installed package version is below the given threshold.
 
     Args:
-        package_name (str): Package name.
-        version_threshold (str): Maximum version threshold.
+        package_name (`str`):
+            Package name.
+        version_threshold (`str`):
+            Maximum version threshold.
 
     Returns:
         - True if package is installed and version < version_threshold.
@@ -56,8 +58,10 @@ def _is_package_version_at_least(package_name: str, version_threshold: str) -> b
     Check if installed package version is at least the given threshold.
 
     Args:
-        package_name (str): Package name.
-        version_threshold (str): Minimum version threshold.
+        package_name (`str`):
+            Package name.
+        version_threshold (`str`):
+            Minimum version threshold.
 
     Returns:
         - True if package is installed and version >= version_threshold.
@@ -127,38 +131,8 @@ def _patch_transformers_hybrid_cache() -> None:
             warnings.warn(f"Failed to patch transformers HybridCache compatibility: {e}", stacklevel=2)
 
 
-def _patch_transformers_parallelism_config() -> None:
-    """
-    Fix ParallelismConfig for transformers compatibility.
-
-    Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
-    `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
-
-    This is needed when running with ``accelerate<1.10.1``, where the module ``accelerate.parallelism_config`` did not
-    exist and therefore the type alias is not imported by Transformers.
-
-    See upstream fix PR in transformers#40818.
-
-    - Issue: transformers imports ParallelismConfig only if accelerate>=1.10.1 and raises NameError if
-      accelerate<1.10.1
-    - Fixed in transformers: https://github.com/huggingface/transformers/pull/40818 (released in v4.57.0)
-    - This can be removed when TRL requires transformers>=4.57.0 or accelerate>=1.10.1
-    """
-    if _is_package_version_below("transformers", "4.57.0") and _is_package_version_below("accelerate", "1.10.1"):
-        try:
-            from typing import Any
-
-            import transformers.training_args
-
-            if not hasattr(transformers.training_args, "ParallelismConfig"):
-                transformers.training_args.ParallelismConfig = Any
-        except Exception as e:
-            warnings.warn(f"Failed to patch transformers ParallelismConfig compatibility: {e}", stacklevel=2)
-
-
 # Apply vLLM patches
 _patch_vllm_logging()
 
 # Apply transformers patches
 _patch_transformers_hybrid_cache()
-_patch_transformers_parallelism_config()  # before creating HfArgumentParser
