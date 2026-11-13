@@ -2348,9 +2348,16 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][1]["prompt"] == [1, 2, 3]
         assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
 
-    def test_prefix_cache_is_salted_by_model_version(self):
-        loop = _rollout_loop()
-        response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+    @pytest.mark.parametrize("top_k", [0, 4])
+    def test_prefix_cache_is_salted_by_model_version(self, top_k):
+        loop = _rollout_loop(top_k=top_k)
+        if top_k:
+            logprobs = {
+                "content": [{"token": "token_id:4", "logprob": -0.1}, {"token": "token_id:5", "logprob": -0.2}]
+            }
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": logprobs, "sampling_mask": [[4], [5]]}]}
+        else:
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
         requests, _ = self._generate(loop, response)
         loop._model_version_value.value = 3
         requests += self._generate(loop, response)[0]
