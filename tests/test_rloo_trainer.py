@@ -1372,7 +1372,7 @@ class TestRLOOTrainer(TrlTestCase):
             use_vllm=True,
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1443,9 +1443,10 @@ class TestRLOOTrainer(TrlTestCase):
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
+        # Tied embeddings, which vLLM holds as one tensor
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
-        )  # tiny model is too small for vLLM
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", dtype="float32"
+        )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1503,7 +1504,7 @@ class TestRLOOTrainer(TrlTestCase):
             vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1575,7 +1576,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
