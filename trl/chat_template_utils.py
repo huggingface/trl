@@ -346,7 +346,7 @@ qwen3_template = {
             "content": "text",
         },
         "tool_calls": {
-            "open": "<tool_call>",
+            "open_pattern": r"\n?<tool_call>",
             "close_pattern": r"</tool_call>\s*",
             "repeats": True,
             "content": "json",
@@ -355,6 +355,7 @@ qwen3_template = {
         "content": {
             "close_pattern": r"<\|im_end\|>\s*",
             "content": "text",
+            "content_args": {"strip": False},
         },
     },
 }

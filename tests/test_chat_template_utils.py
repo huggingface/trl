@@ -2440,6 +2440,28 @@ class TestParseResponse:
             parse_response(tokenizer, response[:end])
 
 
+@pytest.mark.skipif(not _SUPPORTS_RESPONSE_TEMPLATE, reason="Requires the response_template parser (>= 5.13)")
+@pytest.mark.parametrize(
+    "model_id",
+    ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507"],
+)
+@pytest.mark.parametrize("content", ["Let's call the tool.", "Let's call the tool.\n", "Let's call the tool.\n\n"])
+def test_parse_response_qwen3_keeps_newlines_before_tool_call(model_id, content):
+    # The Qwen3 template adds one newline between the content and the first tool call. Parsing must keep the newlines
+    # the model wrote beyond that one, so that re-rendering the parsed message gives back the same tokens.
+    tokenizer = add_response_schema(AutoTokenizer.from_pretrained(model_id))
+    tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+    messages = [
+        {"role": "user", "content": "What is 3*4?"},
+        {"role": "assistant", "content": content, "tool_calls": tool_calls},
+    ]
+    prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True, return_dict=True).input_ids
+    text = tokenizer.apply_chat_template(messages, return_dict=True).input_ids
+    parsed = parse_response(tokenizer, text[len(prefix) :], prefix=prefix)
+    assert parsed["content"] == content
+    assert tokenizer.apply_chat_template([messages[0], parsed], return_dict=True).input_ids == text
+
+
 class TestChatTemplatesDocumentation:
     def _documented(self, path):
         # Templates documented in a `### ` heading, which may list several of them
