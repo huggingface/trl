@@ -317,17 +317,22 @@ class GRPOConfig(_BaseConfig):
             (and account for the token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
+            stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
+            results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
+            length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
+            otherwise).
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
             and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
-            the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
-            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
-            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM also applies `repetition_penalty` to the logprobs
-            it returns, so `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
+            the candidate set each token was sampled from, which requires vLLM 0.28 or later and, in server mode, a
+            server started with `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30); otherwise, the IS
+            ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured
+            outputs, which restrict it to the tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`).
+            Structured outputs, which would otherwise stall training, also require that candidate set. vLLM also
+            applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires
+            `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -921,8 +926,10 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
+            "generation stops when the model generates a response turn with no tool calls, when the completion "
+            "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
+            "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
+            "`max_position_embeddings` otherwise)."
         },
     )
     vllm_importance_sampling_correction: bool = field(
@@ -933,9 +940,13 @@ class GRPOConfig(_BaseConfig):
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
             "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
-            '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
-            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM "
-            "also applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
+            "vLLM 0.28 or later and, in server mode, a server started with `--return-sampling-mask` (and "
+            "`--enable-scale-out` from vLLM 0.30); otherwise, the IS "
+            "ratios are biased. vLLM bounds that "
+            "candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured outputs, which restrict it to the "
+            "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`). Structured outputs, which would "
+            "otherwise stall training, also require that candidate set. vLLM also applies "
+            "`repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
             "`vllm_importance_sampling_correction=False`."
         },
     )
@@ -1083,15 +1094,18 @@ class GRPOConfig(_BaseConfig):
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )
 
+        structured_outputs = self.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+            self.generation_kwargs or {}
+        )
         if (
             self.use_vllm
             and self.vllm_importance_sampling_correction
             and self.top_k == 0
-            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0)
+            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0 or structured_outputs)
         ):
             raise ValueError(
-                "`top_p < 1.0` or `min_p > 0.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each "
-                "sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
+                "`top_p < 1.0`, `min_p > 0.0` or structured outputs need `top_k > 0`: vLLM bounds the candidate set "
+                "it returns for each sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
                 "`vllm_importance_sampling_correction=False`."
             )
 

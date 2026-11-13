@@ -26,7 +26,7 @@
 Without dataset streaming:
 
 ```
-accelerate launch examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py \
+torchrun --nproc_per_node 8 examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --per_device_train_batch_size 2 \
@@ -41,7 +41,7 @@ accelerate launch examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.p
 With dataset streaming:
 
 ```
-accelerate launch examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py \
+torchrun --nproc_per_node 8 examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --dataset_streaming \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \

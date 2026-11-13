@@ -36,6 +36,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
+from trl.generation.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
@@ -85,12 +86,17 @@ async def async_multiply_tool(a: int, b: int) -> int:
     return a * b
 
 
+def str_length_reward(completions, **kwargs):
+    """Reward function that rewards longer completions, whatever their format."""
+    return [float(len(str(completion))) for completion in completions]
+
+
 class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
         )
@@ -163,7 +169,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         return GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             rollout_func=rollout_func,
@@ -244,11 +250,11 @@ class TestTransformersContinuousBatchingContract:
 
 class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
-        # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
+        # Test that GRPOTrainer can be instantiated with only model, reward function and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
 
@@ -298,7 +304,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -318,6 +324,34 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
+
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_dataset_format(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
@@ -332,7 +366,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -352,21 +386,18 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         with pytest.raises(ValueError, match="custom code"):
             GRPOTrainer(
                 model=model_id,
                 args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-                reward_funcs=reward_func,
+                reward_funcs=str_length_reward,
                 train_dataset=dataset,
             )
 
         trainer = GRPOTrainer(
             model=model_id,
             args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
@@ -388,7 +419,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -417,7 +448,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -457,7 +488,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -490,7 +521,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -514,7 +545,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -537,7 +568,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -576,7 +607,7 @@ class TestGRPOTrainer(TrlTestCase):
             with pytest.raises(ValueError, match="`train_dataset` is required"):
                 GRPOTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    reward_funcs=str_length_reward,
                     args=training_args,
                     train_dataset=train_dataset,
                 )
@@ -584,14 +615,14 @@ class TestGRPOTrainer(TrlTestCase):
             with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
                 GRPOTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    reward_funcs=str_length_reward,
                     args=training_args,
                     train_dataset=train_dataset,
                 )
         else:
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=train_dataset,
             )
@@ -630,7 +661,7 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -653,7 +684,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -666,7 +697,7 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -689,7 +720,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -738,7 +769,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -770,7 +801,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -791,7 +822,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -816,7 +847,7 @@ class TestGRPOTrainer(TrlTestCase):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
@@ -843,7 +874,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -884,7 +915,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -930,7 +961,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -979,7 +1010,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             GRPOTrainer(
                 model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
@@ -1003,14 +1034,14 @@ class TestGRPOTrainer(TrlTestCase):
             modules_to_save=["lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
         )
-        kwargs = {
-            "model": model,
-            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            "args": training_args,
-            "train_dataset": dataset,
-            "peft_config": peft_config,
-        }
-        GRPOTrainer(**kwargs)  # must construct without raising
+        # Must construct without raising
+        GRPOTrainer(
+            model=model,
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
 
     @require_peft
     def test_train_peft_prompt_tuning(self):
@@ -1026,7 +1057,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
@@ -1061,7 +1092,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1093,7 +1124,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1101,12 +1132,16 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.ref_model.dtype == torch.bfloat16
         assert trainer.ref_model.config._attn_implementation == "eager"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
     @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
@@ -1123,7 +1158,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1167,7 +1202,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1202,7 +1237,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1218,8 +1253,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_different_reward_model(self):
-        # Use a reward model different from the model: different chat template, tokenization, etc.
+    def test_train_with_reward_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
         reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id)
@@ -1244,75 +1278,6 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             reward_processing_classes=reward_tokenizer,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_reward_func_standard(self):
-        # Test if trainer can handle reward function with standard format
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion)) for completion in completions]
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_reward_func_conversational(self):
-        # Test if trainer can handle reward function with conversational format
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that gives higher scores to longer completion content."""
-            completion_contents = [completion[0]["content"] for completion in completions]
-            return [float(len(content)) for content in completion_contents]
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1543,10 +1508,6 @@ class TestGRPOTrainer(TrlTestCase):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion)) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1557,7 +1518,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
+            reward_funcs=[str_length_reward, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1629,7 +1590,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1662,7 +1623,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1692,7 +1653,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1773,6 +1734,21 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
+
+    def test_get_gamma_weights_ignores_masked_tokens(self):
+        # Regression test for #7952: a token outside the mask must not contribute to the sequence weight, even when
+        # its importance sampling ratio is 0 (as set by `vllm_importance_sampling_mode="token_mask"`).
+        advantages = torch.tensor([[1.0], [-1.0]])
+        log_ratio_per_token = torch.zeros((2, 4))
+        importance_sampling_ratio = torch.ones((2, 4))
+        importance_sampling_ratio[:, 2] = 0.0
+        mask = torch.ones((2, 4))
+        mask[:, 2] = 0.0
+
+        phi_seq = GRPOTrainer.get_gamma_weights(advantages, log_ratio_per_token, mask, importance_sampling_ratio)
+
+        # Every remaining token is on-policy with ratio 1, so w = 1 and φ(1) = 1
+        torch.testing.assert_close(phi_seq, torch.ones((2, 1)))
 
     @pytest.mark.parametrize(
         "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
@@ -1918,7 +1894,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1947,7 +1923,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2005,7 +1981,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_name,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2034,7 +2010,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2067,7 +2043,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2124,7 +2100,7 @@ class TestGRPOTrainer(TrlTestCase):
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -2168,7 +2144,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2250,7 +2226,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2277,7 +2253,7 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=GRPOConfig(output_dir=self.tmp_dir, report_to="none", entropy_coef=0.1),
             train_dataset=dataset,
         )
@@ -2306,7 +2282,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2338,7 +2314,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2375,7 +2351,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2394,10 +2370,67 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("sampling_kwargs", [{"top_p": 0.9}, {"min_p": 0.05}])
-    def test_vllm_top_p_and_min_p_require_top_k(self, sampling_kwargs):
+    @pytest.mark.parametrize(
+        "sampling_kwargs",
+        [
+            {"top_p": 0.9},
+            {"min_p": 0.05},
+            {"vllm_structured_outputs_regex": r"\d+"},
+            {"generation_kwargs": {"structured_outputs": {"regex": r"\d+"}}},
+        ],
+    )
+    def test_vllm_filtered_sampling_requires_top_k(self, sampling_kwargs):
         with pytest.raises(ValueError, match="top_k"):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
+
+    @require_vllm
+    @pytest.mark.parametrize(
+        "server_returns_sampling_mask",
+        [
+            False,
+            pytest.param(
+                True,
+                marks=pytest.mark.skipif(
+                    not is_vllm_available(min_version="0.28.0"),
+                    reason="returning the candidate set of each sampled token requires vLLM >= 0.28",
+                ),
+            ),
+        ],
+    )
+    def test_vllm_server_structured_outputs_needs_sampling_mask(self, server_returns_sampling_mask):
+        # Without the candidate sets the grammar leaves, the importance ratio would be ~0
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="server",
+            top_k=10,
+            vllm_structured_outputs_regex=r"\d+",
+        )
+        model_config = {"logprobs_mode": "processed_logprobs", "return_sampling_mask": server_returns_sampling_mask}
+        with (  # stand in for the vLLM server
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "Qwen/Qwen2.5-0.5B-Instruct"}]}),
+            patch.object(VLLMClient, "init_communicator"),
+            patch.object(VLLMClient, "get_server_info", return_value={"model_config": model_config}),
+        ):
+            if server_returns_sampling_mask:
+                trainer = GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs=str_length_reward,
+                    args=training_args,
+                    train_dataset=dataset,
+                )
+                assert trainer.vllm_generation.return_sampling_mask
+            else:
+                with pytest.raises(ValueError, match="--return-sampling-mask"):
+                    GRPOTrainer(
+                        model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                        reward_funcs=str_length_reward,
+                        args=training_args,
+                        train_dataset=dataset,
+                    )
 
     def test_vllm_repetition_penalty_requires_no_importance_sampling_correction(self):
         with pytest.raises(ValueError, match="repetition_penalty"):
@@ -2427,7 +2460,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2435,10 +2468,25 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
     @require_peft
+    def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
+        # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
+        with pytest.raises(ValueError, match="ensure_weight_tying"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                reward_funcs=str_length_reward,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+    @require_peft
     @require_vllm
-    @pytest.mark.xfail(
-        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
-        strict=True,
+    @pytest.mark.skipif(
+        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
+        reason="`ensure_weight_tying` requires PEFT >= 0.18",
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
@@ -2461,10 +2509,11 @@ class TestGRPOTrainer(TrlTestCase):
             target_modules="all-linear",
             # test with non-default modules as it adds extra keys in state_dict that we need to handle
             modules_to_save=["embed_tokens", "lm_head"],
+            ensure_weight_tying=True,  # vLLM holds the tied embeddings as one tensor
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=lora_config,
@@ -2485,10 +2534,9 @@ class TestGRPOTrainer(TrlTestCase):
                 # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_vllm
-    @pytest.mark.xfail(
-        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes (see #7954)",
-        strict=True,
+    @pytest.mark.skipif(
+        not is_vllm_available(min_version="0.28.0"),
+        reason="returning the candidate set of each sampled token requires vLLM >= 0.28",
     )
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
@@ -2501,12 +2549,14 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
+            logging_steps=1,
             use_vllm=True,
+            top_k=10,  # the trainer normalizes its log-probs over the candidate set the grammar leaves to vLLM
             vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2516,6 +2566,9 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Over the full vocabulary, the trainer's log-probs of the tokens the grammar forces would be several nats lower
+        for log in trainer.state.log_history[:-1]:
+            assert log["sampling/sampling_logp_difference/mean"] < 0.1
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2551,7 +2604,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2586,7 +2639,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2624,7 +2677,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2666,7 +2719,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2735,7 +2788,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2786,7 +2839,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2828,7 +2881,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2879,9 +2932,6 @@ class TestGRPOTrainer(TrlTestCase):
         sums per-token contributions (length-weighting each sequence instead of following the GSPO objective)."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def dummy_reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             importance_sampling_level="sequence",
@@ -2894,7 +2944,7 @@ class TestGRPOTrainer(TrlTestCase):
         with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=dummy_reward_func,
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -2916,7 +2966,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2946,7 +2996,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2987,7 +3037,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3018,7 +3068,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3129,7 +3179,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3178,7 +3228,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3207,7 +3257,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3239,7 +3289,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -3279,7 +3329,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=tools,
@@ -3380,7 +3430,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[lookup_tool],
@@ -3432,7 +3482,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],
@@ -3483,7 +3533,7 @@ class TestGRPOTrainer(TrlTestCase):
         with patch("trl.trainer.grpo_trainer.is_jmespath_available", return_value=False):
             GRPOTrainer(  # must construct without raising
                 model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 tools=[multiply_tool],
@@ -3554,7 +3604,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
@@ -3679,7 +3729,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
@@ -3755,7 +3805,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             environment_factory={"counter": CounterEnvironment},
@@ -3803,7 +3853,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=DummyEnvironment,
         )
@@ -3895,10 +3945,6 @@ class TestGRPOTrainer(TrlTestCase):
                 """
                 return text
 
-        def reward_func(completions, **kwargs):
-            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property.
-            return [1.0] * len(completions)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -3909,7 +3955,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=reward_func,
+            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=PropertyEnvironment,
         )
@@ -4056,9 +4103,6 @@ class TestGRPOTrainer(TrlTestCase):
             def get_reward(self) -> float:
                 return 1.0 if self._solved else 0.0
 
-        def format_reward(completions, **kwargs):
-            return [0.0 for _ in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -4069,14 +4113,14 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=format_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=DummyEnvironment,
         )
 
         # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
         # a fixed weight of 1.
-        assert trainer.reward_func_names == ["format_reward", "DummyEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "DummyEnvironment"]
         assert trainer.reward_weights.tolist() == [0.5, 1.0]
         assert len(trainer.reward_funcs) == 2
         # `get_reward` is not exposed as a tool; `guess` is.
@@ -4130,9 +4174,6 @@ class TestGRPOTrainer(TrlTestCase):
                 """
                 return x
 
-        def format_reward(completions, **kwargs):
-            return [0.0 for _ in completions]
-
         # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
         dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
 
@@ -4144,7 +4185,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs=format_reward,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
@@ -4153,7 +4194,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
         # column is appended after the trainer-owned reward func, with a fixed weight of 1.
-        assert trainer.reward_func_names == ["format_reward", "ScoredEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "ScoredEnvironment"]
         assert trainer.reward_weights.tolist() == [1.0, 1.0]
 
         # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
@@ -4181,7 +4222,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="`train_dataset` is required"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
             )
 
@@ -4203,7 +4244,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="max_steps"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 environment_factory=DummyEnvironment,
             )
@@ -4228,7 +4269,7 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="requires a `train_dataset`"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 environment_factory={"a": EnvA, "b": EnvB},
             )
@@ -4257,9 +4298,6 @@ class TestGRPOTrainer(TrlTestCase):
             completion_ids = torch.tensor([rows[i % 3] for i in range(input_ids.shape[0])], device=input_ids.device)
             return torch.cat([input_ids, completion_ids], dim=-1)
 
-        def reward_len(completions, **kwargs):
-            return [float(len(completion[-1]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4272,7 +4310,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            reward_funcs=reward_len,
+            reward_funcs=str_length_reward,
             args=training_args,
             environment_factory=GuessTheWordEnvironment,
         )
@@ -4308,7 +4346,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],
@@ -4431,13 +4469,10 @@ class TestGRPOTrainer(TrlTestCase):
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4509,10 +4544,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4524,7 +4555,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4555,7 +4586,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4568,7 +4599,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4583,10 +4614,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4599,7 +4626,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4624,10 +4651,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -4640,7 +4663,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4668,10 +4691,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4683,7 +4702,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -4714,10 +4733,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4735,7 +4750,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -4771,10 +4786,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_dora_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4792,7 +4803,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -4831,10 +4842,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4847,7 +4854,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4882,10 +4889,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4899,7 +4902,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4935,7 +4938,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=lambda completions, **kwargs: [float(len(c[0]["content"])) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4954,10 +4957,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4969,7 +4968,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -4998,10 +4997,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
@@ -5013,7 +5008,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -5054,8 +5049,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5127,8 +5121,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5208,8 +5201,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[screenshot_tool],
@@ -5270,8 +5262,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
-            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             tools=[multiply_tool],

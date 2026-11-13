@@ -130,7 +130,11 @@ def check_shared_mem(arch="ampere", device=None):
     if not torch.cuda.is_available():
         return False
     required = {"ampere": 163840, "ada": 101376, "hopper": 232448}[arch]
-    return torch.cuda.get_device_properties(device).shared_memory_per_block_optin >= required
+    # Read through Triton, as flash-linear-attention does: torch only exposes it on CUDA, not ROCm
+    driver = triton.runtime.driver.active
+    if device is None:
+        device = driver.get_current_device()
+    return driver.utils.get_device_properties(device)["max_shared_mem"] >= required
 
 
 @triton.jit
@@ -148,7 +152,7 @@ def forward_states(k, w, u, g, tree):
     final = k.new_empty(len(tree["tree_segment_parents"]), value_heads, key_dim, value_dim, dtype=torch.float32)
     v_new = torch.empty_like(u)
     for segments in tree["tree_levels"]:
-        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         chunk_gated_delta_rule_fwd_kernel_h_blockdim64[
             lambda meta, segments=segments: (triton.cdiv(value_dim, meta["BV"]), len(segments) * value_heads)
         ](
@@ -170,7 +174,7 @@ def forward_states(k, w, u, g, tree):
             K=key_dim,
             V=value_dim,
             BT=64,
-            enable_fp_fusion=True,
+            enable_fp_fusion=False,
         )
     return h, v_new
 
@@ -182,7 +186,7 @@ def backward_states(q, k, w, g, do, dv, tree, scale):
     d_initial = k.new_empty(len(tree["tree_segment_parents"]), value_heads, key_dim, value_dim, dtype=torch.float32)
     du = torch.empty_like(dv)
     for segments in reversed(tree["tree_levels"]):
-        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64[
             lambda meta, segments=segments: (triton.cdiv(value_dim, meta["BV"]), len(segments) * value_heads)
         ](
@@ -208,7 +212,7 @@ def backward_states(q, k, w, g, do, dv, tree, scale):
             K=key_dim,
             V=value_dim,
             BT=64,
-            enable_fp_fusion=True,
+            enable_fp_fusion=False,
         )
     return dh, du
 
@@ -225,7 +229,7 @@ class TreeGatedDeltaRule(torch.autograd.Function):
         g = chunk_local_cumsum_scalar(g, scale=1.4426950408889634, **layout)
         # Retain upstream's fused 64-token KKT + triangular solve, and low-precision WY representation.
         a = k.new_zeros(1, k.shape[1], v.shape[2], 64)
-        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         chunk_gated_delta_rule_fwd_kkt_solve_kernel[(len(tree["tree_chunk_indices"]), v.shape[2])](
             k=k,
             g=g,
@@ -238,7 +242,7 @@ class TreeGatedDeltaRule(torch.autograd.Function):
             BT=64,
             BC=16,
             **layout,
-            enable_fp_fusion=True,
+            enable_fp_fusion=False,
         )
         w, u = recompute_w_u_fwd(k, v, beta, a, g, **layout)
         h, v_new = forward_states(k, w, u, g, tree)
@@ -1050,7 +1054,7 @@ def recompute_w_u_fwd(
 
     w = k.new_empty(B, T, HV, K)
     u = torch.empty_like(v)
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     recompute_w_u_fwd_kernel[(NT, B * HV)](
         k=k,
         v=v,
@@ -1069,7 +1073,7 @@ def recompute_w_u_fwd(
         BT=BT,
         BK=BK,
         BV=BV,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     return w, u
 
@@ -1096,7 +1100,7 @@ def prepare_wy_repr_bwd(
     dv = torch.empty_like(v)
     dg = torch.empty_like(g)
     db = torch.empty_like(beta)
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     prepare_wy_repr_bwd_kernel[(NT, B * HV)](
         k=k,
         v=v,
@@ -1119,7 +1123,7 @@ def prepare_wy_repr_bwd(
         BT=BT,
         BK=BK,
         BV=BV,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     if H != HV:
         dk = dk.view(B, T, H, HV // H, K).sum(3)
@@ -1440,7 +1444,7 @@ def chunk_fwd_o(
     def grid(meta):
         return (triton.cdiv(V, meta["BV"]), NT, B * HV)
 
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     chunk_fwd_kernel_o[grid](
         q=q,
         k=k,
@@ -1457,7 +1461,7 @@ def chunk_fwd_o(
         K=K,
         V=V,
         BT=BT,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     return o
 
@@ -1486,7 +1490,7 @@ def chunk_bwd_dv_local(
 
     dv = torch.empty_like(do)
     grid = (NT, B * HV)
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     chunk_bwd_kernel_dv_local[grid](
         q=q,
         k=k,
@@ -1504,7 +1508,7 @@ def chunk_bwd_dv_local(
         BT=BT,
         BK=BK,
         BV=BV,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     return dv
 
@@ -1549,7 +1553,7 @@ def chunk_bwd_dqkwg(
     dw = torch.empty_like(w)
 
     grid = (NK, NT, B * HV)
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     chunk_bwd_kernel_dqkwg[grid](
         q=q,
         k=k,
@@ -1575,7 +1579,7 @@ def chunk_bwd_dqkwg(
         BT=BT,
         BK=BK,
         BV=BV,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
 
     if H != HV:
@@ -1644,7 +1648,7 @@ def chunk_local_cumsum_scalar(
     NT = len(chunk_indices)
     g_org, g = g, torch.empty_like(g, dtype=torch.float32)
     grid = (NT, B * H)
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     chunk_local_cumsum_scalar_kernel[grid](
         s=g_org,
         o=g,
@@ -1656,7 +1660,7 @@ def chunk_local_cumsum_scalar(
         H=H,
         BT=BT,
         REVERSE=reverse,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     return g
 
@@ -1754,7 +1758,7 @@ def l2norm_fwd(
     def grid(meta):
         return (triton.cdiv(T, meta["BT"]),)
 
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     l2norm_fwd_kernel[grid](
         x=x,
         y=y,
@@ -1764,7 +1768,7 @@ def l2norm_fwd(
         D=D,
         BD=BD,
         NB=NB,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
     return y.view(x_shape_og), rstd.view(x_shape_og[:-1])
 
@@ -1791,7 +1795,7 @@ def l2norm_bwd(
     def grid(meta):
         return (triton.cdiv(T, meta["BT"]),)
 
-    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
+    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
     l2norm_bwd_kernel[grid](
         y=y,
         rstd=rstd,
@@ -1802,7 +1806,7 @@ def l2norm_bwd(
         D=D,
         BD=BD,
         NB=NB,
-        enable_fp_fusion=True,
+        enable_fp_fusion=False,
     )
 
     return dx.view(y_shape_og)

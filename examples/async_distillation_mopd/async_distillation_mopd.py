@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_mopd/async_distillation_mopd.py
+CUDA_VISIBLE_DEVICES=3 python examples/async_distillation_mopd/async_distillation_mopd.py
 """
 
 import argparse
@@ -125,7 +125,7 @@ def main() -> None:
         max_staleness=8,
         max_concurrent_rollouts=args.max_concurrent_rollouts
         if args.max_concurrent_rollouts is not None
-        else (16 if csd else None),
+        else (16 if csd else 512),
         max_steps=args.max_steps,
         save_strategy="steps" if csd else "no",
         save_steps=args.save_steps,

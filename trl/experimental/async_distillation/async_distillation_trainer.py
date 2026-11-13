@@ -38,6 +38,7 @@ from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.distributed._tensor import DTensor
+from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -87,7 +88,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
-    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `count` word in the name is a count of events in the window, summed (producers push deltas).
     - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
       (`completions/max_length`) working alongside this trainer's own (`row_tokens_max`).
     - anything else is a gauge, and its window mean is meaningful.
@@ -98,7 +99,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
         numerator, denominator = (sum(v) for v in zip(*values, strict=True))
         return numerator / denominator if denominator else float("nan")
     words = key.split("/")[-1].split("_")
-    if "total" in words:
+    if "count" in words:
         return sum(values)
     if "max" in words:
         return max(values)
@@ -485,7 +486,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
-                self.metrics["batch/dropped_oversize_total"].append(1.0)
+                self.metrics["batch/dropped_oversize_count"].append(1.0)
                 continue
             fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
             if not fits:
@@ -625,11 +626,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         check_health_fn,
         stale_after_s,
         metrics,
+        token_allowance,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
     ):
         self.queue = rollout_queue
+        self.token_allowance = token_allowance
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
         self.stale_after_s = stale_after_s
@@ -640,6 +643,9 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # Blocking-get time, accumulated here and flushed by `_log_step_metrics` at the optimizer-step boundary — the
         # only place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
+        self.consumed_tokens = 0
+        self.step_tokens = 0
+        self.lookahead_tokens = 0
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
         self.report_to = report_to or []
@@ -683,23 +689,26 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             self.wait_s += wait_s
             if wait_s > 1.0:
                 logger.info(f"waited {wait_s:.1f}s for sample (qsize={self.queue.qsize()})")
+            self.consumed_tokens += len(sample.input_ids)
+            self.step_tokens += len(sample.input_ids)
+            self.token_allowance.value = self.consumed_tokens + self.lookahead_tokens
 
             version = self.model_version_fn()
             staleness = version - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
-                self.metrics["sample/dropped_stale_total"].append(1.0)
+                self.metrics["sample/dropped_stale_count"].append(1.0)
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
-            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
             #                                them rather than where the worker filled it
             #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
             #                                half of its off-policyness
             #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
-            # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
-            # (and then `rollout/backpressure_s` is what generation lost to it).
-            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            # An empty queue with the trainer waiting is generation-bound; a queue holding `max_staleness` steps with no
+            # wait is trainer-bound (and then `rollout/backpressure_s` is what generation lost to it).
+            self.metrics["rollout/queue_size"].append(float(self.queue.qsize()))
             if sample.enqueued_at is not None:
                 self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
@@ -779,7 +788,6 @@ class DataCollatorForRollout(DataCollatorMixin):
     prompts_trained: set[int] = field(default_factory=set)
     # The trainer's metric sink, shared by reference (like `prompts_trained`).
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
-    # Per-row token cap of the planner,
     token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
@@ -921,7 +929,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         # weights that move once the adapter has been merged into them.
         if not is_peft and not param.requires_grad:
             continue
-        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        # Strip the prefixes DDP/FSDP1 and gradient checkpointing add, so the names match vLLM's
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -1356,8 +1364,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # NOTE: See https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # Initialize the Trainer
@@ -1405,17 +1418,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 f"Epoch-driven stop: {self._epoch_stop_prompts} prompts "
                 f"({self.args.num_train_epochs} epochs x {len(train_dataset)} prompts); "
                 f"max_steps={self.args.max_steps} is a safety ceiling."
-            )
-
-        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
-        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_concurrent_rollouts is None:
-            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
-            logger.info(
-                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
-                f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
         # `compute_loss` bypasses `lm_head` by calling `unwrapped_model.base_model(...)` directly, which skips the
@@ -1515,7 +1517,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 processing_class=processing_class,
                 eos_token_ids=self.eos_token_ids,
                 max_concurrent_rollouts=self.args.max_concurrent_rollouts,
-                queue_maxsize=self.args.queue_maxsize,
                 vllm_server_url=self.args.vllm_server_base_url,
                 teacher_server_urls=self.args.teacher_server_urls,
                 teacher_top_k=self.args.teacher_top_k,
@@ -1570,6 +1571,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
+                token_allowance=self.rollout_worker.token_allowance,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1582,6 +1584,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
+            self._rollout_dataset.lookahead_tokens = (
+                max(self.args.max_staleness, 1)
+                * self.args.gradient_accumulation_steps
+                * num_processes
+                * self.args.token_budget
+            )
+            self.rollout_worker.token_allowance.value = self._rollout_dataset.lookahead_tokens
             dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
         else:
             dataset = _EmptyIterableDataset()
@@ -1613,27 +1622,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             for batch in batch_samples:
                 batch["global_n_chunks"] = global_n_chunks.expand_as(batch["global_n_chunks"])
         return batch_samples, num_items_in_batch
-
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed. In
-        # AsyncDistillationTrainer, we need additional columns to compute the loss, hence the override.
-        if self._signature_columns is None:
-            self._signature_columns = [
-                "input_ids",
-                "attention_mask",
-                "completion_mask",
-                "position_ids",
-                "teacher_topk_ids",
-                "teacher_topk_logprobs",
-                "teacher_id",
-                "teacher_id_idx",
-                "global_n_tokens",
-                "global_n_chunks",
-                "csd_prefix_lengths",
-                "csd_weights",
-                "global_n_forward_tokens",
-                "mean_seq_len",
-            ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
@@ -1739,7 +1727,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
-        # NOTE(@aminediro): supporting Cohere2 models (mirrors `add_fused_lm_head`'s own handling).
+        # Supports Cohere2 models (mirrors `add_fused_lm_head`'s own handling).
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         config = unwrapped_model.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
@@ -1871,8 +1859,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # blended versions above conflate teachers that can behave very differently (e.g. a "math" and a "code"
             # teacher). Student entropy isn't broken down here: it's a property of the student's own policy, not of
             # which teacher scored the sample, so the blended `entropy` metric already covers it. Named
-            # `teacher_jsd/{teacher_id}` (not `jsd/{teacher_id}`) so it doesn't collide with the flat `jsd` metric
-            # above in dashboards that treat `/` as a grouping separator (e.g. wandb/trackio).
+            # `teacher/{teacher_id}/jsd` (not `jsd/{teacher_id}`) so it doesn't collide with the flat `jsd` metric
+            # above in dashboards that treat `/` as a grouping separator (e.g. wandb/trackio), and so the teacher id,
+            # which the user chooses, isn't the last segment that `_reduce_metric` reads.
             # `teacher_id_idx` is either present on every rank or absent on every rank (it depends only on
             # `self.args.teacher_server_urls`, identical config on all ranks), so every rank takes this branch
             # together or skips it together — required for `accelerator.reduce` below to stay in sync across ranks.
@@ -1888,24 +1877,24 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
                     # averages below use, since zero tokens is itself the answer here.
                     if self.args.distillation_method == "csd":
-                        self._metrics["train"][f"teacher_chunk_frac/{teacher_id}"].append(
+                        self._metrics["train"][f"teacher/{teacher_id}/chunk_frac"].append(
                             (t_count.item(), global_count.item())
                         )
-                        self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                        self._metrics["train"][f"teacher/{teacher_id}/token_frac"].append(
                             (token_counts[i].item(), global_n_tokens.item())
                         )
                     else:
-                        self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                        self._metrics["train"][f"teacher/{teacher_id}/token_frac"].append(
                             (t_count.item(), global_count.item())
                         )
                     if t_count > 0:
-                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
-                        self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(
+                        self._metrics["train"][f"teacher/{teacher_id}/jsd"].append((t_jsd_sum / t_count).item())
+                        self._metrics["train"][f"teacher/{teacher_id}/entropy"].append(
                             (t_teacher_entropy_sum / t_count).item()
                         )
                     else:
-                        self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
-                        self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
+                        self._metrics["train"][f"teacher/{teacher_id}/jsd"].append(float("nan"))
+                        self._metrics["train"][f"teacher/{teacher_id}/entropy"].append(float("nan"))
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
@@ -1957,27 +1946,35 @@ class AsyncDistillationTrainer(_BaseTrainer):
         if self.accelerator.is_main_process:
             metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
             self._rollout_dataset.wait_s = 0.0
+            if self._rollout_dataset.step_tokens:
+                self._rollout_dataset.lookahead_tokens = (
+                    max(self.args.max_staleness, 1) * self._rollout_dataset.step_tokens
+                )
+                self._rollout_dataset.token_allowance.value = (
+                    self._rollout_dataset.consumed_tokens + self._rollout_dataset.lookahead_tokens
+                )
+            self._rollout_dataset.step_tokens = 0
 
         # Throughput and MFU are reported on TWO bases, because for async distillation one number cannot answer both
         # questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            if self._peak_flops_per_device is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
+            if self._peak_flops_per_device is not None and flops_per_token is not None:
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                if self._peak_flops_per_device is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
+                if self._peak_flops_per_device is not None and flops_per_token is not None:
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,
@@ -2002,7 +1999,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             while True:
                 try:
                     for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
-                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        # The worker only generates training rollouts, so its metrics always go to the train metrics
                         self._metrics["train"][key].append(value)
                 except queue.Empty:
                     break
@@ -2012,6 +2009,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
             valid = [v for v in val if isinstance(v, tuple) or not math.isnan(v)]
             metrics[key] = _reduce_metric(key, valid) if valid else None
 
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
@@ -2040,7 +2039,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         else:
             t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
         weight_sync_s = time.time() - t0
-        # log the three phases  of weight sync
+        # Total time and its three phases
         self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
         self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
         self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
@@ -2064,6 +2063,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
+            self.model_version += 1
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -2074,7 +2076,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
         # `finally` is not optional: leaving it merged would train merged weights from the next step on.
         if is_peft_model(model):
-            model.merge_adapter()
+            with implicit_replication():
+                model.merge_adapter()
         try:
             if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
@@ -2084,7 +2087,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     pass
         finally:
             if is_peft_model(model):
-                model.unmerge_adapter()
+                with implicit_replication():
+                    model.unmerge_adapter()
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
@@ -2092,9 +2096,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
             self.weight_transfer.resume()
-            self.model_version += 1
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
     def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:

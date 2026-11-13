@@ -20,6 +20,7 @@ import transformers
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -30,7 +31,6 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
-from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
@@ -48,13 +48,18 @@ if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
+def str_length_reward(completions, **kwargs):
+    """Reward function that rewards longer completions, whatever their format."""
+    return [float(len(str(completion))) for completion in completions]
+
+
 class TestRLOOTrainer(TrlTestCase):
     def test_init_minimal(self):
-        # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
+        # Test that RLOOTrainer can be instantiated with only model, reward function and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
 
@@ -104,7 +109,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -124,6 +129,34 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
+
     def test_logps_match_plain_forward(self):
         # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -137,7 +170,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -200,7 +233,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -220,21 +253,18 @@ class TestRLOOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         with pytest.raises(ValueError, match="custom code"):
             RLOOTrainer(
                 model=model_id,
                 args=RLOOConfig(output_dir=self.tmp_dir, report_to="none"),
-                reward_funcs=reward_func,
+                reward_funcs=str_length_reward,
                 train_dataset=dataset,
             )
 
         trainer = RLOOTrainer(
             model=model_id,
             args=RLOOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
@@ -254,7 +284,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -278,7 +308,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -301,7 +331,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -340,7 +370,7 @@ class TestRLOOTrainer(TrlTestCase):
             with pytest.raises(ValueError, match="`train_dataset` is required"):
                 RLOOTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    reward_funcs=str_length_reward,
                     args=training_args,
                     train_dataset=train_dataset,
                 )
@@ -348,14 +378,14 @@ class TestRLOOTrainer(TrlTestCase):
             with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
                 RLOOTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    reward_funcs=str_length_reward,
                     args=training_args,
                     train_dataset=train_dataset,
                 )
         else:
             trainer = RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=train_dataset,
             )
@@ -394,7 +424,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -417,7 +447,7 @@ class TestRLOOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -430,7 +460,7 @@ class TestRLOOTrainer(TrlTestCase):
         training_args = RLOOConfig(output_dir=self.tmp_dir, dataloader_num_workers=4, max_steps=1, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -453,7 +483,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -502,7 +532,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -528,7 +558,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -553,7 +583,7 @@ class TestRLOOTrainer(TrlTestCase):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
             trainer = RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=RLOOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
@@ -580,7 +610,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -621,7 +651,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -667,7 +697,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -716,7 +746,7 @@ class TestRLOOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             RLOOTrainer(
                 model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
@@ -740,7 +770,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -759,12 +789,16 @@ class TestRLOOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
     @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
@@ -780,7 +814,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -824,7 +858,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -859,7 +893,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -875,8 +909,7 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_different_reward_model(self):
-        # Use a reward model different from the model: different chat template, tokenization, etc.
+    def test_train_with_reward_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
         reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id)
@@ -901,75 +934,6 @@ class TestRLOOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             reward_processing_classes=reward_tokenizer,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_reward_func_standard(self):
-        # Test if trainer can handle reward function with standard format
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion)) for completion in completions]
-
-        training_args = RLOOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-        trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_reward_func_conversational(self):
-        # Test if trainer can handle reward function with conversational format
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that gives higher scores to longer completion content."""
-            completion_contents = [completion[0]["content"] for completion in completions]
-            return [float(len(content)) for content in completion_contents]
-
-        training_args = RLOOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-        trainer = RLOOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1198,10 +1162,6 @@ class TestRLOOTrainer(TrlTestCase):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion)) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1212,7 +1172,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
+            reward_funcs=[str_length_reward, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1281,7 +1241,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1305,7 +1265,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1338,7 +1298,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1368,7 +1328,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1400,7 +1360,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1415,6 +1375,21 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
+        # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
+        with pytest.raises(ValueError, match="ensure_weight_tying"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                reward_funcs=str_length_reward,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
 
     @require_peft
     @require_vllm
@@ -1440,7 +1415,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1449,10 +1424,9 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.xfail(
-        condition=is_vllm_available(min_version="0.29.0"),
-        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises (see #7955)",
-        strict=True,
+    @pytest.mark.skipif(
+        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
+        reason="`ensure_weight_tying` requires PEFT >= 0.18",
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
@@ -1475,10 +1449,11 @@ class TestRLOOTrainer(TrlTestCase):
             target_modules="all-linear",
             # test with non-default modules as it adds extra keys in state_dict that we need to handle
             modules_to_save=["embed_tokens", "lm_head"],
+            ensure_weight_tying=True,  # vLLM holds the tied embeddings as one tensor
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=lora_config,
@@ -1516,7 +1491,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1551,7 +1526,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1588,7 +1563,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1630,7 +1605,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1660,7 +1635,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1679,6 +1654,10 @@ class TestRLOOTrainer(TrlTestCase):
     def test_train_with_clipped_rewards(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function with rewards on both sides of the clip range."""
+            return [2.0 * i - 2.0 for i in range(len(completions))]
+
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1690,7 +1669,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1740,7 +1719,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1778,7 +1757,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1837,7 +1816,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1878,7 +1857,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1909,7 +1888,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2020,7 +1999,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2067,7 +2046,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2099,7 +2078,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2202,13 +2181,10 @@ class TestRLOOTrainer(TrlTestCase):
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            return [0.0] * len(completions)
-
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2280,10 +2256,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2295,7 +2267,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2326,7 +2298,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2339,7 +2311,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2354,10 +2326,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
         # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2370,7 +2338,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2395,10 +2363,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_beta_non_zero(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -2411,7 +2375,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2439,10 +2403,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2454,7 +2414,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -2485,10 +2445,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2506,7 +2462,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -2542,10 +2498,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_peft_dora_and_quantization(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2563,7 +2515,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -2612,10 +2564,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2629,7 +2577,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2656,10 +2604,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_multi_image(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2671,7 +2615,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model=model_id,
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -2700,10 +2644,6 @@ class TestRLOOTrainerVLM(TrlTestCase):
     def test_train_vlm_log_multimodal_false(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
@@ -2715,7 +2655,7 @@ class TestRLOOTrainerVLM(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            reward_funcs=reward_func,
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )

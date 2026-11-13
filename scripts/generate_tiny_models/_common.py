@@ -148,6 +148,22 @@ def _flatten(d, prefix=""):
 _DIFF_IGNORE = {"_name_or_path", "transformers_version", "architectures", "model_type", "torch_dtype", "dtype"}
 
 
+_TORCH_TO_SAFETENSORS_DTYPE = {
+    torch.float32: "F32",
+    torch.float16: "F16",
+    torch.bfloat16: "BF16",
+    torch.float64: "F64",
+    torch.float8_e4m3fn: "F8_E4M3",
+    torch.float8_e5m2: "F8_E5M2",
+    torch.int8: "I8",
+    torch.int16: "I16",
+    torch.int32: "I32",
+    torch.int64: "I64",
+    torch.uint8: "U8",
+    torch.bool: "BOOL",
+}
+
+
 def check_dtype_pattern(reference_id, model):
     """Flag tensors whose dtype diverges from the reference checkpoint.
 
@@ -155,20 +171,29 @@ def check_dtype_pattern(reference_id, model):
     that `model` saves, whose names follow the reference layout (in memory, transformers may rename or fuse tensors).
     Useful to catch cases like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is
     bf16.
+
+    `model` can also be the state dict that gets saved, when the script writes the checkpoint itself (quantized weights).
     """
     try:
-        metadata = api.get_safetensors_metadata(reference_id)
+        files_metadata = api.get_safetensors_metadata(reference_id).files_metadata.values()
     except NotASafetensorsRepoError:
-        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
-        return
-    ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
+        # No transformers index: read the headers of the other safetensors files (e.g. Mistral's consolidated format)
+        filenames = [name for name in api.list_repo_files(reference_id) if name.endswith(".safetensors")]
+        if not filenames:
+            print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+            return
+        files_metadata = [api.parse_safetensors_file_metadata(reference_id, name) for name in filenames]
+    ref_dtypes = {name: info.dtype for fm in files_metadata for name, info in fm.tensors.items()}
 
-    tiny_dtypes = {}
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        model.save_pretrained(tmp_dir)
-        for path in Path(tmp_dir).glob("*.safetensors"):
-            with safe_open(path, "pt") as f:
-                tiny_dtypes.update({name: f.get_slice(name).get_dtype() for name in f.keys()})
+    if isinstance(model, nn.Module):
+        tiny_dtypes = {}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+            for path in Path(tmp_dir).glob("*.safetensors"):
+                with safe_open(path, "pt") as f:
+                    tiny_dtypes.update({name: f.get_slice(name).get_dtype() for name in f.keys()})
+    else:
+        tiny_dtypes = {name: _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype) for name, tensor in model.items()}
 
     unmatched = [name for name in tiny_dtypes if name not in ref_dtypes]
     if unmatched:
@@ -232,6 +257,10 @@ def _parse_args():
         help="If the repo already exists, open a PR instead of skipping.",
     )
     parser.add_argument(
+        "--revision",
+        help="Push to this existing PR of the repo (e.g. refs/pr/3) instead of skipping.",
+    )
+    parser.add_argument(
         "--full-diff",
         action="store_true",
         help="Print untruncated values in the config diff.",
@@ -240,9 +269,20 @@ def _parse_args():
     return args
 
 
-def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model.save_pretrained(tmpdir)
+        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr, revision)
+
+
+def push_dir_to_hub(
+    save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None
+):
+    """Push the model files saved in `save_dir`, with the tokenizer, generation config and model card, in one commit."""
     if create_pr is None:
         create_pr = _parse_args().create_pr
+    if revision is None:
+        revision = _parse_args().revision
 
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
@@ -254,38 +294,37 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, c
         repo_id += f"-{suffix}"
 
     exists = api.repo_exists(repo_id)
-    if exists and not create_pr:
-        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR)")
+    if exists and not create_pr and revision is None:
+        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR, or --revision to update one)")
         return
 
     if not exists:
         api.create_repo(repo_id, exist_ok=True)
 
-    # Save all artifacts to a temp dir and upload them in a single commit, so --create-pr opens one PR.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model.save_pretrained(tmpdir)
-        if tokenizer is not None:
-            tokenizer.save_pretrained(tmpdir)
-        if generation_config is not None:
-            generation_config.save_pretrained(tmpdir)
-        model_card.save(os.path.join(tmpdir, "README.md"))
+    # Upload all artifacts in a single commit, so --create-pr opens one PR.
+    if tokenizer is not None:
+        tokenizer.save_pretrained(save_dir)
+    if generation_config is not None:
+        generation_config.save_pretrained(save_dir)
+    model_card.save(os.path.join(save_dir, "README.md"))
 
-        operations = [
-            CommitOperationAdd(
-                path_in_repo=os.path.relpath(os.path.join(root, name), tmpdir),
-                path_or_fileobj=os.path.join(root, name),
-            )
-            for root, _, files in os.walk(tmpdir)
-            for name in files
-        ]
-        commit_info = api.create_commit(
-            repo_id=repo_id,
-            operations=operations,
-            commit_message=f"Upload {model.__class__.__name__}",
-            create_pr=exists and create_pr,
+    operations = [
+        CommitOperationAdd(
+            path_in_repo=os.path.relpath(os.path.join(root, name), save_dir),
+            path_or_fileobj=os.path.join(root, name),
         )
-        if commit_info.pr_url:
-            print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
+        for root, _, files in os.walk(save_dir)
+        for name in files
+    ]
+    commit_info = api.create_commit(
+        repo_id=repo_id,
+        operations=operations,
+        commit_message=f"Upload {model.__class__.__name__}",
+        create_pr=exists and create_pr,
+        revision=revision,
+    )
+    if commit_info.pr_url:
+        print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
 
 
 def init_weights_tiny_model(model):

@@ -1,55 +1,25 @@
-# Asynchronous GRPO
+# Asynchronous GRPO Trainer
 
-> [!IMPORTANT]
-> This trainer requires `vllm`, `transformers>=5.2.0` and `kernels` (training loads FlashAttention from the Hub through it). For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
->
-> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first, then force-install transformers, then add `kernels` through TRL's extra, which pins the version transformers accepts:
->
-> ```bash
-> pip install vllm
-> pip install 'transformers>=5.2.0' --no-deps
-> pip install 'trl[kernels]'
-> ```
+[![model badge](https://img.shields.io/badge/All_models-Asynchronous_GRPO-blue)](https://huggingface.co/models?other=async-grpo,trl)
 
 ## Overview
 
-[`experimental.async_grpo.AsyncGRPOTrainer`] implements the same [GRPO](grpo_trainer) algorithm but decouples rollout generation from training. A background worker continuously streams completions from a vLLM server while the training loop consumes them, so generation and gradient updates overlap instead of alternating. The API mirrors [`GRPOTrainer`] — for full details on the GRPO method itself (advantage computation, KL estimation, loss formulation, reward functions, etc.), see the [GRPO Trainer](grpo_trainer) documentation. Not all features from [`GRPOTrainer`] are available; refer to [`experimental.async_grpo.AsyncGRPOConfig`] for the supported parameters.
+[`experimental.async_grpo.AsyncGRPOTrainer`] implements the same [GRPO](grpo_trainer) algorithm but decouples rollout generation from training. A background worker continuously streams completions from a vLLM server while the training loop consumes them, so generation and gradient updates overlap instead of alternating.
 
-This trainer was contributed by [Quentin Gallouédec](https://huggingface.co/qgallouedec) and [Amine Dirhoussi](https://huggingface.co/aminediroHF).
-
-## How it differs from [`GRPOTrainer`]
-
-In the standard [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update weights, repeat. Even in [vLLM colocate mode](grpo_trainer#speed-up-training-with-vllm-powered-generation), where generation runs on the same GPUs, one phase must finish before the other begins.
-
-[`experimental.async_grpo.AsyncGRPOTrainer`] separates these two concerns:
-
-- **Rollout worker** (background process) — sends prompts to a vLLM server, scores completions with reward functions, computes advantages, and pushes ready-to-train samples into a queue.
-- **Training loop** (main process) — pulls samples from the queue, computes the clipped surrogate loss, and updates the model weights.
-
-The rollout worker runs in a separate process spawned from the trainer, so reward computation never contends with the training loop for the GIL. This has two consequences for what you can pass as `reward_funcs`, `tools`, and `environment_factory` (for the latter, see the [OpenEnv guide](openenv), which covers the contract and the available integrations):
-
-> [!WARNING]
-> Because we run the rollout worker in a separate process, everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must therefore be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Tools are the exception: the model calls a tool by its name, so each tool is registered under its `__name__` and must be a module-level function. Lambdas and closures will raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
->
-> The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A **GPU-backed reward model** (e.g. an `AutoModelForSequenceClassification` scorer) still loads without error but silently falls back to **CPU** (note that in [`GRPOTrainer`], such a reward model shares the trainer's GPUs). Keep reward functions CPU-side and lightweight (verifiers like `accuracy_reward`, format/length checks).
->
-> If you do need a GPU reward model, the recommended approach is to **serve it behind its own inference engine** (vLLM, TGI, …) on separate GPUs and have a lightweight, picklable reward function call it over HTTP. This keeps the reward model on its own device while the rollout process stays CPU-only, and it scales independently of the trainer.
-
-Tools and environment methods can be synchronous or asynchronous. Synchronous tools run on a thread pool sized to `max_concurrent_rollouts`, so a slow tool never blocks the other in-flight vLLM requests. Within one assistant turn, tool calls run in the order the model emitted them. Up to `max_concurrent_rollouts` synchronous tools therefore run at once, so a tool that reads or writes shared state must be thread-safe.
-
-After every `weight_sync_steps` training steps, the updated weights are transferred to the vLLM server via NCCL so that subsequent generations reflect the latest policy.
-
-Because generation and training run concurrently, the training samples may have been generated by a slightly older version of the model. The `max_staleness` parameter controls how many weight updates a sample can lag behind before being dropped.
-
-### Concurrency
-
-The number of concurrent requests sent to the vLLM server is capped by `max_concurrent_rollouts`. By default it is set automatically to `max(max_staleness, 1) × per_device_train_batch_size × gradient_accumulation_steps × num_processes` — the maximum number of samples the trainer can consume before they become stale. Generating more than this is wasteful since the excess samples will be dropped.
-
-`max_concurrent_rollouts` is a ceiling, not the number actually in flight. The worker polls the server's `/metrics` endpoint every few seconds and keeps a live cap underneath it (`rollout/concurrency_cap`): past a certain concurrency, more requests make vLLM *slower*, because the KV cache fills, sequences are preempted and recomputed, and cached prefixes are evicted and re-prefilled. The cap starts at `KV cache tokens / max_model_len`, read from the server at startup: as many requests as fit at full length, so the first step cannot thrash. While usage stays under 0.6 with nothing queued, the cap grows by 25% each time a cap's worth of rollouts has completed, up to the ceiling. When KV cache usage passes 0.8, the cap is cut by 30%; no running request is cancelled, admissions just stop until the pool has drained below the new cap, and no further cut is taken until then. If the server does not expose `/metrics`, the cap stays at the ceiling.
-
-**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
+This trainer was contributed by [Amine Dirhoussi](https://huggingface.co/aminediroHF) and [Quentin Gallouédec](https://huggingface.co/qgallouedec).
 
 ## Quick start
+
+This example demonstrates how to train a model using the Asynchronous GRPO method. We train a [Qwen3.5 2B model](https://huggingface.co/Qwen/Qwen3.5-2B) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+Below is the script to train the model. The trainer needs vLLM and kernels, and `accuracy_reward` needs math-verify, which you can install with `pip install trl[vllm,kernels,math_verify]`.
 
 ```python
 # train_async_grpo.py
@@ -57,106 +27,427 @@ from datasets import load_dataset
 from trl.experimental.async_grpo import AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+if __name__ == "__main__":  # the rollout worker is a spawned process that re-imports this script
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3-4B",
-    reward_funcs=accuracy_reward,
-    train_dataset=dataset,
-)
-trainer.train()
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+    )
+    trainer.train()
 ```
 
-The vLLM server and the trainer must run on **separate GPUs**. Use `CUDA_VISIBLE_DEVICES` to partition your GPUs. For example, with 2 GPUs, you can run the vLLM server on GPU 0 and the trainer on GPU 1 as follows:
-
-```bash
-# Terminal 1: vLLM server on GPU 0 (dev mode + NCCL weight transfer are required)
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
-    --max-model-len 4096 \
-    --logprobs-mode processed_logprobs \
-    --api-server-count 8 \
-    --weight-transfer-config '{"backend":"nccl"}'
-```
-
-> [!TIP]
-> Set `--max-model-len` to the maximum total sequence length (prompt + completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config.
-
-```bash
-# Terminal 2: training on GPU 1
-CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
-```
-
-## AMD GPUs
-
-The trainer runs on AMD GPUs (ROCm) with no extra setup: the commands above work as they are. Training uses the [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) attention kernel on AMD GPUs, [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs, all downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
-
-## Vision-language models
-
-Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, …) can be trained on **text-only** datasets. Pass the model id as usual; nothing else changes:
+Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
-    --max-model-len 4096 \
+    --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
-    --weight-transfer-config '{"backend":"nccl"}'
+    --max-model-len 4096
 ```
 
-**The vision tower is frozen.** A text-only dataset never produces image tokens, so the tower is never exercised by the forward pass. Everything outside the text tower (vision tower, multimodal projector) has `requires_grad=False`: it gets no gradients and no optimizer state, and weight sync skips it entirely — the server keeps the values it loaded from the checkpoint. The tower is still loaded, so it costs GPU memory for its weights.
-
-> [!WARNING]
-> **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
-
-## Top-k and top-p sampling
-
-Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was actually drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
+Then execute the script on GPU 1 using the following command:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
-    --max-model-len 4096 \
+CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
+```
+
+## Compatibility and constraints
+
+Some argument combinations are intentionally restricted in the current [`experimental.async_grpo.AsyncGRPOTrainer`] implementation:
+
+- Generation always runs on a separate vLLM server, started with `vllm serve`. There is no colocate mode.
+- Prompts from the dataset must be in [conversational](dataset_formats#conversational) format. With an `environment_factory`, the dataset may have no `prompt` column, and `reset()` provides it.
+- Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
+- The trainer needs `transformers>=5.2.0`.
+- Sharded training uses FSDP2. DeepSpeed is not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
+- `use_liger_kernel=True` is not supported.
+- PEFT adapters targeting `lm_head` are not supported.
+- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...), which need `transformers>=5.15.0`.
+- Images are not supported, see [Training Vision Language Models](#training-vision-language-models).
+
+Training loads its attention kernel from the Hub through the [`kernels`](https://github.com/huggingface/kernels) library: [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) on AMD GPUs (ROCm), [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
+
+## Looking deeper into the Asynchronous GRPO method
+
+In [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update the weights, repeat. Even in [colocate mode](grpo_trainer#option-1-colocate-mode), one phase must finish before the other begins. In [`experimental.async_grpo.AsyncGRPOTrainer`], a rollout worker generates and scores completions in a background process while the training loop computes the loss and updates the model. To understand how it works, it can be broken down into three main steps: **Generating completions**, **computing the advantage**, and **computing the loss**. There is no reference model, so there is no KL divergence term (GRPO's default, `beta=0.0`).
+
+### Generating completions
+
+The rollout worker keeps up to `max_concurrent_rollouts` requests in flight to the vLLM server. For each prompt, it generates a group of  \\( G \\) completions (`num_generations`) and, once the whole group is done, scores it and computes its advantages. The resulting training samples go into a queue, which the training loop pulls from. Generation waits only when it is `max_staleness` steps ahead of training (see [Concurrency](#concurrency)), and a training step only waits when the queue is empty.
+
+Every `weight_sync_steps` training steps, the trainer sends its updated weights to the vLLM server over NCCL, so the next completions come from the latest policy. A completion can therefore come from a policy a few steps older than the one being trained: a sample more than `max_staleness` weight updates behind when the trainer pulls it is dropped.
+
+The metrics and the rest of this page use the following terms for the stages a completion goes through:
+
+- a **group** is one prompt and its  \\( G \\) rollouts. The advantage is computed within it.
+- a **rollout** is one full conversation generated for a prompt, including every tool call. It is made of one or more **turns**, one vLLM request each.
+- a **sample** is what the loss is computed on: the tokens of a rollout, with its advantage. A multi-turn rollout can produce more than one sample (see [Multi-turn rollouts](#multi-turn-rollouts)).
+- a **row** is what one process forwards in one micro-batch: several samples packed together (see [Tree packing](#tree-packing)). A **micro-batch** holds one row per process, and `gradient_accumulation_steps` micro-batches make one **step**, the optimizer step.
+
+Token counts come in three kinds: **generated** tokens are what the model produced, **forwarded** tokens are every token of a sample (prompt and tool results included), and **trained** tokens are the ones the loss is taken over.
+
+### Computing the advantage
+
+For each of the  \\( G \\) completions of a group, the reward is the sum of the rewards from each reward function. The advantage is normalized within the group, as in GRPO:
+
+$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
+
+There is no `scale_rewards` option: the advantage is always scaled by the group's standard deviation. A completion for which every reward function returned `None` is left out of the group's mean and standard deviation and gets an advantage of zero.
+
+A group whose rewards are all equal is dropped: with the default advantage it is zero everywhere, so training on it would cost a forward and backward pass and move nothing. The fraction of such groups is logged as `frac_reward_zero_std`. The step is filled from the groups that are kept, so many dropped groups means more generation per step. A dropped group still counts toward the epoch, which stays one pass over the prompts.
+
+### Computing the loss
+
+The vLLM server's log-probabilities never match the trainer's exactly: different kernels, a different precision, and a policy a few steps behind (see [Dealing with the Training-Inference Mismatch](grpo_trainer#dealing-with-the-training-inference-mismatch)). The trainer uses the sampler's log-probabilities as the old policy, so a single importance ratio covers both the mismatch and the staleness:
+
+$$
+r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\text{sampler}}(o_{i,t} \mid q, o_{i,< t})}.
+$$
+
+Tokens whose ratio falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are dropped from the loss. For more information, see [Masked Importance Sampling](paper_index#masked-importance-sampling).
+
+By default (`score_centering=True`), the trainer uses [Score Centering](paper_index#score-centering-stabilizes-off-policy-reinforcement-learning). Importance weights alone do not remove the mismatch: the score  \\( \nabla_\theta \log \pi_\theta \\) of a sampled token does not average to zero under the sampler  \\( \mu \\), so every update also pulls the policy toward the sampler. Score centering subtracts that expectation at every position:
+
+$$
+\nabla_\theta \mathcal{L} = - \mathbb{E}_{o \sim \mu} \left[ \hat{A} \left( f(r_t) \nabla_\theta \log \pi_\theta(o_t) - \mathbb{E}_{v \sim \mu} \left[ f(r_v) \nabla_\theta \log \pi_\theta(v) \right] \right) \right], \quad r_v = \frac{\pi_\theta(v)}{\mu(v)},
+$$
+
+where  \\( f(r) = r \\) inside  \\( [C_{\min}, C_{\max}] \\) and  \\( 0 \\) outside. The inner expectation is taken over the sampler's `num_sampler_logprobs` most likely tokens at each position, which the rollout worker requests from the server.
+
+With `score_centering=False`, the trainer uses GRPO's clipped surrogate objective instead, with the same masked ratio:
+
+$$
+\mathcal{L}(\theta) = - \frac{1}{\sum_{i} |o_i|} \sum_{i} \sum_{t=1}^{|o_i|} \mathbb{1}\left[ C_{\min} \le r_{i,t}(\theta) \le C_{\max} \right] \min \left( r_{i,t}(\theta) \hat{A}_{i,t}, \, \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_{\text{low}}, 1 + \epsilon_{\text{high}} \right) \hat{A}_{i,t} \right),
+$$
+
+where  \\( \epsilon_{\text{low}} \\) is `epsilon` and  \\( \epsilon_{\text{high}} \\) is `epsilon_high`.
+
+In both cases, the loss is normalized by the number of trained tokens in the micro-batch, counted across all processes, and averaged over the `gradient_accumulation_steps` micro-batches of a step.
+
+## Logged metrics
+
+While training, we record the following metrics:
+
+- `num_tokens`: The total number of tokens forwarded so far, prompts and completions. With tree packing, a prefix shared by several samples is counted once.
+- `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS. When using tools, only non-tool tokens are counted.
+- `completions/clipped_ratio`: The ratio of truncated (clipped) completions, whose last turn does not end with an EOS token.
+- `completions/duplicate_frac`: The fraction of rollouts that repeat an earlier rollout of their group token for token. See [Saturation and duplicates](#saturation-and-duplicates).
+- `tools/call_frequency`: The average number of tool calls per completion, over every rollout, including the groups that are then dropped. Logged only when the trainer has tools.
+- `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception), over every tool call, including the groups that are then dropped. It is NaN in a logging window with no tool call, where GRPO logs `0.0`. Logged only when the trainer has tools.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over every completion it scored, including the groups that are then dropped. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/group_std`: The standard deviation of the reward from a specific reward function, computed within each group and averaged over the trained samples.
+- `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
+- `reward_group_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples. It is what the advantage is divided by, unlike GRPO's `reward_std`, which is taken over the whole batch.
+- `reward_kept`: The average reward of the trained samples, which excludes the dropped groups.
+- `reward_dropped`: The average reward of the groups that were dropped, the reward they are stuck at. See [Saturation and duplicates](#saturation-and-duplicates) to read it with `frac_reward_zero_std` and `reward`.
+- `frac_reward_zero_std`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
+- `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over trained tokens.
+- `sampling/sampling_logp_difference/max`: The largest such absolute difference.
+- `sampling/importance_sampling_ratio/min`: The smallest importance sampling ratio  \\( r_{i,t}(\theta) \\) between the model and the sampler, over trained tokens, before the tokens outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are dropped.
+- `sampling/importance_sampling_ratio/mean`: The average such importance sampling ratio.
+- `sampling/importance_sampling_ratio/max`: The largest such importance sampling ratio.
+- `sampling/masked_mean`: The fraction of trained tokens dropped from the loss because their importance sampling ratio falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`.
+- `sampling/sampler_mass`: The average probability mass the sampler's `num_sampler_logprobs` most likely tokens cover. Logged only when `score_centering=True`.
+- `entropy`: Average entropy of token predictions across trained tokens.
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
+- `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right) \\). With `score_centering=True` the loss does not clip, so the `clip_ratio/*` metrics count the tokens outside the trust region.
+- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/low_min`: The smallest per-completion fraction of tokens clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
+- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/high_max`: The largest per-completion fraction of tokens clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+
+The other metrics describe the asynchronous pipeline.
+
+Metrics are logged once per **logging window**: everything recorded since the previous log, which covers the last `logging_steps` optimizer steps. Over the window:
+
+- A mean measured per rollout, sample or call, like `reward`, `rollout/turns_mean` and `tools/latency_s`, is averaged over all the rollouts, samples or calls in the window. A rate like `rollout/generated_tokens_per_s` is the total tokens divided by the total seconds.
+- Otherwise, a name whose last part contains the word `count` is summed: `sample/dropped_stale_count` is the number of samples dropped since the last log, not since the start of training.
+- A name whose last part contains the word `max` or `min`, like `sample/staleness_max` or `completions/max_length`, keeps the largest or smallest value.
+- Any other metric is the mean of the values recorded in the window.
+
+Units:
+
+- `_s`: seconds.
+- `tokens_per_s`: tokens per second.
+- `_frac`: fraction between 0 and 1.
+- `_per_step`: amount in one optimizer step, averaged over the steps in the window.
+
+### Rollout metrics
+
+- `rollout/duration_s`: The wall time of one rollout, from dispatch until the rollout loop collects it.
+- `rollout/generated_tokens_per_s`: The generation throughput, in generated tokens per second, since the previous report.
+- `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
+- `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
+- `rollout/turns_mean`, `rollout/turns_max`: The average and maximum number of turns per rollout.
+- `rollout/samples_per_rollout`: The number of training samples per rollout. Above `1.0`, some rollouts were forked; below `1.0`, some produced no trained token. See [Multi-turn rollouts](#multi-turn-rollouts).
+- `rollout/fork_frac`: The fraction of turn transitions whose prompt does not start with the held tokens, so the turn started a new sample.
+- `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`: The number of held tokens a fork re-rendered, averaged over turn transitions (one that does not fork counts as `0`). The new sample shares the tokens before the divergence, so this is what each fork adds to the forward.
+- `rollout/score_queue_size`: The number of completed groups waiting to be scored.
+- `rollout/queue_size`: The number of scored samples waiting in the rollout queue, measured where the trainer pulls them. See [The rollout queue](#the-rollout-queue).
+- `rollout/score_s`: The time to score a group.
+- `rollout/score_wait_s`: The time a completed group waited before being scored.
+- `rollout/score_block_s`: The time generation was blocked because the scoring queue was full.
+- `rollout/backpressure_s`: The time generation waited to start a rollout because it was `max_staleness` steps ahead of training, averaged over the waits in the logging window. See [Concurrency](#concurrency).
+- `rollout/vllm_retry_count`: The number of retried vLLM requests. A degraded server otherwise looks like unexplained slowness.
+- `rollout/vllm_kv_cache_usage_frac`: The vLLM KV cache usage (maximum over engines), averaged over the polls in the logging window.
+- `rollout/vllm_running_requests`: The number of requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses.
+- `rollout/vllm_queued_requests`: The number of requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines).
+- `rollout/vllm_preemption_count`: The number of requests the server preempted (vLLM's `num_preemptions_total`, summed over engines). A weight sync resets the server's caches, which preempts every running request, so this is not a pressure signal.
+
+### Tool metrics
+
+- `tools/latency_s`, `tools/{tool_name}/latency_s`: The time spent executing a tool call, over all tools and per tool.
+- `tools/{tool_name}/call_count`, `tools/{tool_name}/failure_count`: The number of calls and failed calls per tool.
+- `tools/unknown_name_count`: The number of calls to a tool that does not exist. Unlike a tool that ran and raised, this is a policy error.
+- `tools/parallel_calls_mean`: The average number of tool calls in an assistant message that calls tools.
+- `tools/loop_exhausted_frac`: The fraction of rollouts cut off at `max_tool_calling_iterations` while still calling tools, over every rollout, including rollouts with no call and the groups that are then dropped. Logged only when the trainer has tools.
+
+`HarnessAsyncGRPOTrainer` logs most of these under the same names. See [Training on harnesses](openenv#metrics) for the differences.
+
+### Environment metrics
+
+- `env/reset_s`: The time spent in the environment's `reset()` before a rollout starts. Logged only when `environment_factory` is provided.
+- `env/reward_s`: The time spent in the environment's `get_reward()` after a rollout ends. Logged only when the environment defines `get_reward`.
+
+### Sample metrics
+
+- `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max`: The average and maximum number of forwarded tokens per sample.
+- `sample/trained_tokens_mean`: The average number of trained tokens per sample.
+- `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
+- `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. The `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` metrics combine this staleness with the training-inference mismatch: a ratio away from `1.0` or a log-probability difference away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
+- `sample/dropped_stale_count`: The number of samples dropped for exceeding `max_staleness`.
+
+### Batch metrics
+
+- `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`: The number of forwarded and trained tokens per step, over all processes.
+- `batch/samples_per_step`, `batch/groups_per_step`: The number of samples and of distinct groups per step. They differ by the number of samples per group.
+- `batch/microbatches_per_step`: The number of micro-batches per step.
+- `batch/masked_token_frac`: The fraction of forwarded tokens that are not trained.
+- `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max`: The number of samples per row, and the average and maximum number of forwarded tokens per row.
+- `batch/row_fill_frac`: The fraction of `token_budget` the rows use.
+- `batch/row_imbalance`: The ratio of the most expensive row's attention cost to the average one. The process with the most expensive row stalls the others at the gradient all-reduce; `1.0` is perfect balance.
+- `batch/packing_ratio`: The number of tokens before packing per forwarded token: the factor by which packing shrinks the forward, `1.0` when nothing is shared.
+- `batch/pad_frac`: The fraction of padding added to make the rows the same length. It only costs transfer, it is removed before the forward.
+- `batch/dropped_oversize_count`: The number of samples dropped for exceeding `token_budget`.
+
+### Performance metrics
+
+- `perf/step_s`: The wall time of a step, including the optimizer, the weight sync and the time waiting for samples.
+- `perf/fwd_bwd_s`, `perf/fwd_s`: The time spent in the forward and backward passes of a step, and in its forward passes alone.
+- `perf/optimizer_s`: The time spent in the optimizer step.
+- `perf/rollout_wait_s`: The time training waited because the rollout queue was empty. See [The rollout queue](#the-rollout-queue).
+- `perf/weight_sync_s`: The time of a weight sync, split into `perf/weight_sync_pause_s` (waiting for vLLM to pause), `perf/weight_sync_barrier_s` (waiting for the other processes) and `perf/weight_sync_transfer_s` (sending the weights).
+- `perf/fwd_bwd_forwarded_tokens_per_s`, `perf/wall_clock_forwarded_tokens_per_s`: The number of forwarded tokens per second, over the forward and backward passes or over the whole step.
+- `perf/wall_clock_trained_tokens_per_s`: The number of trained tokens per second, over the whole step.
+- `perf/fwd_bwd_mfu`, `perf/wall_clock_mfu`: The model FLOPs utilization of the training devices, over the forward and backward passes or over the whole step. They exclude the vLLM server. Logged only when the peak compute of the training device at the training precision is known, and when the FLOPs estimate supports the model's architecture (such as Llama, Qwen2, Qwen3, Qwen3-MoE or Qwen3-VL).
+
+## Customization
+
+### Configuring the vLLM server
+
+The trainer generates with a vLLM server, which it reaches at `vllm_server_base_url` (`http://localhost:8000` by default):
+
+```bash
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+    --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
-    --weight-transfer-config '{"backend":"nccl"}' \
+    --max-model-len 4096
+```
+
+- `VLLM_SERVER_DEV_MODE=1` and `--weight-transfer-config` expose the endpoints the trainer sends its weights through.
+- `--logprobs-mode processed_logprobs` makes the server return the log-probabilities of the distribution it sampled from, after temperature and top-k/top-p, which is what the importance ratio compares against.
+- `--api-server-count 8` keeps the top log-probabilities that score centering requests cheap to serve (see the warning below).
+- `--max-model-len` is the maximum total sequence length (prompt and completion) you expect. A lower value reduces GPU memory usage on the server, freeing more memory for the KV cache and increasing throughput. A good starting point is the prompt length plus `max_completion_length` from your config. With tools, every turn adds up to `max_completion_length` tokens plus the tool results, so set it to the longest conversation you expect. If a turn's prompt plus `max_completion_length` is longer than `--max-model-len`, the server rejects the request and the run stops with the server's error. With `top_k` or `top_p`, the server instead stops that turn when it reaches `--max-model-len`, and only rejects a prompt that is already that long. It is also the default `token_budget`.
+
+> [!WARNING]
+> Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
+
+> [!WARNING]
+> Serializing the top log-probabilities is CPU work in vLLM's API server, and with its default single API server `num_sampler_logprobs=8` halves generation throughput. Start the server with `--api-server-count 8` on vLLM 0.32 or later: measured on one H100 with 1.5B to 7B models, the top-8 log-probabilities then cost under 3% of generation throughput. On vLLM 0.31 the same flag still leaves a 20 to 40% loss, fixed upstream by [vllm-project/vllm#58181](https://github.com/vllm-project/vllm/pull/58181).
+
+### Concurrency
+
+Three limits decide how many rollouts run at once. The first two adapt on their own; the third is yours to set.
+
+**Staleness.** `max_staleness` sets how many training steps generation may run ahead of the trainer. The worker tracks this in tokens, because the number of samples in a step changes as completions get longer or shorter. After each step, the trainer counts the tokens it used, and lets the worker keep up to `max(max_staleness, 1)` times that many tokens queued or in progress. Before the first step, it assumes every row is full. The worker starts a new group of rollouts only while it is under that limit. At the very start it doesn't know yet how many tokens a rollout produces, so it starts one group at a time until the first group finishes. A sample that still ends up more than `max_staleness` steps old is dropped.
+
+**vLLM load.** Sending vLLM too many requests at once makes it slower: the KV cache fills up, and vLLM has to pause and redo some requests. So the worker also keeps a live limit on how many rollouts run at once, logged as `rollout/concurrency_cap`, and checks the server's `/metrics` every 5 seconds to adjust it. The limit starts at the number of requests that fit in the KV cache at full length (`KV cache tokens / max_model_len`), so the server isn't overloaded at the start. While KV-cache usage stays below 60% and no requests are waiting, the limit goes up by 25%, at most once per cap's worth of finished rollouts. When usage goes above 80%, it goes down by 30%: running requests keep going, and new ones wait. If the server has no `/metrics` endpoint, the limit is `max_concurrent_rollouts`.
+
+**Resources.** `max_concurrent_rollouts` (`512` by default) is the upper limit on rollouts running at once. It's the one limit you set yourself, because the trainer can't see what your environments and tools can handle. Each running rollout uses an environment, can run synchronous tool calls on a thread pool of this size, and keeps a connection open to the vLLM server. Set it to what those can handle, for example the number of sessions your environment server accepts:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    max_concurrent_rollouts=64,
+)
+```
+
+If it's too low, generation slows down. A rollout keeps its slot while it runs tools or waits between turns, not only while vLLM generates, so rollouts that call many tools need more slots to keep vLLM busy. If it's much higher than the default, the vLLM server can start dropping connections.
+
+> [!TIP]
+> The logged metrics show which limit is holding generation back:
+>
+> - `rollout/backpressure_s` above zero: the staleness limit. Generation is ahead of training, which is expected when inference is faster than training.
+> - `rollout/concurrency` at `rollout/concurrency_cap`, below `max_concurrent_rollouts`: the vLLM server's load.
+> - `rollout/concurrency` at `max_concurrent_rollouts`, with low `rollout/vllm_kv_cache_usage_frac` and high `perf/rollout_wait_s`: the ceiling. Raise `max_concurrent_rollouts` if your environments and tools allow it.
+
+### The rollout queue
+
+The worker pushes scored samples into a queue and the trainer pulls from it. Four metrics describe that queue:
+
+- `rollout/queue_size`: how many samples are waiting.
+- `sample/time_in_queue_s`: how long a single sample waited before being trained on, the time part of its staleness.
+- `perf/rollout_wait_s`: how long training waited because the queue was empty.
+- `rollout/backpressure_s`: how long generation waited because it was `max_staleness` steps ahead of training.
+
+The last two are mirror images. Read together with the queue size, they tell you which side is the bottleneck:
+
+- queue near empty, `perf/rollout_wait_s` high: **generation-bound**. The trainer is starving; look at `rollout/generated_tokens_per_s`, `rollout/concurrency` and `rollout/score_queue_size`.
+- queue holding about `max_staleness` steps of tokens, `rollout/backpressure_s` high: **trainer-bound**. Generation is held back, and `sample/staleness_mean` sits near its bound.
+- both high: the `max_staleness` limit itself is too tight. The rollouts in flight fill it before their samples reach the queue, so the trainer waits while generation is held back. Raise `max_staleness`.
+- both near zero: balanced.
+
+### Saturation and duplicates
+
+The policy learns from the differences between the rollouts of a group: each advantage is taken against the group's mean reward. When every rollout of a group gets the same reward, they all get a zero advantage, so the group is dropped (see [Logged metrics](#logged-metrics)) and teaches the policy nothing. As a run saturates, more and more groups end up like this, either because every rollout solves the prompt or because none does. Four metrics tell these cases apart, and each one answers its own question, so you can read them straight off their plots:
+
+| metric | question |
+| --- | --- |
+| `frac_reward_zero_std` | what share of groups carry no signal |
+| `reward_dropped` | where those groups are stuck: their mean reward. With 0/1 rewards it is the share of them in which every rollout passed, so 0.9 means that almost all of them are solved, and 0.1 that almost all of them fail every rollout |
+| `reward` | how well the policy does over every scored group, dropped ones included |
+| `completions/duplicate_frac` | whether sampling still gives different rollouts for the same prompt |
+
+Read the first three together, against the range of your reward:
+
+| `frac_reward_zero_std` | `reward_dropped` | `reward` | diagnosis | what to do |
+| --- | --- | --- | --- | --- |
+| low | any (noisy over few groups) | any | **healthy**: most groups produce a gradient | nothing |
+| climbing | near the top of the range | climbing | **saturating at the top**: the prompts have become too easy for the policy, which is how a successful run usually ends | stop the run, or move to harder prompts |
+| high | near the bottom of the range | low and flat | **stuck at the bottom**: the prompts are too hard, or the reward function never gives credit | check `completions/clipped_ratio` first, since a completion cut off before its answer scores 0, then read a few completions to check that the reward function parses them |
+| climbing | falling | falling | **regression**: groups that used to pass now fail together | check `completions/duplicate_frac` and `entropy` for a collapse |
+| high | in the middle | any | **a mix**: with 0/1 rewards, some prompts are too easy and others too hard. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts |
+
+`completions/duplicate_frac` is the share of rollouts that repeat an earlier rollout of their group token for token, across all of their turns. Identical rollouts get identical rewards, so duplicates also push `frac_reward_zero_std` up.
+
+| `completions/duplicate_frac` | diagnosis |
+| --- | --- |
+| near 0, with a small baseline on tasks whose completions are short enough to repeat by chance | **healthy**: the rollouts of a group are sampled independently |
+| jumps towards `(num_generations - 1) / num_generations` | **sampling is no longer random**: every group comes back as copies of one rollout. For example, a temperature of 0, or data-parallel vLLM engines decoding the same text because they share a sampling seed (the worker sends a unique seed with every request to prevent this) |
+| climbs slowly, with `entropy` falling | **collapse**: the policy is converging onto one answer per prompt |
+
+These metrics are recorded when the worker scores a group, not when its samples are trained on, so they run slightly ahead of training and include groups whose samples are later dropped for exceeding `max_staleness`. A group in which no rollout could be scored, because every reward function returned `None`, is dropped and counted in `frac_reward_zero_std`, but it has no reward, so `reward_dropped` leaves it out.
+
+### Tree packing
+
+The samples of a micro-batch are packed into one row per process, without padding. A row is a **prefix trie**, not a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own history. The rollouts of a group all repeat its prompt, and every turn of a multi-turn rollout repeats the conversation so far, so the forward shrinks by the packing ratio (`batch/packing_ratio`). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and its log-probability matches forwarding the sample on its own.
+
+On two rollouts of one prompt, where `p` is the prompt and `a`, `b` the two completions:
+
+```
+1. Rollouts         r0:  p1 p2 p3 a1 a2                10 tokens
+                    r1:  p1 p2 p3 b1 b2
+
+2. Trie             S0 [p1 p2] ─┬─ S1 [p3 a1 a2]       p3 is not shared: a position predicts
+                                └─ S2 [p3 b1 b2]       one token, and p3 predicts a1 or b1
+
+3. Packed row       index         0  1 |  2  3  4 |  5  6  7
+   (depth-first)    input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2    8 tokens: everything but attention
+                    position_ids  0  1 |  2  3  4 |  2  3  4    runs on 8 instead of 10
+                    segment      S0    | S1       | S2
+
+4. Attention        segment   queries    keys and values: the segment's path in the trie
+   (one call)       S0        p1 p2      p1 p2              index 0 1
+                    S1        p3 a1 a2   p1 p2 p3 a1 a2     index 0 1 2 3 4
+                    S2        p3 b1 b2   p1 p2 p3 b1 b2     index 0 1 5 6 7
+
+5. Loss             r0: a1 a2 predicted at index 2 3   each trained token is predicted at the index
+                    r1: b1 b2 predicted at index 5 6   of the token before it in its rollout
+```
+
+A few consequences:
+
+- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. A sample goes to the row that already holds its group, where its prompt already is. When that row is full, the sample goes to another row if a process still has an empty one, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
+- **Nothing shared is plain packing**: every sample is then its own segment, which is ordinary padding-free packing.
+- **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with grouped-query attention.
+- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, ...): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state.
+
+`token_budget` bounds the tokens of a row, counting a shared token once. By default, it is the server's `max_model_len`, so no sample can exceed it. With nothing shared, tree packing runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8 to 3x at a ratio of 3.4 on Qwen3-0.6B and 1.7B, on H100). The ratio is shared prefix times samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`. `batch/row_fill_frac` matters when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the planner often gets two and the row runs about 77% full), while 1k-token samples tile it almost perfectly.
+
+Judge tree packing on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/fwd_bwd_mfu`, which divides by forwarded tokens, falls: neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
+
+The batch metrics compose: one step holds `gradient_accumulation_steps × num_processes` rows, so `batch/samples_per_step` is about that many times `batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between the micro-batches of a step, since the per-step metrics are sums and the per-row ones are means.
+
+> [!TIP]
+> Anything that makes rows longer or fewer removes the sharing. A multi-turn conversation that never forks is one long sample, and `rollout/samples_per_rollout` says how many samples a conversation gives.
+
+### Top-k and top-p sampling
+
+Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
+
+```bash
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
+    --max-model-len 4096 \
     --return-sampling-mask \
     --enable-scale-out
 ```
 
 ```python
-config = AsyncGRPOConfig(top_p=0.95, top_k=512)
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    top_p=0.95,
+    top_k=512,
+)
 ```
 
-`--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
+`--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), and `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
 
-## Score centering
+### Train adapters with PEFT
 
-The server's log-probabilities never match the trainer's exactly: different kernels, a different precision, a policy a few steps behind. Importance weights alone do not correct for that, because the score  \\( \nabla_\theta \log \pi_\theta \\) of a sampled token does not average to zero under the sampler, so every update also pulls the policy toward the sampler ([Score centering](https://huggingface.co/papers/2609.20807)). By default the trainer subtracts that expectation at every position (`score_centering=True`), estimated over the sampler's `num_sampler_logprobs` most likely tokens, and drops the tokens whose importance ratio to the sampler falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`. For that the worker requests the top log-probabilities of every generated token from the server, which it serializes per token: a large `num_sampler_logprobs` slows the server down, and its `--max-logprobs` bounds what it accepts. `score_centering=False` trains with the clipped objective alone. `sampling/masked_mean` is the fraction of tokens the bounds dropped and `sampling/sampler_mass` the sampler's probability mass covered by the top tokens.
-
-> [!WARNING]
-> Serializing the top log-probabilities is CPU work in vLLM's API server, and with its default single API server `num_sampler_logprobs=8` halves generation throughput. Start the server with `--api-server-count 8` on vLLM 0.32 or later: measured on one H100 with 1.5B to 7B models, the top-8 log-probabilities then cost under 3% of generation throughput. On vLLM 0.31 the same flag still leaves a 20 to 40% loss, fixed upstream by [vllm-project/vllm#58181](https://github.com/vllm-project/vllm/pull/58181).
-
-## LoRA
-
-Pass a `peft_config` to train a LoRA adapter instead of the full model:
+We support tight integration with the 🤗 PEFT library, letting you train adapters and share them on the Hub rather than training the whole model.
 
 ```python
+from datasets import load_dataset
 from peft import LoraConfig
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+from trl.rewards import accuracy_reward
 
-trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen3-4B",
-    reward_funcs=reward_len,
-    train_dataset=dataset,
-    peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
-)
+if __name__ == "__main__":
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
+    )
+    trainer.train()
 ```
 
 Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-4B \
-    --max-model-len 4096 \
+VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> \
+    --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
-    --weight-transfer-config '{"backend":"nccl"}' \
+    --max-model-len 4096 \
     --enable-lora \
     --max-lora-rank 32 \
     --max-loras 6
@@ -172,9 +463,217 @@ vLLM loads adapters from disk rather than over the network, so the trainer write
 > `<output_dir>/.vllm_lora/` is a serving cache, not where your trained adapter is kept. It only holds the most recent versions, and each one is deleted shortly after it falls out of the staleness window. Checkpoints are what preserve the adapter you trained, so do not turn them off: with `save_strategy="no"` a multi-hour run finishes and leaves nothing behind. `output_dir` also has to be readable by the server and has to outlive the job, so node-local scratch will not work, even though it would keep syncs off a slow shared filesystem.
 
 > [!TIP]
-> Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
+> Adapter sync is not always faster. vLLM generates roughly 1.33 to 1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
-## Customizing the rollout loop
+### Using a custom reward function
+
+The [`experimental.async_grpo.AsyncGRPOTrainer`] supports using custom reward functions. To ensure compatibility, your reward function must satisfy the following requirements:
+
+Reward functions can be either synchronous Python callables or asynchronous `async def` coroutines. When you provide multiple reward functions, they run concurrently: asynchronous ones are awaited together and synchronous ones run in threads, so their latency overlaps.
+
+1. **Input arguments**:
+   - The function must accept the following as keyword arguments:
+     - `prompts` (contains the prompts),
+     - `completions` (contains the generated completions),
+     - `completion_ids` (contains the tokenized completions),
+     - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
+   - The dataset is in [conversational format](dataset_formats#conversational), so `prompts` and `completions` are lists of message dictionaries.
+
+2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
+
+> [!WARNING]
+> Reward functions run in the rollout worker, a separate process, so everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
+>
+> The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A GPU-backed reward model (e.g. an `AutoModelForSequenceClassification` scorer) loads without error but silently falls back to the CPU. Keep reward functions lightweight (verifiers like `accuracy_reward`, format or length checks). If you need a GPU reward model, serve it behind its own inference engine (vLLM, TGI, ...) on separate GPUs and have a picklable reward function call it over HTTP.
+
+#### Example 1: Reward longer completions
+
+Below is an example of a reward function that rewards longer completions:
+
+```python
+def reward_func(completion_ids, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of token count)."""
+    return [float(len(ids)) for ids in completion_ids]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = [[{"role": "user", "content": "The sky is"}], [{"role": "user", "content": "The sun is"}]]  # not used in the reward function, but the trainer will pass it
+>>> completions = [[{"role": "assistant", "content": " blue."}], [{"role": "assistant", "content": " in the sky."}]]  # not used in the reward function, but the trainer will pass it
+>>> completion_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completion_ids=completion_ids)
+[2.0, 4.0]
+```
+
+#### Example 2: Reward completions with a specific format
+
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for a conversational format, where prompts and completions consist of structured messages.
+
+```python
+import re
+
+def format_reward_func(completions, **kwargs):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "user", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "user", "content": "What is the result of (3 + 1) * 2?"}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
+...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
+... ]
+>>> format_reward_func(prompts=prompts, completions=completions)
+[1.0, 0.0]
+```
+
+#### Example 3: Reward completions based on a reference
+
+Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948). The dataset contains a column named `ground_truth`.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, **kwargs):
+    # Regular expression to capture content inside \boxed{}
+    matches = [re.search(r"\\boxed\{(.*?)\}", completion[0]["content"]) for completion in completions]
+    contents = [match.group(1) if match else "" for match in matches]
+    # Reward 1 if the content is the same as the ground truth, 0 otherwise
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "user", "content": "Solve the equation $2x + 3 = 7$."}],
+...     [{"role": "user", "content": "Solve the equation $3x - 5 = 10$."}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": r"The solution is \boxed{2}."}],
+...     [{"role": "assistant", "content": r"The solution is \boxed{6}."}],
+... ]
+>>> ground_truth = ["2", "5"]
+>>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
+[1.0, 0.0]
+```
+
+#### Example 4: Multi-task reward functions
+
+Below is an example of using multiple reward functions in the [`experimental.async_grpo.AsyncGRPOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+
+```python
+from datasets import Dataset
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+
+# Define a dataset that contains both math and coding problems
+dataset = Dataset.from_list(
+    [
+        {"prompt": [{"role": "user", "content": "What is 2+2?"}], "task": "math"},
+        {"prompt": [{"role": "user", "content": "Write a function that returns the sum of two numbers."}], "task": "code"},
+        {"prompt": [{"role": "user", "content": "What is 3*4?"}], "task": "math"},
+        {"prompt": [{"role": "user", "content": "Write a function that returns the product of two numbers."}], "task": "code"},
+    ]
+)
+
+# Math-specific reward function
+def math_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "math":
+            # Calculate math-specific reward
+            correct = check_math_solution(prompt, completion)
+            reward = 1.0 if correct else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-math tasks
+            rewards.append(None)
+    return rewards
+
+# Coding-specific reward function
+def coding_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "code":
+            # Calculate coding-specific reward
+            works = test_code_solution(prompt, completion)
+            reward = 1.0 if works else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-coding tasks
+            rewards.append(None)
+    return rewards
+
+# Use both task-specific reward functions
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        reward_funcs=[math_reward_func, coding_reward_func],
+        train_dataset=dataset,
+    )
+
+    trainer.train()
+```
+
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`experimental.async_grpo.AsyncGRPOTrainer`] will continue with the valid functions and tasks. This allows the [`experimental.async_grpo.AsyncGRPOTrainer`] to handle multiple reward functions with different applicability.
+
+Note that the [`experimental.async_grpo.AsyncGRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+
+#### Example 5: Asynchronous reward functions
+
+Custom reward functions can also be defined as `async def` coroutines. This is useful if your reward depends on slow I/O (for example, calling a remote service). When you pass multiple async reward functions, [`experimental.async_grpo.AsyncGRPOTrainer`] executes them concurrently so their latency overlaps.
+
+Below is a minimal example of an async reward function that simulates an I/O-bound operation:
+
+```python
+import asyncio
+
+async def async_reward_func(prompts, completions, **kwargs):
+    # Simulate an I/O-bound call (e.g., HTTP request, database lookup)
+    await asyncio.sleep(0.01)
+    # Simple toy reward: 1.0 if the completion is non-empty, else 0.0
+    return [1.0 if completion else 0.0 for completion in completions]
+```
+
+#### Passing the reward function to the trainer
+
+To use your custom reward function, pass it to the [`experimental.async_grpo.AsyncGRPOTrainer`] as follows:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+
+trainer = AsyncGRPOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+You can pass several reward functions as a list; this list may include both synchronous and asynchronous functions:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+
+trainer = AsyncGRPOTrainer(
+    reward_funcs=[reward_func, async_reward_func1, async_reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function.
+
+### Customizing the rollout loop
 
 Generation, rewards, advantages and filtering run in the rollout process, in [`experimental.async_grpo.AsyncRolloutLoop`]. To change one of them, subclass the loop, override the method for that step, and set the subclass as `loop_cls` on a trainer subclass. The trainer's constructor doesn't change.
 
@@ -219,297 +718,275 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
-Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
+Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level and keep the training code under `if __name__ == "__main__":`. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
-## Design philosophy
+### Resuming from a checkpoint
 
-This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
+The base [`~transformers.Trainer`] resumes by skipping and replaying the batches it already trained on, which does not apply to a live rollout queue, so `ignore_data_skip` is always `True`. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets ([`~datasets.IterableDataset`]) cannot be repositioned, so their worker restarts from the first prompt on resume.
 
-## Logged metrics
+## Agent Training
 
-A rollout passes through several stages before it becomes a gradient. Let's first take a look at the different stages, from a prompt to our final batch composition:
+Asynchronous GRPO supports **agent training**: the model calls tools during generation and learns from the outcome.
 
-```
-Dataset row = PROMPT (message list + reward kwargs)
- └─ GROUP                  (1 prompt, `num_generations` rollouts, 1 advantage baseline)
-     └─ ROLLOUT            (1 conversation, keyed by `rollout_id`)
-         ├─ TURN           (1 vLLM /v1/completions call + tool messages fed back)
-         │   └─ TurnRecord (prompt_ids, output_ids, output_log_probs)
-         └─ reconcile      (a turn that doesn't extend the held tokens forks a new sequence)
-             └─ SEQUENCE   (≥1 per rollout; new one per fork; dropped if no trained token)
-                 └─ SAMPLE (Sequence + group advantage + reward + metrics)
+- A **tool** is a plain Python function (sync or async) exposed to the model. Use `tools` for stateless calls (a calculator, a web search).
+- An **environment** is the more general form: a stateful object built fresh per rollout, whose public methods are exposed as tools, plus a `reset` lifecycle hook and an optional `get_reward` that lets it own the reward. Use `environment_factory` when you need per-rollout state, a reset hook, or environment-owned reward.
 
-════════════ Trainer process boundary: `rollout_buffer` (mp.Queue) ════════════
-
-                 └─ SAMPLE (Pulled 1 at a time; dropped if staleness > `max_staleness`)
-                     └─ ROW            (Planner inserts it into one of `dp` prefix tries, attention-cost-balanced)
-                         └─ MICRO-BATCH (`dp` rows, one per rank)
-                             └─ PACKED ROW (Collator lays each trie out: unique tokens, depth as `position_ids`)
-                                 └─ FORWARD (`compute_loss`, bs=1, padding stripped, FA3 per trie segment)
-                     └─ OPTIMIZER STEP (from `grad_accum` micro-batches)
-```
-
-Reading it top to bottom:
-
-- a **group** is one prompt generated `num_generations` times. The advantage baseline is computed inside it, which is why the group is also the unit that gets scored.
-- a **rollout** is one conversation. Every turn re-tokenizes the whole message list, so drift between turns has to be reconciled at the end.
-- reconciling can **fork** one rollout into several **sequences**, which is why a single conversation can produce more than one training sample.
-- a **sample** is a sequence plus its advantage, reward and metrics. This is what crosses the process boundary.
-- past the boundary the trainer plans samples into **rows** (one per DP rank), folds each row into a prefix trie so shared tokens are forwarded once, and accumulates `grad_accum` micro-batches into a single optimizer step.
-
-So we split our metrics based on which stage (or _entity_) they are about:
-
-| namespace      | entity it counts                                                                       |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `rollout/`     | represents one _full_ conversation: its turns, its forks, how long it took to generate |
-| `completions/` | what the model (vLLM) generated for one prompt                                         |
-| `tools/`       | tool calls metrics                                                                     |
-| `sample/`      | represents _one_ training sample, as it arrives in the queue                           |
-| `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)             |
-| `perf/`        | measured seconds and FLOPs                                                             |
-| `sampling/`    | how far the trained policy is from the sampler that generated the tokens               |
-
-Let's also define some terms to make token metrics unambiguous:
-
-- **generated** tokens are what the model produced (`completions/*`).
-- **forwarded** tokens are every token the _forward_ pass processes: the prompt, any tool results, and the generated tokens.
-- **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. They're the generated tokens, minus any that a harness capture masks.
-
-### How the batch numbers compose
-
-A **row** is what **one** DP rank forwards in one micro-batch: several samples packed into a single prefix forest, so tokens they share are forwarded once — see [Tree packing](#tree-packing). The planner decides which samples land in which row (balancing attention cost so no rank straggles), and a data collator does the packing.
-
-In all our metrics **a "step" always means one FULL optimizer step**, never a micro-batch. `gradient_accumulation_steps` micro-batches make one step, and every metric named `_per_step` is per optimizer step, matching `global_step`, `logging_steps` and the rest of the [`Trainer`] vocabulary. Where a metric is per micro-batch it says so (`batch/microbatches_per_step`) or it is a per-row quantity (`batch/row_*`, `batch/samples_per_row`).
-
-One step therefore holds a fixed number of **row-slots**:
-
-```
-row-slots per step = gradient_accumulation_steps x world_size
-```
-
-which makes the batch metrics compose into a ladder you can check against each other:
-
-```
-sample                                     sample/forwarded_tokens_mean
-  └─ packed into a ROW                     batch/samples_per_row, batch/row_tokens_mean
-      └─ one row per DP rank               = one micro-batch
-          └─ gradient_accumulation_steps micro-batches = one STEP
-                                           batch/samples_per_step, batch/forwarded_tokens_per_step
-```
-
-So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between micro-batches inside the step — the per-step metrics are sums, the per-row ones are means — so expect a fraction of a percent, not an exact match.
-
-`batch/row_fill_frac` is the one to watch when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the packer often gets two and the row runs ~77% full), while 1k-token samples tile it almost perfectly. That is quantization, not a bug, and `token_budget` is the lever — bearing in mind that attention is O(L²) per sequence, so a fuller row of long sequences does not cost linearly more memory.
-
-### Tree packing
-
-A row is a **prefix trie**, not a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own history. Rollouts of one prompt all repeat it, and every turn of a multi-turn rollout re-sends the conversation, so the decoder's work drops by the **packing ratio** (raw tokens ÷ forwarded tokens). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and its log-probability matches forwarding the sample on its own.
-
-Where it happens:
-
-```
-planner    TreeRow.add            the trie grows sample by sample; a sample is priced by its novel tokens
-   │                              (TreeRow.fits), so `token_budget` bounds unique tokens, not raw ones
-collator   TreeRow.pack           DFS layout: unique tokens, depth as position_ids, one loss term per
-   │                              original trained token (token_index), and per segment its queries and
-   │                              the K/V indices of its root-to-segment path, all built on CPU
-attention  tree_attention         gather K/V along the paths, one FA3 varlen call, causal
-```
-
-How it works, on two rollouts of one prompt:
-
-```
-1. Rollouts             r0:  p1 p2 p3 a1 a2
-                        r1:  p1 p2 p3 b1 b2                      10 raw tokens
-
-2. Trie (one per row)   S0 [p1 p2] ─┬─ S1 [p3 a1 a2]          nodes are keyed on (token, next token),
-                                   └─ S2 [p3 b1 b2]          so the fork happens one token early and
-                                                              every node predicts exactly one token;
-                                                              chains without a fork become segments
-
-3. Packed row           idx           0  1 | 2  3  4 | 5  6  7
-   (DFS order)          input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2  8 tokens: MLPs, norms and projections
-                        position_ids  0  1 |  2  3  4 |  2  3  4  run once per unique token
-                        segment      S0    | S1       | S2
-
-4. Attention            seg   queries      K/V gathered            kv_index
-   (one FA3 call)       S0    [p1 p2]      [p1 p2]                 0 1
-                        S1    [p3 a1 a2]   [p1 p2 | p3 a1 a2]      0 1 2 3 4
-                        S2    [p3 b1 b2]   [p1 p2 | p3 b1 b2]      0 1 5 6 7
-
-                        FA3 aligns the causal mask bottom-right      K:  p1 p2 p3 a1 a2
-                        when queries are fewer than keys, so a       Q: p3   ■  ■  ■  ·  ·
-                        segment's queries see their ancestors and       a1   ■  ■  ■  ■  ·
-                        their own causal past, and nothing else.        a2   ■  ■  ■  ■  ■
-
-5. Loss                 p2 (idx 1) predicts p3 for both rollouts; token_index points every trained
-                        token of every rollout at the position that predicts it
-```
-
-A few consequences:
-
-- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is. When that row is full, the sample goes to another row if a rank is still empty, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
-- **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
-- **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
-- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, …): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state (`trl/experimental/async_grpo/tree_gated_delta_rule.py`). This needs `transformers>=5.15.0`, where these layers call the module-level functions that tree packing patches. Models with any other non-attention layer are refused at init.
-
-What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
-
-Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls — neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
-
-<Tip warning={true}>
-
-Anything that makes rows longer or fewer removes the sharing. A multi-turn conversation that never forks is one long sample, and `rollout/samples_per_rollout` says how many samples a conversation gives.
-
-</Tip>
-
-### The rollout queue
-
-The worker pushes scored samples into a queue and the trainer pulls from it. Four metrics describe that one queue, and they answer different questions:
-
-| metric                      | question                                                                                                |
-| --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sample/rollout_queue_size` | how many samples are waiting right now                                                                  |
-| `sample/time_in_queue_s`    | how long **a single sample** sat there before being trained on — the seconds half of its off-policyness |
-| `perf/rollout_wait_s`       | how long training sat blocked because the queue was **empty**                                           |
-| `rollout/backpressure_s`    | how long generation (the worker) sat blocked because the queue was **full**                             |
-
-The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mirror images and are never both large! Reading them together with the queue size tells you which side is the bottleneck:
-
-- queue near empty, `perf/rollout_wait_s` high → **generation-bound**. The trainer is starving; look at `rollout/generated_tok_s`, `rollout/concurrency` and `rollout/score_queue_size`.
-- queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
-- both near zero → balanced !
-
-### Completions
-
-A **completion** is what vLLM generated for one prompt, counted across _every turn_ of the rollout.
-
-| metric                                             | meaning                                                                                               |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
-| `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
-| `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
-
-### Rollouts
-
-A **rollout** is **one full** conversation: a prompt generated to completion, including every tool round-trip it took to get there. `num_generations` rollouts share a prompt and form a group.
-
-| metric                                                             | meaning                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rollout/duration_s`                                               | wall time for one rollout, from dispatch until the loop collects the finished rollout.                                                                                                                                                                              |
-| `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
-| `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
-| `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
-| `rollout/samples_per_rollout`                                      | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all)                                                                                            |
-| `rollout/fork_frac`                                                | fraction of turn boundaries where the re-tokenized prompt didn't extend the held tokens, so the turn started a new sample                                                                                                                    |
-| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a fork re-rendered, averaged over turn boundaries (a clean boundary counts as 0). It's what each fork adds to the trainer's forward, since the new sample shares the tokens before the divergence                       |
-| `rollout/score_queue_size`                                         | completed groups waiting to be scored.                                                                                                                                                                                                       |
-| `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
-| `rollout/vllm_retry_total`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
-| `rollout/backpressure_s`                                           | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
-| `rollout/concurrency_cap`                                          | current cap on rollouts in flight. Starts at `KV cache tokens / max_model_len` (at most `max_concurrent_rollouts`) and moves with vLLM load. See [concurrency](#concurrency)                                                                                                           |
-| `rollout/kv_cache_usage`                                           | vLLM KV cache usage (max over engines) at the last poll. The cap is cut when it passes 0.8 and grows while it stays under 0.6                                                                                                                |
-| `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/concurrency` is what sits in the API server process, building responses                                                   |
-| `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
-| `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
-| `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
-
-A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
+They compose — you can pass standalone `tools` alongside an `environment_factory`.
 
 ### Tools
 
-Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>/*` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
+The `tools` argument expects a list of Python functions (sync or async) that define the tools available to the agent:
 
-| metric                                                  | path                       | meaning                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools/call_frequency`, `tools/failure_frequency`       | built-in, harness          | calls per rollout, and the fraction that failed. On the loop-owning harness path a failure is a tool result whose text looks like an error                                                                                                                                                  |
-| `tools/latency_s`, `tools/<name>/latency_s`             | built-in, white-box harness | time spent executing the tool. On the white-box harness path it is the wall time between one model turn's reply and the next turn's request, which includes harness overhead. The loop-owning path has no latency: OpenEnv's trace does not timestamp its entries, so there is nothing to derive it from |
-| `tools/<name>/call_total`, `tools/<name>/failure_total` | built-in, harness          | per-tool call and failure counts                                                                                                                                                                                                                                                             |
-| `tools/unknown_name_total`                              | built-in                   | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised                                                                                                                                                                                     |
-| `tools/parallel_calls_mean`                             | built-in                   | tool calls requested in a single assistant message                                                                                                                                                                                                                                           |
-| `tools/loop_exhausted_frac`                             | built-in                   | conversations cut off at `max_tool_calling_iterations` while still asking for tools                                                                                                                                                                                                          |
+```python
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+
+trainer = AsyncGRPOTrainer(
+    tools=[tool1, tool2],
+    ...,
+)
+```
+
+Each tool must be a standard Python function with **type-hinted arguments and return types**, along with a **Google-style docstring** describing its purpose, arguments, and return value.
+For more details, see the [Passing tools guide](https://huggingface.co/docs/transformers/en/chat_extras#passing-tools).
+
+The model calls a tool by its name, so each tool is registered under its `__name__` and must be a **module-level function**, which also keeps it picklable for the rollout worker. Synchronous tools run on a thread pool sized to `max_concurrent_rollouts`, so a slow tool never blocks the other rollouts in flight. Within one assistant turn, tool calls run in the order the model emitted them. Up to `max_concurrent_rollouts` synchronous tools can therefore run at once, so a tool that reads or writes shared state must be thread-safe.
+
+> [!TIP]
+> The tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
+
+Use `max_tool_calling_iterations` in the [`experimental.async_grpo.AsyncGRPOConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the model produces a response turn with no tool calls.
+
+Example:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOTrainer
+
+def multiply(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+async def async_add(a: int, b: int) -> int:
+    """
+    Asynchronously adds two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The sum of the two integers.
+    """
+    return a + b
+
+trainer = AsyncGRPOTrainer(
+    tools=[multiply, async_add],
+    ...,
+)
+```
 
 ### Environments
 
-Logged only with an `environment_factory`. Both calls run on the worker's tool thread pool, so a slow environment delays its own rollout but not the others in flight.
+You can also provide tools through `environment_factory`. In this mode, [`experimental.async_grpo.AsyncGRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
 
-| metric         | meaning                                       |
-| -------------- | --------------------------------------------- |
-| `env/reset_s`  | time in `reset()` before the rollout starts   |
-| `env/reward_s` | time in `get_reward()` after the rollout ends |
+When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 
-### Samples arriving from the queue
+```python
+import random
 
-Each sample is one `RolloutSample`: a reconciled sequence plus the group advantage, the reward and its per-sample metrics, assembled by the worker in `_score_group` once every generation in a group has finished and been scored. The worker pushes them into `rollout_buffer`; everything below is measured on the trainer side, as it pulls them for training.
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 
-| metric                                                        | meaning                                                                                                                                             |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sample/forwarded_tokens_mean`, `sample/forwarded_tokens_max` | tokens in one **sample**: prompt + tool context + generated. Packing is a row-level concern, see `batch/row_*`                                      |
-| `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
-| `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
-| `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
-| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
-| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
+class IncrementEnv:
+    # Reserved methods
+    def reset(self, **kwargs) -> str | None:  # required; called at the start of each rollout
+        self.counter = 0
+        self.target = random.randint(1, 6)  # self-sample the task
+        return f"Increment the counter by {self.target}."  # returned string becomes the prompt
 
-### Rewards and off-policyness
+    def get_reward(self) -> float:  # optional: the environment scores itself from its own state
+        return float(self.counter == self.target)
 
-| metric | meaning |
-| --- | --- |
-| `reward_group_std` | std of the reward within each sample's group, averaged over the samples that were trained on. This is what the default `compute_advantages` divides by. GRPO's `reward_std` is the std over the whole batch, a different quantity: a batch of easy prompts all at 1 and hard prompts all at 0 has a batch std of 0.5 but a group std of 0 |
-| `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
-| `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
-| `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
-| `num_tokens` | tokens forwarded since the start of training. With tree packing, a prefix shared by several samples is counted once |
+    # Public methods (exposed as tools)
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
 
-### Batches
+        Args:
+            step: Value to add to the counter.
 
-One micro-batch is `world_size` rows (remember packing flattens into 1 sequence), so one per DP rank, so that rank _i_ forwards row _i_. `gradient_accumulation_steps` of those make one optimizer step. A step then covers `gradient_accumulation_steps × world_size` rows in total. Every `_per_step` metric below is a sum over the whole step and across every rank; the `batch/row_*` ones are _means_ over the rows.
+        Returns:
+            The updated counter value.
+        """
+        self.counter += step
+        return self.counter
 
-| metric                                                                   | meaning                                                                                                                              |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`       | tokens in one optimizer step, forwarded and trained respectively                                                                     |
-| `batch/samples_per_step`, `batch/groups_per_step`                        | training samples, and distinct prompts, per optimizer step. They differ by the fork rate                                             |
-| `batch/microbatches_per_step`                                            | counted, not read off the config                                                                                                     |
-| `batch/masked_token_frac`                                                | forwarded tokens with `completion_mask == 0` — the share of the forward that earns no gradient                                       |
-| `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max` | how densely the planner packed each rank's row                                                                                       |
-| `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                            |
-| `batch/row_imbalance`                                                    | `max cost / mean cost` across rows, where the cost is the row's attention work. This predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
-| `batch/packing_ratio`                                                    | raw tokens per forwarded token: the factor by which the decoder's work shrinks, 1.0 when nothing is shared                              |
-| `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                    |
-| `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                         |
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        args=AsyncGRPOConfig(max_steps=1000, chat_template_kwargs={"enable_thinking": False}),
+        environment_factory=IncrementEnv,
+    )
+    trainer.train()
+```
 
-### Performance
+An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
 
-Throughput measures how many tokens the trainer processes per second. **Model FLOPs Utilization (MFU)** estimates the percentage of the training devices' theoretical compute capacity used for model forward and backward passes. The capacity used for this estimate depends on the hardware and training precision.
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. When it returns a string, that string is the user prompt.
+- `get_reward` (optional, sync or async) takes no argument and returns a `float`: the environment scores the episode it just ran from its own internal state (did the game end in a win? was the word guessed?). It is called once per completed rollout and acts as a reward source.
 
-Throughput and MFU are reported on two time bases:
+Both run on the worker's tool thread pool, so a slow environment delays its own rollout but not the others in flight. Their durations are logged as `env/reset_s` and `env/reward_s`.
 
-- **`_fwd_bwd`** measures performance during the forward and backward passes.
-- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+> [!NOTE]
+> Because the environment self-samples on each `reset()`, the `G` members of a GRPO group may not share the same initial state, making the group baseline slightly noisier. For identical states within a group, have `reset()` derive the state deterministically from a shared key.
 
-The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
+#### Providing an external dataset (optional)
 
-MFU is reported only when peak compute capacity is known for the local training device at the selected precision. Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
+Instead of letting the environment self-sample, you can provide an external `train_dataset`. For example when your tasks already live in a dataset, or to route between [multiple environments](#multiple-environments). Per rollout, the trainer samples one row, uses its `"prompt"` column as the prompt, and passes the row's columns to `reset()` as keyword arguments (so the environment reads the task from the dataset).
 
-| metric                                                            | meaning                                                                                                                                               |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `perf/step_s`                                                     | wall time between optimizer steps: compute, optimizer, weight sync and queue waits included                                                           |
-| `perf/fwd_bwd_s`                                                  | forward + backward, summed over the step's micro-batches. This is the denominator of every `_fwd_bwd` metric below                                    |
-| `perf/fwd_s`                                                      | the forward part of it. `fwd_s / fwd_bwd_s` near 1/3 is the usual split; higher means the backward is cheap or recompute is being paid on the forward |
-| `perf/optimizer_s`                                                | `optimizer.step()`                                                                                                                                    |
-| `perf/rollout_wait_s`                                             | how long the trainer sat blocked because the queue was empty. See [the rollout queue](#the-rollout-queue)                                             |
-| `perf/weight_sync_s`                                              | a full sync, plus `_pause_s` (waiting for vLLM), `_barrier_s` (rank skew) and `_transfer_s` (the bytes)                                               |
-| `perf/forwarded_tok_s_fwd_bwd`, `perf/forwarded_tok_s_wall_clock` | forwarded tokens per second on each basis                                                                                                             |
-| `perf/trained_tok_s_wall_clock`                                   | the same, counting only tokens the loss saw                                                                                                           |
-| `perf/mfu_fwd_bwd`, `perf/mfu_wall_clock`                         | model FLOPs utilisation on each basis                                                                                                                 |
+```python
+from datasets import Dataset
+from trl.experimental.async_grpo import AsyncGRPOTrainer
 
-## AsyncGRPOConfig
+# Each row carries the prompt and the task data (here, the counter target to reach).
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {i}."}] for i in range(1, 7)],
+        "target": list(range(1, 7)),
+    }
+)
 
-[[autodoc]] trl.experimental.async_grpo.AsyncGRPOConfig
+class IncrementEnv:
+    def reset(self, target, **kwargs) -> None:  # the row's `target` column arrives as a keyword argument
+        self.counter = 0
+        self.target = target
+
+    def get_reward(self) -> float:
+        return float(self.counter == self.target)
+
+    def increment(self, step: int) -> int:  # exposed as a tool (see the full docstring above)
+        self.counter += step
+        return self.counter
+
+if __name__ == "__main__":
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        train_dataset=dataset,  # the dataset owns the task; the "target" column reaches reset(target=...)
+        environment_factory=IncrementEnv,
+    )
+    trainer.train()
+```
+
+### Rewards
+
+Environment-owned and trainer-owned rewards are not exclusive. Pass `reward_funcs` for rewards that are natural to compute from the completion (e.g. a format check on the text) _and_ let the environment return its state-dependent reward through `get_reward`. All sources are summed with weight 1.
+
+```python
+def format_reward(completions, **kwargs):  # trainer-owned: scores the completion text
+    ...
+
+trainer = AsyncGRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    args=AsyncGRPOConfig(max_steps=1000),
+    reward_funcs=format_reward,          # trainer-owned: scores the completion
+    environment_factory=IncrementEnv,    # env-owned: scores its internal state via `get_reward`
+)
+```
+
+### Multiple environments
+
+To train on a mix of tasks in a single run (e.g. a coding task and a game), pass a dictionary mapping environment names to factories instead of a single callable. Each rollout selects its environment through an `environment` field in the dataset, and **only that environment's tools are exposed**. This avoids leaking irrelevant tools (the game's `move` tool to a coding example, and vice versa). Each environment still owns its data and returns the prompt from `reset()`, so the dataset only needs the `environment` column to route between them.
+
+```python
+import random
+
+from datasets import Dataset
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+
+
+class CodingEnv:
+    def reset(self, **kwargs) -> str:
+        n = random.randint(1, 20)
+        return f"Compute the {n}th Fibonacci number."
+
+    def run_code(self, code: str) -> str:  # exposed as a tool only for "coding" examples
+        """Run the given Python code and return its stdout.
+
+        Args:
+            code: The Python source to execute.
+
+        Returns:
+            The captured standard output.
+        """
+        ...
+
+class GameEnv:
+    def reset(self, **kwargs) -> str:
+        return "Reach the goal tile."
+
+    def move(self, action: str) -> str:  # exposed as a tool only for "game" examples
+        """Apply an action to the game and return the new observation.
+
+        Args:
+            action: One of "up", "down", "left", "right".
+
+        Returns:
+            The observation after the move.
+        """
+        ...
+
+# The dataset only routes: each row picks the environment for that rollout
+if __name__ == "__main__":
+    dataset = Dataset.from_dict({"environment": ["coding", "game"] * 500})
+
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        args=AsyncGRPOConfig(chat_template_kwargs={"enable_thinking": False}),
+        train_dataset=dataset,
+        reward_funcs=reward_func,
+        environment_factory={"coding": CodingEnv, "game": GameEnv},
+    )
+    trainer.train()
+```
+
+Environment instances are reused across steps (reset between episodes), so an expensive `__init__` is paid once rather than every step. The `environment` field is consumed by the trainer and is **not** forwarded to `reset`.
+
+### Multi-turn rollouts
+
+Every turn renders the whole conversation through the chat template and generates from it. A chat template does not always render a growing conversation the same way (some drop the reasoning of earlier turns, for example), so a turn's prompt tokens can differ from the tokens held so far. At the end of the rollout, the worker reconciles the turns into training samples: a turn whose prompt starts with the held tokens is appended to the same sample, and any other turn starts a new one. Every generated token is trained in exactly one sample, so a fork costs forward tokens but no training signal.
+
+Every sample of a rollout gets the rollout's advantage. `rollout/fork_frac` and `rollout/drift_tokens_*` show how the turns were reconciled.
+
+### Environment Integrations
+
+To train agents that run inside their own harness, such as coding agents in Harbor sandboxes, see [Training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor) in the OpenEnv guide.
+
+## Training Vision Language Models
+
+Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, ...) can be trained on **text-only** datasets. Pass the model id as usual; nothing else changes.
+
+**The vision tower is frozen.** A text-only dataset never produces image tokens, so the tower is never exercised by the forward pass. Everything outside the text model (vision tower, multimodal projector) has `requires_grad=False`: it gets no gradients and no optimizer state, and weight sync skips it, so the server keeps the values it loaded from the checkpoint. The tower is still loaded, so it costs GPU memory for its weights.
+
+> [!WARNING]
+> **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
 
 ## AsyncGRPOTrainer
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOTrainer
+    - train
+    - save_model
+    - push_to_hub
+
+## AsyncGRPOConfig
+
+[[autodoc]] trl.experimental.async_grpo.AsyncGRPOConfig
 
 ## AsyncRolloutLoop
 
@@ -527,9 +1004,9 @@ MFU is reported only when peak compute capacity is known for the local training 
 
 ## TurnRecord
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.TurnRecord
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.TurnRecord
 
 ## RolloutGroup
 
-[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutGroup
 
