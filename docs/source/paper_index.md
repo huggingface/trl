@@ -1995,6 +1995,50 @@ training_args = DistillationConfig(
 )
 ```
 
+## Decision models
+
+Papers relating to [`experimental.decision.DecisionTrainer`].
+
+### Jeva: System One Models from First Principles
+
+**📜 Paper**: https://huggingface.co/papers/2610.18773
+
+Jeva independently encodes a state and its options, then refines the state against immutable option representations.
+Its decision stack separates conditional candidate preferences from answer availability, allowing explicit null
+outcomes and variable-size candidate sets. The trainer fits Choice, Noul, and Score target distributions with
+candidate cross entropy and an optional coverage objective.
+
+```python
+from peft import LoraConfig
+from trl.experimental.decision import DecisionConfig
+
+training_args = DecisionConfig(
+    output_dir="jeva-output",
+    max_grad_norm=1.0,  # "configured threshold 1.0"
+)
+peft_config = LoraConfig(
+    r=64,  # "LoRA uses rank 64"
+    lora_alpha=128,  # "scaling parameter 128"
+    lora_dropout=0.05,  # "training dropout 0.05"
+    task_type="FEATURE_EXTRACTION",
+)
+```
+
+### Contrastive Language Models: A System One Model for Fast and Generalizable Decision-Making
+
+**📜 Paper**: https://contrastive-lm.notion.site
+
+CLM scores independently encoded states and candidates using two projection heads and scaled cosine similarity.
+Its Transformers model provides a bidirectional contrastive loss. The typed-decisions example trains new heads
+on a frozen 135M encoder with soft targets and a holdout split by source-row ID.
+
+```python
+from trl.experimental.decision import DecisionConfig
+
+# The publication does not specify this small-encoder training setup.
+training_args = DecisionConfig(output_dir="clm-output")
+```
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models

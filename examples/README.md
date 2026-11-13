@@ -2,6 +2,9 @@
 
 Each example lives in its own self-contained folder. The full index and layout conventions are documented at https://huggingface.co/docs/trl/example_overview.
 
+For decision-model training, see [`decisions`](decisions). It contains JEV, Jeva BANKING77, and CLM typed-decision
+examples using native Transformers losses and `DecisionTrainer`. Model-specific collators live in their scripts.
+
 ## Adding a new example
 
 - **Name the folder** after the method and what makes the example distinctive: the task (`grpo_wordle`), the model (`sft_gemma3`), or the technique (`grpo_qlora`). Load folder-local assets relative to the script (`Path(__file__).parent / ...`), not the working directory.
