@@ -23,6 +23,7 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 
 #### Online methods
 
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GRPOTrainer`](grpo_trainer)
 - [`RLOOTrainer`](rloo_trainer)
 
@@ -54,7 +55,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Online methods
 
 - [`A2POTrainer`](a2po_trainer)
-- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 

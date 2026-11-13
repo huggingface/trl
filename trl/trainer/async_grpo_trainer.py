@@ -54,6 +54,7 @@ from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.distributed._tensor import DTensor
+from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
 from transformers import AttentionInterface, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
@@ -62,7 +63,7 @@ from transformers.masking_utils import AttentionMaskInterface
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
-from ...chat_template_utils import (
+from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     get_training_chat_template,
@@ -70,11 +71,12 @@ from ...chat_template_utils import (
     parse_response,
     supports_tool_calling,
 )
-from ...generation.async_vllm_client import AsyncVLLMClient
-from ...generation.weight_transfer import WeightTransferClient
-from ...import_utils import is_aiohttp_available, is_jmespath_available
-from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import (
+from ..generation.async_vllm_client import AsyncVLLMClient
+from ..generation.weight_transfer import WeightTransferClient
+from ..import_utils import is_aiohttp_available, is_jmespath_available
+from .async_grpo_config import AsyncGRPOConfig
+from .base_trainer import _BaseTrainer
+from .utils import (
     add_fused_lm_head,
     compute_flops_per_token,
     compute_mfu,
@@ -89,7 +91,6 @@ from ...trainer.utils import (
     pad,
     print_prompt_completions_sample,
 )
-from .async_grpo_config import AsyncGRPOConfig
 
 
 if is_aiohttp_available():
@@ -382,13 +383,13 @@ def patch_tree_gdn(model) -> bool:
     Returns:
         `bool`: whether the model's modeling module has those functions.
     """
-    modeling = sys.modules[type(model).__module__]
+    modeling = sys.modules[type(model).forward.__module__]
     conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
     if conv is None or chunk is None:
         return False
     if modeling in _PATCHED:
         return True
-    from ...kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
+    from ..kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
 
     def causal_conv1d_fn(hidden_states, weight, bias=None, activation=None, **kwargs):
         if "tree_segment_parents" not in kwargs:
@@ -556,7 +557,7 @@ def _chain_to_sequences(rollout: "Rollout") -> tuple[list[TrainingSequence], lis
 @dataclass(frozen=True)
 class Rollout:
     """
-    One finished rollout, as returned by [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`].
+    One finished rollout, as returned by [`~trainer.async_grpo_trainer.AsyncRolloutLoop.generate_one`].
 
     Args:
         completion (`list[dict[str, Any]]`):
@@ -617,12 +618,12 @@ class RolloutGroup:
         env_rewards (`list[tuple[type, float] or None]`):
             For a rollout whose environment defines `get_reward`, the environment class and its reward; else `None`.
         rollout_rewards (`list[float or None]`):
-            [`~experimental.async_grpo.Rollout`]`.reward` of each rollout.
+            [`~trainer.async_grpo_trainer.Rollout`]`.reward` of each rollout.
         queued_at (`float`, *optional*, defaults to `0.0`):
             `time.monotonic()` when the group was queued for scoring.
         rewards (`np.ndarray`, *optional*):
             Total reward of each rollout, summed over every reward source, NaN when no source scored it. Set before
-            [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] is called.
+            [`~trainer.async_grpo_trainer.AsyncRolloutLoop.compute_advantages`] is called.
     """
 
     prompts: list[Messages]
@@ -753,22 +754,22 @@ def _child_main(
 
 class AsyncRolloutLoop:
     """
-    Generates and scores rollouts for [`experimental.async_grpo.AsyncGRPOTrainer`], in a spawned rollout process.
+    Generates and scores rollouts for [`AsyncGRPOTrainer`], in a spawned rollout process.
 
     The default implements GRPO. To customize a run, subclass it, override only the methods that change, and set the
     subclass as the trainer's `loop_cls`. Each prompt goes through, in order:
 
-    - [`~experimental.async_grpo.AsyncRolloutLoop.filter_prompt`]: whether to generate for the prompt at all.
-    - [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`]: one full rollout, which calls
-      [`~experimental.async_grpo.AsyncRolloutLoop.generate_one_turn`] for each sampling request.
+    - [`~trainer.async_grpo_trainer.AsyncRolloutLoop.filter_prompt`]: whether to generate for the prompt at all.
+    - [`~trainer.async_grpo_trainer.AsyncRolloutLoop.generate_one`]: one full rollout, which calls
+      [`~trainer.async_grpo_trainer.AsyncRolloutLoop.generate_one_turn`] for each sampling request.
     - The group of `num_generations` rollouts is scored: its rewards are the sum of the trainer's `reward_funcs`, of
-      environments that define `get_reward`, and of [`~experimental.async_grpo.Rollout`]`.reward`. Then
-      [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] runs once per group.
+      environments that define `get_reward`, and of [`~trainer.async_grpo_trainer.Rollout`]`.reward`. Then
+      [`~trainer.async_grpo_trainer.AsyncRolloutLoop.compute_advantages`] runs once per group.
 
-    [`~experimental.async_grpo.AsyncRolloutLoop.setup`] and [`~experimental.async_grpo.AsyncRolloutLoop.close`] create
-    and release resources on the loop's event loop, like an HTTP client. A hook can read `self.config` (a subclass of
-    [`experimental.async_grpo.AsyncGRPOConfig`] can carry its own fields) and `self.tokenizer`. Since the loop is built
-    in a spawned process, the subclass must be importable (defined at module level).
+    [`~trainer.async_grpo_trainer.AsyncRolloutLoop.setup`] and [`~trainer.async_grpo_trainer.AsyncRolloutLoop.close`]
+    create and release resources on the loop's event loop, like an HTTP client. A hook can read `self.config` (a
+    subclass of [`AsyncGRPOConfig`] can carry its own fields) and `self.tokenizer`. Since the loop is built in a
+    spawned process, the subclass must be importable (defined at module level).
     """
 
     def __init__(
@@ -1008,8 +1009,8 @@ class AsyncRolloutLoop:
 
     async def close(self) -> None:
         """
-        Release what [`~experimental.async_grpo.AsyncRolloutLoop.setup`] created. Runs when the loops stop, including
-        on failure. Does nothing by default.
+        Release what [`~trainer.async_grpo_trainer.AsyncRolloutLoop.setup`] created. Runs when the loops stop,
+        including on failure. Does nothing by default.
         """
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
@@ -1533,10 +1534,10 @@ class AsyncRolloutLoop:
         Generate one rollout for a prompt.
 
         By default, a multi-turn tool loop: each turn renders the whole conversation with the chat template, samples a
-        reply with [`~experimental.async_grpo.AsyncRolloutLoop.generate_one_turn`] and runs the tool calls it contains,
-        until the model stops calling tools or `max_tool_calling_iterations` is reached. Override it to generate
-        differently, for example with an agent framework. Return every sampling request in `Rollout.turns`, since the
-        training sequences are built from them, and set `Rollout.reward` to score the rollout here.
+        reply with [`~trainer.async_grpo_trainer.AsyncRolloutLoop.generate_one_turn`] and runs the tool calls it
+        contains, until the model stops calling tools or `max_tool_calling_iterations` is reached. Override it to
+        generate differently, for example with an agent framework. Return every sampling request in `Rollout.turns`,
+        since the training sequences are built from them, and set `Rollout.reward` to score the rollout here.
 
         Args:
             prompt (`list[dict[str, Any]]`):
@@ -1548,7 +1549,7 @@ class AsyncRolloutLoop:
                 Identifier of the group the rollout belongs to.
 
         Returns:
-            [`~experimental.async_grpo.Rollout`]: The finished rollout.
+            [`~trainer.async_grpo_trainer.Rollout`]: The finished rollout.
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         tool_dict = {tool.__name__: tool for tool in tools}
@@ -1682,6 +1683,7 @@ class AsyncRolloutLoop:
                 "prompt": prompt_ids,
                 "return_token_ids": True,
                 "return_tokens_as_token_ids": True,
+                "cache_salt": f"v{self.model_version}",
                 **sampling_params,
             }
             output = await self._retry(
@@ -1697,7 +1699,12 @@ class AsyncRolloutLoop:
                 choice["logprobs"]["token_logprobs"],
                 output_sampler_logprobs=sampler_logprobs,
             )
-        payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
+        payload = {
+            "model": self._request_model,
+            "token_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "cache_salt": f"v{self.model_version}",
+        }
         output = await self._retry(
             lambda: self._post("/inference/v1/generate", payload, self.config.vllm_server_timeout),
             max_attempts=30,
@@ -1781,7 +1788,7 @@ class AsyncRolloutLoop:
         returns.
 
         Args:
-            group ([`~experimental.async_grpo.async_grpo_trainer.RolloutGroup`]):
+            group ([`~trainer.async_grpo_trainer.RolloutGroup`]):
                 The `num_generations` rollouts of one prompt, with their total rewards in `group.rewards`.
 
         Returns:
@@ -1919,7 +1926,7 @@ class AsyncRolloutWorker:
     (start/stop) and exposes the shared `mp.Queue` (`rollout_buffer`) and `mp.Value` (`model_version`) the trainer
     reads/writes.
 
-    Constructor kwargs are forwarded as-is to `loop_cls` (an [`experimental.async_grpo.AsyncRolloutLoop`] subclass)
+    Constructor kwargs are forwarded as-is to `loop_cls` (an [`~trainer.async_grpo_trainer.AsyncRolloutLoop`] subclass)
     when the child spawns; only `loop_cls` and `child_ready_timeout` are consumed here. Because the child is spawned,
     every forwarded kwarg is pickled: `reward_funcs`, `tools`, and `environment_factory` (and anything they close over)
     must be picklable — module-level functions, `functools.partial`, or callable instances, never lambdas or closures.
@@ -2806,7 +2813,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    >>> from trl.experimental.async_grpo import AsyncGRPOTrainer
+    >>> from trl import AsyncGRPOTrainer
     >>> from trl.rewards import accuracy_reward
     >>> from datasets import load_dataset
 
@@ -2855,7 +2862,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. Tools are
             registered under their `__name__`, so they must be module-level functions. The child process also runs with
             `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the trainer's GPU.
-        args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
+        args ([`AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
@@ -2909,7 +2916,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             any time without prior notice.
 
     To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
-    [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
+    [`~trainer.async_grpo_trainer.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
     rollout process:
 
     ```python
@@ -3734,6 +3741,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
+            self.model_version += 1
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -3744,7 +3754,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
         # `finally` is not optional: leaving it merged would train merged weights from the next step on.
         if is_peft_model(model):
-            model.merge_adapter()
+            with implicit_replication():
+                model.merge_adapter()
         try:
             if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
@@ -3754,7 +3765,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     pass
         finally:
             if is_peft_model(model):
-                model.unmerge_adapter()
+                with implicit_replication():
+                    model.unmerge_adapter()
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
@@ -3762,9 +3774,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
             self.weight_transfer.resume()
-            self.model_version += 1
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
     def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:

@@ -33,21 +33,25 @@ from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
-import requests
 import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
+pytest.importorskip("requests")  # the trainer talks to the vLLM server through it
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
-from trl.experimental.async_grpo.async_grpo_trainer import (
+import requests
+from requests.adapters import BaseAdapter
+
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.generation import weight_transfer as weight_transfer_module
+from trl.generation.weight_transfer import WeightTransferClient
+from trl.trainer import async_grpo_trainer as async_grpo_trainer_module
+from trl.trainer.async_grpo_trainer import (
     TREE_ATTENTION,
     AsyncRolloutLoop,
     AsyncRolloutWorker,
@@ -69,11 +73,9 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     select_adapter_sync,
     validate_lora_for_vllm_sync,
 )
-from trl.generation import weight_transfer as weight_transfer_module
-from trl.generation.weight_transfer import WeightTransferClient
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import (
+from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     is_bf16_supported,
@@ -756,6 +758,88 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
         trainer = self._train_one_step_and_save(fsdp=True)
         assert trainer.is_fsdp_enabled
+
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_train_expert_parallel_body(self, monkeypatch):
+        from transformers.distributed import DistributedConfig
+
+        monkeypatch.setattr(
+            async_grpo_trainer_module, "AsyncRolloutWorker", partial(_StubRolloutWorker, samples_per_weight_sync=30)
+        )
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        experts = trainer.model.get_parameter("model.language_model.layers.0.mlp.experts.gate_up_proj")
+        assert experts.to_local().shape[0] == experts.shape[0] // world_size
+        previous = {n: p.full_tensor().clone() for n, p in trainer.model.named_parameters() if p.requires_grad}
+
+        trainer.train()
+
+        for name, param in previous.items():
+            assert not torch.equal(param, trainer.model.get_parameter(name).full_tensor()), f"{name} has not changed."
+
+    @require_peft
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_train_expert_parallel_lora_body(self, fake_vllm, monkeypatch):
+        from peft import LoraConfig
+        from transformers.distributed import DistributedConfig
+
+        monkeypatch.setattr(
+            async_grpo_trainer_module, "AsyncRolloutWorker", partial(_StubRolloutWorker, samples_per_weight_sync=30)
+        )
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            vllm_server_base_url=FakeVLLMServer.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+        previous = {n: p.clone() for n, p in trainer.model.named_parameters() if p.requires_grad}
+
+        trainer.train()
+
+        for name, param in previous.items():
+            assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
     @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_model(self):
@@ -1942,7 +2026,7 @@ class TestTreePackingParity(TrlTestCase):
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
         model.set_attn_implementation(reference)
-        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+        with patch("trl.trainer.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
@@ -2345,6 +2429,21 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["prompt"] == [1, 2, 3]
         assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
+
+    @pytest.mark.parametrize("top_k", [0, 4])
+    def test_prefix_cache_is_salted_by_model_version(self, top_k):
+        loop = _rollout_loop(top_k=top_k)
+        if top_k:
+            logprobs = {
+                "content": [{"token": "token_id:4", "logprob": -0.1}, {"token": "token_id:5", "logprob": -0.2}]
+            }
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": logprobs, "sampling_mask": [[4], [5]]}]}
+        else:
+            response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+        requests, _ = self._generate(loop, response)
+        loop._model_version_value.value = 3
+        requests += self._generate(loop, response)[0]
+        assert [payload["cache_salt"] for _, payload in requests] == ["v0", "v3"]
 
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)
