@@ -1775,7 +1775,6 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks_exclude_generation_prompt(self, tokenizer_name, enable_thinking, request):
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
