@@ -26,8 +26,8 @@ class AsyncDistillationConfig(_BaseConfig):
     This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full list
     of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default
     values in this class may differ from those in [`~transformers.TrainingArguments`]. Its structure mirrors
-    [`~trl.experimental.async_grpo.AsyncGRPOConfig`] (async pipeline, vLLM server, logging fields are the same), with
-    GRPO's clipping/group fields replaced by the teacher-distillation loss fields below.
+    [`AsyncGRPOConfig`] (async pipeline, vLLM server, logging fields are the same), with GRPO's clipping/group fields
+    replaced by the teacher-distillation loss fields below.
 
     Parameters:
         > Parameters that control the model

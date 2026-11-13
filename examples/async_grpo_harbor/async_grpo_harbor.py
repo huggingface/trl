@@ -110,7 +110,7 @@ from harbor_env.harness import HarborSessionFactory
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer, HarnessRolloutOutcome
 
 
