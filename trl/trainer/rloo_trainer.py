@@ -810,6 +810,7 @@ class RLOOTrainer(_BaseTrainer):
                 # vLLM configuration
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
+                lora_sync_output_dir=args.output_dir,
                 # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
                 server_host=args.vllm_server_host,
