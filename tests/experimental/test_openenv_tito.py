@@ -46,8 +46,10 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
+from trl import AsyncGRPOConfig
+from trl.experimental.async_grpo import openenv_harness
+from trl.trainer import async_grpo_trainer
+from trl.trainer.async_grpo_trainer import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
 
 from ..testing_utils import is_ampere_or_newer, require_vllm
 
@@ -140,6 +142,7 @@ def make_loop():
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
             model_version_value=mp.Value("i", 0),
+            token_allowance=mp.Value("q", 10**12),
             heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
@@ -396,8 +399,8 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     assert (result.tool_call_count, result.tool_failure_count) == (2, 1)
     loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
-    assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
+    assert payload["tools/bash/call_count"] == 1 and payload["tools/edit/call_count"] == 1
+    assert payload["tools/edit/failure_count"] == 1 and "tools/bash/failure_count" not in payload
     assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
     assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.02
 
@@ -420,7 +423,7 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     assert (result.tool_call_count, result.tool_failure_count) == (1, 1)
     loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
+    assert payload["tools/bash/call_count"] == 1 and payload["tools/edit/failure_count"] == 1
     assert "tools/latency_s" not in payload
 
 
@@ -494,7 +497,7 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     session = Session(captured_entry())
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     monkeypatch.setattr(
-        async_rollout_worker, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+        async_grpo_trainer, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
     )
     with pytest.raises(ValueError, match="invalid training sequence"):
         loop._run()

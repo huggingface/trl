@@ -19,6 +19,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -890,11 +891,11 @@ class SFTTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and any(
                     isinstance(module, torch.nn.Linear)
@@ -910,34 +911,37 @@ class SFTTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
-                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
-                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
-        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing before DeepSpeed 0.19.3. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703 and
+        # https://github.com/deepspeedai/DeepSpeed/pull/8148.
+        # Can be removed once the minimum supported DeepSpeed version is 0.19.3.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
+            and Version(version("deepspeed")) < Version("0.19.3")
         ):
             if (args.gradient_checkpointing_kwargs or {}).get("selective"):
                 raise ValueError(
                     "`gradient_checkpointing_kwargs={'selective': True}` is not supported with PEFT + DeepSpeed "
-                    "ZeRO-3, which requires reentrant gradient checkpointing while SAC requires non-reentrant "
-                    "checkpointing."
+                    "ZeRO-3 on DeepSpeed < 0.19.3, which requires reentrant gradient checkpointing while SAC requires "
+                    "non-reentrant checkpointing. Upgrade DeepSpeed to 0.19.3 or later to use SAC."
                 )
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
                     "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
-                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
-                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training with "
+                    "DeepSpeed < 0.19.3. To remove this warning, upgrade DeepSpeed to 0.19.3 or later, unset "
+                    "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
             # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
@@ -945,9 +949,13 @@ class SFTTrainer(_BaseTrainer):
             if Version(transformers.__version__) >= Version("5.23.0"):
                 args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
-        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -1247,12 +1255,6 @@ class SFTTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
-        if hasattr(text_config, "router_aux_loss_coef"):
-            # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
-            # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
-            # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
-            text_config.output_router_logits = self.aux_loss_enabled
-            text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1626,10 +1628,10 @@ class SFTTrainer(_BaseTrainer):
                 and parallelism_config.sp_enabled
                 and self.model.training
             ):
-                # Ulysses sequence parallelism reduces the model's own `loss` across ranks
+                # Ulysses sequence parallelism reduces the model's own `loss` across ranks, which includes the aux loss
                 loss, outputs = super().compute_loss(
                     model,
-                    {**inputs, "fused_lm_head": True},
+                    {**inputs, "fused_lm_head": True, "router_aux_loss_coef": self.router_aux_loss_coef},
                     return_outputs=True,
                     num_items_in_batch=num_items_in_batch,
                 )

@@ -64,6 +64,7 @@ from trl.chat_template_utils import (
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
+    smolvlm_v2_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -766,15 +767,18 @@ class TestAddResponseSchemaTrainingTemplate:
         sorted(path.name.removesuffix("_training.jinja") for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja")),
     )
     def test_add_response_schema_training_template(self, name):
-        # The training variant renders a generated turn like the original, so it gets the same parser
+        # The training variant renders a generated turn like the original, so it gets the same parser, or fails the
+        # same way when the original isn't parsed
         original = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         original.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}.jinja").read_text(encoding="utf-8")
-        try:
-            original = add_response_schema(original)
-        except ValueError:
-            pytest.skip("The original template isn't parsed with the installed transformers")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         tokenizer.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}_training.jinja").read_text(encoding="utf-8")
+        try:
+            original = add_response_schema(original)
+        except ValueError as error:
+            with pytest.raises(ValueError, match=re.escape(str(error))):
+                add_response_schema(tokenizer)
+            return
         tokenizer = add_response_schema(tokenizer)
         if _SUPPORTS_RESPONSE_TEMPLATE:
             assert tokenizer.response_template == original.response_template
@@ -992,6 +996,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
+            pytest.param(
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+                id="smolvlm_v2",
+            ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
@@ -1467,6 +1475,11 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+            id="smolvlm_v2",
+            marks=require_vision,
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
             id="muse_spark",
             marks=[
@@ -1763,13 +1776,6 @@ class TestGetTrainingChatTemplate:
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-nano", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-super", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-ultra", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning", [None, False, True]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
@@ -1818,6 +1824,63 @@ class TestGetTrainingChatTemplate:
         assert list(input_ids[: len(prompt_ids)]) == list(prompt_ids)
         # The assistant mask starts right after the generation prompt
         assert list(masks).index(1) == len(prompt_ids)
+
+    @pytest.mark.parametrize("enable_thinking", [None, False, True])
+    def test_assistant_masks_exclude_generation_prompt_without_reasoning(
+        self, tokenizer_name, enable_thinking, request
+    ):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
+        # The enable_thinking values for which the training template trains tokens the generation prompt ends with
+        trains_generation_prompt = [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
+            (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
+        ]
+        if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
+            reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+        tokenizer = self._load(tokenizer_name)
+        if enable_thinking is not None and "enable_thinking" not in tokenizer.chat_template:
+            pytest.skip("This chat template doesn't use enable_thinking.")
+        kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **kwargs)
+        assistant = {"role": "assistant", "content": "It is blue."}
+        messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
+        chat_template = get_training_chat_template(tokenizer)
+        text = tokenizer.apply_chat_template(messages, chat_template=chat_template, tokenize=False, **kwargs)
+        if not text.startswith(prompt):
+            pytest.skip("A turn without reasoning can't continue this generation prompt.")
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            **kwargs,
+        )
+        input_ids, masks = result["input_ids"], result["assistant_masks"]
+        if self.is_vlm:  # VLM processors return batched output
+            input_ids, masks = input_ids[0], masks[0]
+        encoding = (tokenizer.tokenizer if self.is_vlm else tokenizer)(
+            text, add_special_tokens=False, return_offsets_mapping=True
+        )
+        # Some processors add special tokens before the rendered text
+        shift = len(input_ids) - len(encoding["input_ids"])
+        assert list(input_ids[shift:]) == encoding["input_ids"]
+        assert 1 in masks
+        # The first trained token starts after the generation prompt
+        assert encoding["offset_mapping"][list(masks).index(1) - shift][0] >= len(prompt)
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(

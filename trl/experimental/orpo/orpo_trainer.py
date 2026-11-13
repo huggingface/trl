@@ -230,16 +230,10 @@ class ORPOTrainer(_BaseTrainer):
                     prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif args.gradient_checkpointing:
-                # For backward compatibility with older versions of transformers
-                if hasattr(model, "enable_input_require_grads"):
-                    model.enable_input_require_grads()
-                else:
-
-                    def make_inputs_require_grad(module, input, output):
-                        output.requires_grad_(True)
-
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+            # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer
+            # handles this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+            elif args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+                model.enable_input_require_grads()
 
             # get peft model with the given config
             # ZeRO-3 + PEFT for non-quantized models:
@@ -266,17 +260,10 @@ class ORPOTrainer(_BaseTrainer):
 
         # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
-        # fail or completely fail.
-        elif args.gradient_checkpointing:
-            # For backward compatibility with older versions of transformers
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+        # fail or completely fail. transformers handles this from 5.0.0
+        # (https://github.com/huggingface/transformers/pull/42558)
+        elif args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            model.enable_input_require_grads()
 
         if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
