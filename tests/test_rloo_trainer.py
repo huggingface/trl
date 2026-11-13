@@ -20,6 +20,7 @@ import transformers
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -65,7 +66,16 @@ class TestRLOOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-Cohere2ForCausalLM",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    raises=ValueError,
+                    reason="Before transformers 5.0, its generic tokenizer class returns `token_type_ids`, which "
+                    "`generate` rejects for this model",
+                    strict=True,
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 marks=pytest.mark.skipif(
@@ -127,6 +137,34 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     def test_logps_match_plain_forward(self):
         # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
@@ -1354,13 +1392,13 @@ class TestRLOOTrainer(TrlTestCase):
     @require_peft
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
         lora_config = LoraConfig(target_modules="all-linear", modules_to_save=["embed_tokens", "lm_head"])
         with pytest.raises(ValueError, match="ensure_weight_tying"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                reward_funcs=str_length_reward,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
@@ -1631,7 +1669,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         def reward_func(completions, **kwargs):
             """Reward function with rewards on both sides of the clip range."""
-            return [float(i) - 1.5 for i in range(len(completions))]
+            return [2.0 * i - 2.0 for i in range(len(completions))]
 
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,

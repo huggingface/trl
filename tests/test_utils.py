@@ -1445,26 +1445,6 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
-    pytest.param(
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=[
-            pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-            ),
-            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
-        ],
-    ),
-    pytest.param(
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=[
-            pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-            ),
-            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
-        ],
-    ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
@@ -1746,7 +1726,32 @@ class TestAddFusedLMHead:
 
         assert out["aux_loss"].item() == 0.0
 
-    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_MODEL_IDS,
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+                    ),
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+                    ),
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                ],
+            ),
+        ],
+    )
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
@@ -1774,7 +1779,36 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
         torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
 
-    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_MODEL_IDS,
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+                    ),
+                    pytest.mark.xfail(
+                        reason="Dequantized FP8 checkpoints keep their unquantized weights in bfloat16 (see transformers#50594)"
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+                    ),
+                    pytest.mark.xfail(
+                        reason="Dequantized FP8 checkpoints keep their unquantized weights in bfloat16 (see transformers#50594)"
+                    ),
+                ],
+            ),
+        ],
+    )
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
         # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
@@ -1826,7 +1860,9 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
             ),
-            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+            pytest.mark.xfail(
+                reason="Dequantized FP8 checkpoints keep their unquantized weights in bfloat16 (see transformers#50594)"
+            ),
         ],
     ),
     pytest.param(
@@ -1836,7 +1872,9 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
             ),
-            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+            pytest.mark.xfail(
+                reason="Dequantized FP8 checkpoints keep their unquantized weights in bfloat16 (see transformers#50594)"
+            ),
         ],
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",

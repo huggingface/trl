@@ -19,7 +19,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -249,6 +249,28 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize(
@@ -521,7 +543,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_udpo_loss_value(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -549,7 +571,7 @@ class TestDPOTrainer(TrlTestCase):
         assert metrics["eval_loss"] == pytest.approx(-alpha * math.log1p(-(1 - a) / (math.exp(z) + 1)), rel=1e-4)
 
     def test_udpo_label_smoothing_out_of_range_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         # `label_smoothing` is the flip probability ε, not the paper's a = ε / (1 - ε), so a = 0.8 passed as is fails
         training_args = DPOConfig(output_dir=self.tmp_dir, loss_type="udpo", label_smoothing=0.8, report_to="none")
@@ -616,7 +638,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_train_with_wpo_sft(self):
         # The "sft" loss is a scalar expanded to the batch size, so the WPO weighting must not multiply it in place.
         # See https://github.com/huggingface/trl/issues/7630.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
