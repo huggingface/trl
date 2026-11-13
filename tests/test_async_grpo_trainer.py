@@ -97,8 +97,8 @@ if is_peft_available():
     from peft import LoraConfig, PrefixTuningConfig, get_peft_model
 
 
-# The reward functions, tools and environments of the tests are module-level, unlike GRPO's, which its tests define
-# in place: the rollout worker runs them in a spawned process, which unpickles them by import path.
+# The reward functions, tools and environments of the tests are module-level: the rollout worker runs them in a
+# spawned process, which unpickles them by import path.
 def multiply_tool(a: int, b: int) -> int:
     """
     Multiplies two integers.
@@ -219,10 +219,10 @@ def recorded(path: str) -> dict[str, list]:
 
 
 class ScriptedTurns:
-    """A [`TransformersVLLMServer`] script that replays the fake generations of GRPO's tool tests, one request at a time.
+    """A [`TransformersVLLMServer`] script that answers each prompt with a completion written as text.
 
-    GRPO's tests fake one batched generate call per turn. Here each rollout is its own request, so the k-th first turn
-    of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets `after_tool`.
+    The k-th first turn of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets
+    `after_tool`.
 
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
@@ -2563,17 +2563,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
         # training length.
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                return "Guess the 5-letter word."
-
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
                 args=training_args,
-                environment_factory=DummyEnvironment,
+                environment_factory=GuessTheWordEnvironment,
             )
 
     @require_response_parsing
