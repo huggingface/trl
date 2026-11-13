@@ -1682,6 +1682,7 @@ class AsyncRolloutLoop:
                 "prompt": prompt_ids,
                 "return_token_ids": True,
                 "return_tokens_as_token_ids": True,
+                "cache_salt": f"v{self.model_version}",
                 **sampling_params,
             }
             output = await self._retry(
@@ -1697,7 +1698,12 @@ class AsyncRolloutLoop:
                 choice["logprobs"]["token_logprobs"],
                 output_sampler_logprobs=sampler_logprobs,
             )
-        payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
+        payload = {
+            "model": self._request_model,
+            "token_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "cache_salt": f"v{self.model_version}",
+        }
         output = await self._retry(
             lambda: self._post("/inference/v1/generate", payload, self.config.vllm_server_timeout),
             max_attempts=30,
@@ -3734,6 +3740,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
+            self.model_version += 1
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -3762,9 +3771,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
             self.weight_transfer.resume()
-            self.model_version += 1
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
     def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:
