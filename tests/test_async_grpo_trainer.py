@@ -30,7 +30,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import numpy as np
 import pytest
@@ -48,9 +48,6 @@ from transformers.utils import is_peft_available
 
 pytest.importorskip("transformers", minversion="5.2.0")
 pytest.importorskip("requests")  # the trainer talks to the vLLM server through it
-
-import requests
-from requests.adapters import BaseAdapter
 
 from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
@@ -600,154 +597,6 @@ class _StubWeightTransfer:
         pass
 
 
-class FakeVLLMServer:
-    """The state a vLLM server has and a mocked dict does not, behind the eight paths [`AsyncVLLMClient`] uses.
-
-    Configure it after construction (`fake.lora_config = ...`) and before the trainer is built; the trainer probes
-    `/server_info` in its constructor. Read `loaded`, `evicted` and `paused` afterwards to see what the trainer did
-    from the server's side.
-
-    Attributes:
-        lora_config (`dict` or `None`):
-            What `/server_info` reports under `lora_config`. `None` is a server started without `--enable-lora`, which
-            also makes `/v1/load_lora_adapter` a 404, as it is on the real server.
-        data_parallel_size (`int`):
-            What `/server_info` reports under `parallel_config`.
-        loaded (`OrderedDict[str, str]`):
-            Adapter name to path, oldest first. This is the LRU order vLLM's `LRUCacheLoRAModelManager` evicts in.
-        evicted (`list[str]`):
-            Adapters silently dropped because a load arrived with `loaded` already at `max_loras`. A real server does
-            exactly this rather than reject the load, which is why `select_adapter_sync` sizes `--max-loras` for it.
-        paused (`bool`):
-            Whether `/pause` has been called more recently than `/resume`.
-        requests (`list[str]`):
-            Every path this server was asked, in order.
-        on_load (`callable`, *optional*):
-            Called as `on_load(name, path)` the moment a load is accepted, before the response is returned — the one
-            place a test can observe the trainer's state *at* load time (e.g. that `model_version` has not moved yet).
-    """
-
-    url = "http://fake-vllm"  # a scheme and a host, never bound to anything
-
-    def __init__(self, *, lora_config=None, data_parallel_size=1, max_model_len=2048, dtype="torch.bfloat16"):
-        self.lora_config = lora_config
-        self.data_parallel_size = data_parallel_size
-        self.max_model_len = max_model_len
-        self.dtype = dtype
-        self.loaded: OrderedDict[str, str] = OrderedDict()
-        self.evicted: list[str] = []
-        self.paused = False
-        self.on_load = None
-        self.requests: list[str] = []  # every path asked of this server, in order
-
-    def dispatch(self, method: str, path: str, query: dict, body) -> tuple[int, object]:
-        """Answer one request. Returns `(status_code, json_payload)`."""
-        self.requests.append(path)
-        if path == "/health":
-            return 200, {}
-        if path == "/server_info":
-            return 200, {
-                "vllm_config": {
-                    "lora_config": self.lora_config,
-                    "parallel_config": {
-                        "data_parallel_size": self.data_parallel_size,
-                        "tensor_parallel_size": 1,
-                        "world_size": 1,
-                    },
-                    "model_config": {"dtype": self.dtype},
-                }
-            }
-        if path == "/v1/models":
-            return 200, {
-                "data": [{"id": "base", "max_model_len": self.max_model_len}, *({"id": name} for name in self.loaded)]
-            }
-        if path == "/get_world_size":
-            include_dp = query.get("include_dp", ["true"])[0].lower() != "false"
-            return 200, {"world_size": self.data_parallel_size if include_dp else 1}
-        if path == "/pause":
-            self.paused = True
-            return 200, {}
-        if path == "/resume":
-            self.paused = False
-            return 200, {}
-        if path == "/v1/load_lora_adapter":
-            return self._load(body["lora_name"], body["lora_path"], body.get("load_inplace", False))
-        if path == "/v1/unload_lora_adapter":
-            if self.lora_config is None:
-                return 404, {"detail": "Not Found"}
-            self.loaded.pop(body["lora_name"], None)
-            return 200, "Success"
-        return 404, {"detail": f"no route for {method} {path}"}
-
-    def _load(self, name: str, path: str, load_inplace: bool) -> tuple[int, object]:
-        # Without `--enable-lora` (and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`) the endpoint is not registered at all.
-        if self.lora_config is None:
-            return 404, {"detail": "Not Found"}
-        # `_check_load_lora_adapter_request`: a repeated name is rejected unless the caller asked to load in place.
-        if name in self.loaded and not load_inplace:
-            return 400, {
-                "error": {
-                    "message": f"The lora adapter '{name}' has already been loaded. If you want to load the adapter "
-                    "in place, set 'load_inplace' to True.",
-                    "type": "InvalidUserInput",
-                }
-            }
-        # `add_lora` validates eagerly: the engine reads the directory before the request is answered, so a path the
-        # server cannot see is a 404 here, not a 200 followed by an engine death.
-        if not os.path.isfile(os.path.join(path, "adapter_config.json")):
-            return 404, {"error": {"message": f"Loading lora {name} failed: No adapter found for {path}"}}
-        # `LRUCacheLoRAModelManager.add_adapter`: at capacity the oldest adapter is removed, silently.
-        if name not in self.loaded and len(self.loaded) >= self.lora_config["max_loras"]:
-            self.evicted.append(self.loaded.popitem(last=False)[0])
-        self.loaded.pop(name, None)  # re-insert at the end: a load touches the LRU order
-        self.loaded[name] = path
-        if self.on_load is not None:
-            self.on_load(name, path)
-        return 200, f"Success: LoRA adapter '{name}' added successfully."
-
-
-class FakeVLLMTransport(BaseAdapter):
-    """A `requests` transport that delivers to a [`FakeVLLMServer`] instead of a socket."""
-
-    def __init__(self, server: FakeVLLMServer):
-        super().__init__()
-        self.server = server
-
-    def send(self, request, **kwargs):
-        url = urlsplit(request.url)
-        body = json.loads(request.body) if request.body else None
-        status, payload = self.server.dispatch(request.method, url.path, parse_qs(url.query), body)
-        response = requests.Response()
-        response.status_code = status
-        response.url = request.url
-        response.request = request
-        response.headers["Content-Type"] = "application/json"
-        response._content = json.dumps(payload).encode()
-        response.encoding = "utf-8"
-        return response
-
-    def close(self):
-        pass
-
-
-@pytest.fixture
-def fake_vllm(monkeypatch) -> FakeVLLMServer:
-    """A [`FakeVLLMServer`] that every `requests` call to `FakeVLLMServer.url` reaches, for this test only.
-
-    It swaps the transport for one URL, leaves every other request untouched, and is undone by `monkeypatch` when the
-    test ends.
-    """
-    server = FakeVLLMServer()
-    transport = FakeVLLMTransport(server)
-    real_get_adapter = requests.Session.get_adapter
-
-    def get_adapter(self, url):
-        return transport if url.startswith(FakeVLLMServer.url) else real_get_adapter(self, url)
-
-    monkeypatch.setattr(requests.Session, "get_adapter", get_adapter)
-    return server
-
-
 class TransformersVLLMServer:
     """Answers the vLLM endpoints the rollout worker calls, generating with transformers, and takes the trainer's
     weight syncs.
@@ -757,7 +606,8 @@ class TransformersVLLMServer:
     worker, which runs in a spawned child process, reaches it over HTTP like the real server.
 
     The trainer's weight syncs reach it through [`InProcessWeightTransferClient`], which the `make_vllm_server` fixture
-    hands the trainer in place of [`WeightTransferClient`].
+    hands the trainer in place of [`WeightTransferClient`]. Its adapter syncs reach it over HTTP: it keeps the adapters
+    as vLLM does, but generates without them.
 
     Args:
         model_id (`str`):
@@ -767,6 +617,20 @@ class TransformersVLLMServer:
         script (`Callable[[list[int]], list[int]]`, *optional*):
             Set it to answer each request with the completion `script(prompt_ids)` returns instead of sampling one, for
             the tests whose rollouts must follow a fixed path, like a tool call.
+        lora_config (`dict`, *optional*):
+            What `/server_info` reports under `lora_config`. Set it before the trainer is built: the trainer reads it
+            to choose between syncing the adapter and syncing the merged weights. `None` is a server started without
+            `--enable-lora`, which also has no `/v1/load_lora_adapter`.
+        loaded (`OrderedDict[str, str]`):
+            Adapter name to path, oldest first. This is the LRU order vLLM's `LRUCacheLoRAModelManager` evicts in.
+        evicted (`list[str]`):
+            Adapters silently dropped because a load arrived with `loaded` already at `max_loras`. A real server does
+            exactly this rather than reject the load, which is why `select_adapter_sync` sizes `--max-loras` for it.
+        paused (`bool`):
+            Whether `/pause` has been called more recently than `/resume`.
+        on_load (`Callable[[str, str], None]`, *optional*):
+            Called as `on_load(name, path)` the moment a load is accepted, before the response is returned: the one
+            place a test can observe the trainer's state at load time.
     """
 
     def __init__(self, model_id: str):
@@ -775,6 +639,11 @@ class TransformersVLLMServer:
         loader = AutoModelForImageTextToText if config.get_text_config() is not config else AutoModelForCausalLM
         self.model = loader.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         self.script = None
+        self.lora_config = None
+        self.loaded: OrderedDict[str, str] = OrderedDict()
+        self.evicted: list[str] = []
+        self.paused = False
+        self.on_load = None
         # As `vllm serve --max-model-len 512`. The trainer sizes its micro-batches from it, and at the model's context
         # length, one would wait for about a thousand samples
         self.max_model_len = 512
@@ -789,14 +658,14 @@ class TransformersVLLMServer:
         self.httpd.shutdown()
         self.httpd.server_close()
 
-    def get(self, path: str):
+    def get(self, path: str) -> tuple[int, object]:
         if path == "/health":
-            return {}
+            return 200, {}
         if path == "/v1/models":
-            return {"data": [{"id": self.model_id, "max_model_len": self.max_model_len}]}
+            return 200, {"data": [{"id": self.model_id, "max_model_len": self.max_model_len}]}
         if path == "/metrics":
             # No KV cache bounds this server, so it reports room for 1024 requests at full length
-            return "\n".join(
+            return 200, "\n".join(
                 [
                     f'vllm:cache_config_info{{kv_cache_size_tokens="{1024 * self.max_model_len}"}} 1.0',
                     'vllm:kv_cache_usage_perc{engine="0"} 0.0',
@@ -807,25 +676,24 @@ class TransformersVLLMServer:
             )
         # With top-k or top-p, the worker first checks that the server returns the candidate set of each sampled token
         if path == "/version":
-            return {"version": "0.28.0"}  # the first vLLM that returns it
+            return 200, {"version": "0.28.0"}  # the first vLLM that returns it
         if path == "/server_info":
-            return {
+            return 200, {
                 "vllm_config": {
                     "model_config": {"return_sampling_mask": True},
-                    # As without `--enable-lora`: the trainer syncs a PEFT model's merged weights
-                    "lora_config": None,
+                    "lora_config": self.lora_config,
                     "parallel_config": {"data_parallel_size": 1},
                 }
             }
         if path == "/openapi.json":
-            return {"paths": {"/inference/v1/generate": {}}}
-        return None
+            return 200, {"paths": {"/inference/v1/generate": {}}}
+        return 404, {"detail": "Not Found"}
 
-    def post(self, path: str, body: dict):
+    def post(self, path: str, body: dict) -> tuple[int, object]:
         if path == "/v1/completions":
             completion_ids, logprobs = self.generate(body["prompt"], body)
             top = logprobs.topk(body["logprobs"])
-            return {
+            return 200, {
                 "choices": [
                     {
                         "token_ids": completion_ids.tolist(),
@@ -842,7 +710,7 @@ class TransformersVLLMServer:
         if path == "/inference/v1/generate":
             completion_ids, logprobs = self.generate(body["token_ids"], body["sampling_params"])
             top = logprobs.topk(body["sampling_params"]["logprobs"])
-            return {
+            return 200, {
                 "choices": [
                     {
                         "token_ids": completion_ids.tolist(),
@@ -869,7 +737,42 @@ class TransformersVLLMServer:
                     }
                 ]
             }
-        return None
+        if path == "/pause":
+            self.paused = True
+            return 200, {}
+        if path == "/resume":
+            self.paused = False
+            return 200, {}
+        # Without `--enable-lora` (and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`) the adapter endpoints are not registered
+        if path == "/v1/load_lora_adapter" and self.lora_config is not None:
+            return self.load_lora_adapter(body["lora_name"], body["lora_path"], body.get("load_inplace", False))
+        if path == "/v1/unload_lora_adapter" and self.lora_config is not None:
+            self.loaded.pop(body["lora_name"], None)
+            return 200, "Success"
+        return 404, {"detail": "Not Found"}
+
+    def load_lora_adapter(self, name: str, path: str, load_inplace: bool) -> tuple[int, object]:
+        # `_check_load_lora_adapter_request`: a repeated name is rejected unless the caller asked to load in place.
+        if name in self.loaded and not load_inplace:
+            return 400, {
+                "error": {
+                    "message": f"The lora adapter '{name}' has already been loaded. If you want to load the adapter "
+                    "in place, set 'load_inplace' to True.",
+                    "type": "InvalidUserInput",
+                }
+            }
+        # `add_lora` validates eagerly: the engine reads the directory before the request is answered, so a path the
+        # server cannot see is a 404 here, not a 200 followed by an engine death.
+        if not os.path.isfile(os.path.join(path, "adapter_config.json")):
+            return 404, {"error": {"message": f"Loading lora {name} failed: No adapter found for {path}"}}
+        # `LRUCacheLoRAModelManager.add_adapter`: at capacity the oldest adapter is removed, silently.
+        if name not in self.loaded and len(self.loaded) >= self.lora_config["max_loras"]:
+            self.evicted.append(self.loaded.popitem(last=False)[0])
+        self.loaded.pop(name, None)  # re-insert at the end: a load touches the LRU order
+        self.loaded[name] = path
+        if self.on_load is not None:
+            self.on_load(name, path)
+        return 200, f"Success: LoRA adapter '{name}' added successfully."
 
     def generate(self, prompt_ids: list[int], sampling_params: dict) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample a completion of `prompt_ids`.
@@ -909,19 +812,16 @@ class TransformersVLLMServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                self.reply(server.get(urlsplit(self.path).path))
+                self.reply(*server.get(urlsplit(self.path).path))
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                self.reply(server.post(urlsplit(self.path).path, json.loads(body or "{}")))
+                self.reply(*server.post(urlsplit(self.path).path, json.loads(body or "{}")))
 
-            def reply(self, payload):
-                if payload is None:
-                    self.send_error(404)
-                    return
+            def reply(self, status, payload):
                 is_text = isinstance(payload, str)
                 data = (payload if is_text else json.dumps(payload)).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "text/plain" if is_text else "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -2770,7 +2670,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         assert [kwargs["topic"] for kwargs in sent] == [topic]
 
-    def _train_one_step_and_save(self, peft_config=None, fsdp=False):
+    def _train_one_step_and_save(self, peft_config=None, **config_kwargs):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -2783,9 +2683,8 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
-            fsdp=fsdp,
-            vllm_server_base_url=FakeVLLMServer.url,
             report_to="none",
+            **config_kwargs,
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
@@ -2814,11 +2713,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @require_peft
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
-    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self, fake_vllm):
+    @pytest.mark.usefixtures("stub_rollout_worker")
+    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self, make_vllm_server):
         from peft import LoraConfig
 
-        self._train_one_step_and_save(peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
+        self._train_one_step_and_save(
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8),
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+        )
 
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
         with safe_open(os.path.join(checkpoint, "adapter_model.safetensors"), "pt") as f:
@@ -2873,8 +2775,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @require_peft
     @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
-    @pytest.mark.usefixtures("stub_weight_transfer")
-    def test_train_expert_parallel_lora_body(self, fake_vllm, monkeypatch):
+    def test_train_expert_parallel_lora_body(self, make_vllm_server, monkeypatch):
         from peft import LoraConfig
         from transformers.distributed import DistributedConfig
 
@@ -2896,7 +2797,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             token_budget=64,
             vllm_server_timeout=5.0,
             save_only_model=True,
-            vllm_server_base_url=FakeVLLMServer.url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -2929,7 +2830,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
-            vllm_server_base_url=FakeVLLMServer.url,
             report_to="none",
             **correction,
         )
@@ -2957,11 +2857,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
-    def test_train_score_centering_with_lora(self, fake_vllm):
+    @pytest.mark.usefixtures("stub_rollout_worker")
+    def test_train_score_centering_with_lora(self, make_vllm_server):
         from peft import LoraConfig
 
-        self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
+        server = make_vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        self.test_train_off_policy_correction(
+            {"vllm_server_base_url": server.url}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8)
+        )
 
     @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_resume_from_checkpoint(self):
@@ -5712,14 +5615,17 @@ class TestSelectAdapterSync(TrlTestCase):
 )
 @require_peft
 class TestAsyncGRPOTrainerPeft(TrlTestCase):
-    """The trainer against a `FakeVLLMServer`: its real `AsyncVLLMClient` sends real requests, the wire is faked.
+    """The trainer against a [`TransformersVLLMServer`], through its real `AsyncVLLMClient`.
 
-    Nothing here is patched. The trainer probes, loads, pauses, resumes and unloads through `AsyncVLLMClient` exactly
-    as it does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`,
-    `fake.paused`.
+    The trainer probes, loads, pauses, resumes and unloads through `AsyncVLLMClient` exactly as it does in production,
+    and the assertions read what the server saw: `server.loaded`, `server.evicted`, `server.paused`.
     """
 
     model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+
+    @pytest.fixture
+    def server(self, make_vllm_server):
+        return make_vllm_server(self.model_id)
 
     def _lora_config(self, **kwargs):
         from peft import LoraConfig
@@ -5730,22 +5636,20 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     def _build(
         self,
-        fake: FakeVLLMServer,
+        server: TransformersVLLMServer,
         peft_config,
         lora_config=None,
-        data_parallel_size=1,
         weight_transfer=_StubWeightTransfer,
         rollout_worker=_StubRolloutWorker,
         **config_kwargs,
     ):
-        """Build a trainer against `fake`, configured to look like a server started with the given flags.
+        """Build a trainer against `server`, configured to look like a server started with the given flags.
 
         `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker` is the class the trainer
         builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it was
         told.
         """
-        fake.lora_config = lora_config
-        fake.data_parallel_size = data_parallel_size
+        server.lora_config = lora_config
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         config_kwargs.setdefault("max_staleness", 1)
         args = AsyncGRPOConfig(
@@ -5755,7 +5659,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
             num_generations=3,
             max_completion_length=8,
             token_budget=64,  # set explicitly so the batcher does not size itself from the server's max_model_len
-            vllm_server_base_url=fake.url,
+            vllm_server_base_url=server.url,
             vllm_server_timeout=5.0,
             report_to="none",
             **config_kwargs,
@@ -5772,28 +5676,26 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 peft_config=peft_config,
             )
 
-    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+    def test_a_misconfigured_server_raises_at_init(self, server):
         # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
         # would leave the other ranks waiting in the collective that shares the sync mode.
         with pytest.raises(ValueError, match="--max-lora-rank"):
-            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
+            self._build(server, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
+    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, server, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, with plausible rewards. The real worker is built here (it spawns nothing until `start()`)
         # to read the `lora_name` the trainer hands it.
-        trainer = self._build(
-            fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=AsyncRolloutWorker
-        )
+        trainer = self._build(server, self._lora_config(), lora_config=lora_config, rollout_worker=AsyncRolloutWorker)
         assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
 
-    def test_adapter_sync_loads_the_adapter_before_bumping_the_version(self, fake_vllm):
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG)
+    def test_adapter_sync_loads_the_adapter_before_bumping_the_version(self, server):
+        trainer = self._build(server, self._lora_config(), lora_config=SERVER_LORA_CONFIG)
         version_at_load = []
-        fake_vllm.on_load = lambda name, path: version_at_load.append(trainer.model_version)
+        server.on_load = lambda name, path: version_at_load.append(trainer.model_version)
 
         trainer._sync_weight()
 
@@ -5802,27 +5704,27 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert version_at_load == [0]
         assert trainer.model_version == 1
         assert trainer.rollout_worker._model_version == 1
-        assert list(fake_vllm.loaded) == ["trl-policy-v1"]
-        path = fake_vllm.loaded["trl-policy-v1"]
+        assert list(server.loaded) == ["trl-policy-v1"]
+        path = server.loaded["trl-policy-v1"]
         assert os.path.isfile(os.path.join(path, "adapter_config.json"))
         # The server resolves the path in its own process, with its own cwd, possibly on another host. vLLM reads a
         # path it cannot resolve as a Hub repo id, so a relative one dies inside the engine.
         assert os.path.isabs(path)
-        assert fake_vllm.paused is False  # paused for the publish, resumed after
+        assert server.paused is False  # paused for the publish, resumed after
 
     @pytest.mark.parametrize(
         ("max_staleness", "max_loras", "servable_after_five"),
         [(1, 3, ["trl-policy-v4", "trl-policy-v5"]), (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)])],
     )
     def test_adapter_sync_keeps_max_staleness_plus_one_versions_servable(
-        self, fake_vllm, max_staleness, max_loras, servable_after_five
+        self, server, max_staleness, max_loras, servable_after_five
     ):
         # Regression: an early version evicted `v{N-2}` regardless of `max_staleness`, deleting an adapter that
         # in-flight requests could still name; vLLM resolves `lora_path` lazily inside the engine, so the missing
         # directory killed the engine with an `HFValidationError` rather than 404ing. `N-2` happens to equal
         # `N-(max_staleness+1)` at `max_staleness=1`, which is why the second row exists.
         trainer = self._build(
-            fake_vllm,
+            server,
             self._lora_config(),
             lora_config={"max_lora_rank": 32, "max_loras": max_loras},
             max_staleness=max_staleness,
@@ -5831,9 +5733,9 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         for _ in range(5):
             trainer._sync_weight()
 
-        assert list(fake_vllm.loaded) == servable_after_five
+        assert list(server.loaded) == servable_after_five
         # The server never had to evict one itself: the `--max-loras` bound left room for the load-then-unload.
-        assert fake_vllm.evicted == []
+        assert server.evicted == []
         # The files lag the unload by one sync, so one more directory than the servable set survives on disk.
         newest_deleted = 5 - (max_staleness + 1) - 1
         for version in range(1, 6):
@@ -5842,7 +5744,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     # --- merged fallback ---------------------------------------------------------------------------------------
 
-    def test_merged_sync_sends_base_names_only(self, fake_vllm):
+    def test_merged_sync_sends_base_names_only(self, server):
         sent = []
 
         class _RecordingWeightTransfer(_StubWeightTransfer):
@@ -5850,7 +5752,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 sent.extend(name for name, _ in iterator)
 
         trainer = self._build(
-            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer
+            server, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer
         )
         trainer._sync_weight()
 
@@ -5870,12 +5772,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(sent) == len(set(sent))
 
     @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
-    def test_vllm_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
+    def test_vllm_manifest_and_streaming_iter_agree_element_for_element(self, server):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
         trainer = self._build(
-            fake_vllm,
+            server,
             self._lora_config(modules_to_save=["lm_head"]),
             lora_config=None,
             weight_transfer=WeightTransferClient,
@@ -5886,7 +5788,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, fake_vllm):
+    def test_adapters_are_unmerged_when_the_send_raises(self, server):
         merged_during_send = []
 
         class _RaisingWeightTransfer(_StubWeightTransfer):
@@ -5894,7 +5796,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 merged_during_send.append(_any_adapter_merged(trainer.model))
                 raise RuntimeError("transfer blew up")
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
+        trainer = self._build(server, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
         with pytest.raises(RuntimeError, match="transfer blew up"):
             trainer._sync_weight()
 
