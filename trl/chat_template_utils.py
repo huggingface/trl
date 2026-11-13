@@ -800,7 +800,7 @@ qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_tex
 
 qwen3_coder_next_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_next.jinja").read_text(encoding="utf-8")
 
-# Also matches SmolVLM2-500M-Video-Instruct, and SmolVLM2-2.2B-Instruct before 2026-11-11.
+# Also matches SmolVLM2-2.2B-Instruct before 2026-11-11 and SmolVLM2-500M-Video-Instruct before 2026-11-13.
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
 
 smolvlm_v2_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_v2.jinja").read_text(encoding="utf-8")
