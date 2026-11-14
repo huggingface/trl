@@ -1268,6 +1268,20 @@ class SFTTrainer(_BaseTrainer):
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
+        # transformers rejects router logits under reentrant gradient checkpointing, which PEFT + DeepSpeed ZeRO-3 forces
+        # before DeepSpeed 0.19.3 (https://github.com/huggingface/transformers/pull/50637)
+        if (
+            self.aux_loss_enabled
+            and args.gradient_checkpointing
+            and (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+            and Version(transformers.__version__) >= Version("5.24.0")
+        ):
+            raise ValueError(
+                "The MoE auxiliary loss needs router logits, which transformers does not support with reentrant "
+                "gradient checkpointing. Set `use_reentrant=False` in `gradient_checkpointing_kwargs` (with PEFT + "
+                "DeepSpeed ZeRO-3, this requires DeepSpeed 0.19.3 or later), or set `router_aux_loss_coef=0.0`."
+            )
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
