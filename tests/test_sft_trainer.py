@@ -2336,9 +2336,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
                 marks=pytest.mark.skipif(
