@@ -748,8 +748,8 @@ class TestRLOOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),

@@ -1459,7 +1459,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
         # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=target_modules,
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -1489,7 +1489,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
         # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         peft_config = LoraConfig(
             target_modules=["q_proj", "v_proj"],
             modules_to_save=["lm_head"],
@@ -2148,7 +2148,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        Version(transformers.__version__) < Version("5.13.0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
     )
     @pytest.mark.usefixtures("stub_weight_transfer")

@@ -31,9 +31,8 @@ _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 
 # New-style `response_template` parsing (streamable chat parsing, with the `prefix=` argument to `parse_response`)
 # landed in transformers 5.13.0 (huggingface/transformers#45847). Earlier versions (>= 5.0.0) only ship the legacy
-# `response_schema` parser. We gate on `5.13.0.dev0` so the feature is also active on transformers `main` (which
-# reports a dev version) ahead of the 5.13.0 release.
-_SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
+# `response_schema` parser.
+_SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0")
 
 # `parse_response(..., tools=...)`, which types the tool-call arguments with the calling tool's JSON schema, landed in
 # transformers 5.15.0 (huggingface/transformers#47529).
