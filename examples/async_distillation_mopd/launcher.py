@@ -139,9 +139,9 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
 
 def start_teacher(name: str, port: int, device: str, memory: float, args: argparse.Namespace, logs: pathlib.Path):
     cmd = [
-        "vllm", "serve", f"{MODEL_PREFIX}-{name}",
+        "vllm", "serve", f"{args.teacher_model_prefix}-{name}",
         "--port", str(port),
-        "--max-model-len", str(args.max_model_len + 64),
+        "--max-model-len", str(args.teacher_max_model_len or (32768 if args.distillation_method == "csd" else args.max_model_len + 64)),
         "--gpu-memory-utilization", str(memory),
         "--logprobs-mode", "processed_logprobs",
         "--max-logprobs", "-1",
@@ -154,6 +154,21 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # Prompt (the longest in the prompt mix is 2583 tokens with the chat template) + max_completion_length (16384)
     p.add_argument("--max-model-len", type=int, default=19456)
+    p.add_argument("--teacher-max-model-len", type=int)
+    p.add_argument("--student-model", default=f"{MODEL_PREFIX}-MixSFT")
+    p.add_argument("--teacher-model-prefix", default=MODEL_PREFIX)
+    p.add_argument("--distillation-method", choices=("token", "csd"), default="token")
+    p.add_argument("--teacher-top-k", type=int)
+    p.add_argument("--beta", type=float)
+    p.add_argument("--run-name")
+    p.add_argument("--trackio-space-id")
+    p.add_argument("--max-steps", type=int, default=90)
+    p.add_argument("--max-completion-length", type=int, default=16384)
+    p.add_argument("--output-dir", default="async_distillation_mopd")
+    p.add_argument("--max-concurrent-rollouts", type=int)
+    p.add_argument("--save-steps", type=int, default=20)
+    p.add_argument("--resume-from-checkpoint")
+    p.add_argument("--train-script", type=pathlib.Path)
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--logs", default="./logs")
     return p.parse_args()
@@ -167,18 +182,16 @@ def main() -> None:
 
     if shutil.which("vllm") is None:
         raise RuntimeError("`vllm` is not on PATH; the PEP 723 dependencies did not install")
-    n_gpu = len(
-        [
-            line
-            for line in subprocess.run(
-                ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout.splitlines()
-            if line.strip()
-        ]
-    )
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        devices = [device.strip() for device in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if device.strip()]
+    else:
+        devices = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+    n_gpu = len(devices)
     if n_gpu < 4:
         raise RuntimeError(
             f"needs 4 GPUs (student, teachers, trainer on one host) but sees {n_gpu}; try --flavor h200x4"
@@ -187,30 +200,54 @@ def main() -> None:
     student_url = "http://127.0.0.1:8000"
     student_log = logs / "vllm-student.log"
     student_cmd = [
-        "vllm", "serve", f"{MODEL_PREFIX}-MixSFT",
+        "vllm", "serve", args.student_model,
         "--port", "8000",
         "--max-model-len", str(args.max_model_len),
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
-    student = _spawn(student_cmd, student_log, env={"CUDA_VISIBLE_DEVICES": "0", "VLLM_SERVER_DEV_MODE": "1"})
+    student = _spawn(student_cmd, student_log, env={"CUDA_VISIBLE_DEVICES": devices[0], "VLLM_SERVER_DEV_MODE": "1"})
 
-    code, code_url, code_log = start_teacher("RL-Code", 8002, "2", 0.85, args, logs)
+    code, code_url, code_log = start_teacher("RL-Code", 8002, devices[2], 0.85, args, logs)
     # The two teachers sharing GPU 1 start one after the other
     for name, port in (("RL-Math", 8001), ("RL-IF", 8003)):
-        proc, url, log = start_teacher(name, port, "1", 0.42, args, logs)
+        proc, url, log = start_teacher(name, port, devices[1], 0.42, args, logs)
         wait_for_vllm(url, proc, log)
     wait_for_vllm(code_url, code, code_log)
     wait_for_vllm(student_url, student, student_log)
 
-    script = pathlib.Path("async_distillation_mopd.py")
-    print(f"[launcher] fetching {args.train_script_url}", flush=True)
-    try:
-        urllib.request.urlretrieve(args.train_script_url, script)
-    except (urllib.error.URLError, OSError) as exc:
-        raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
+    script = args.train_script
+    if script is None:
+        script = pathlib.Path("async_distillation_mopd.py")
+        print(f"[launcher] fetching {args.train_script_url}", flush=True)
+        try:
+            urllib.request.urlretrieve(args.train_script_url, script)
+        except (urllib.error.URLError, OSError) as exc:
+            raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
 
     print("[launcher] starting training on GPU 3", flush=True)
-    trainer = _spawn([sys.executable, str(script)], None, env={"CUDA_VISIBLE_DEVICES": "3"})
+    train_cmd = [
+        sys.executable, str(script),
+        "--student-model", args.student_model,
+        "--teacher-model-prefix", args.teacher_model_prefix,
+        "--distillation-method", args.distillation_method,
+        "--max-steps", str(args.max_steps),
+        "--max-completion-length", str(args.max_completion_length),
+        "--output-dir", args.output_dir,
+        "--save-steps", str(args.save_steps),
+    ]  # fmt: skip
+    if args.teacher_top_k is not None:
+        train_cmd.extend(["--teacher-top-k", str(args.teacher_top_k)])
+    if args.beta is not None:
+        train_cmd.extend(["--beta", str(args.beta)])
+    if args.max_concurrent_rollouts is not None:
+        train_cmd.extend(["--max-concurrent-rollouts", str(args.max_concurrent_rollouts)])
+    if args.run_name is not None:
+        train_cmd.extend(["--run-name", args.run_name])
+    if args.resume_from_checkpoint is not None:
+        train_cmd.extend(["--resume-from-checkpoint", args.resume_from_checkpoint])
+    if args.trackio_space_id is not None:
+        train_cmd.extend(["--trackio-space-id", args.trackio_space_id])
+    trainer = _spawn(train_cmd, None, env={"CUDA_VISIBLE_DEVICES": devices[3]})
     rc = trainer.wait()
     print(f"[launcher] training exited {rc}", flush=True)
     sys.exit(rc)

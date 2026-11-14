@@ -13,14 +13,17 @@
 # limitations under the License.
 
 import asyncio
+import copy
 import itertools
 import json
 import math
 import multiprocessing as mp
 import os
 import queue
+import threading
 import time
 from collections import OrderedDict, defaultdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -32,7 +35,11 @@ from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
+from tokenizers import Tokenizer
+from tokenizers.decoders import ByteLevel
+from tokenizers.models import BPE
+from tokenizers.pre_tokenizers import ByteLevel as ByteLevelPreTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -42,6 +49,7 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
     TokenBudgetBatcher,
     _add_tail_bucket,
+    _chunked_csd_loss,
     _chunked_jsd_loss,
     _EpochStopCallback,
     _iter_vllm_named_params,
@@ -56,13 +64,21 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     _parse_teacher_logprobs_at_position,
     _spawn_stop_watcher,
 )
+from trl.experimental.async_distillation.csd import CSDTargetBuilder, csd_divergence
 from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, is_bf16_supported, require_peft, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    is_ampere_or_newer,
+    is_bf16_supported,
+    require_peft,
+    require_torch_accelerator,
+    require_vllm,
+)
 
 
 TEACHER_TOP_K = 4
@@ -1663,6 +1679,498 @@ class TestVLLMManifestWeightStream:
         ]
         for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
             assert torch.equal(sent_tensor, original_tensor)
+
+
+class _CSDTeacherHandler(BaseHTTPRequestHandler):
+    """External generation/scoring service; teacher probabilities come from real tiny models."""
+
+    def _reply(self, body):
+        encoded = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def do_GET(self):
+        teacher_id = self.path.split("/")[1]
+        self._reply({"data": [{"id": teacher_id, "max_model_len": 2048}]})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        teacher_id = body["model"]
+        if teacher_id not in self.server.models:
+            self._reply({"choices": [{"token_ids": self.server.completion_ids}]})
+            return
+        tokens = body["prompt"]
+        self.server.scored[teacher_id].append(tokens)
+        with torch.no_grad():
+            logps = (
+                self.server.models[teacher_id](torch.tensor([tokens])).logits[0].float() / body["temperature"]
+            ).log_softmax(-1)
+        rows = [None]
+        for position, token in enumerate(tokens[1:]):
+            values, ids = logps[position].topk(body["prompt_logprobs"])
+            entries = {
+                str(tid): {"logprob": lp, "rank": rank}
+                for rank, (tid, lp) in enumerate(zip(ids.tolist(), values.tolist(), strict=True), start=1)
+            }
+            entries[str(token)] = {
+                "logprob": logps[position, token].item(),
+                "rank": int((logps[position] > logps[position, token]).sum()) + 1,
+            }
+            rows.append(entries)
+        self._reply({"choices": [{"prompt_logprobs": rows}]})
+
+    def log_message(self, *_args):
+        pass
+
+
+@pytest.fixture
+def csd_teacher_server(tmp_path):
+    student = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+    teacher_model = (
+        AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32)
+        .cpu()
+        .eval()
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _CSDTeacherHandler)
+    server.models, server.tokenizers, server.paths = {}, {}, {}
+    server.scored = defaultdict(list)
+    server.answer = "The answer is four. Here is a short explanation."
+    server.completion_ids = student.encode(server.answer, add_special_tokens=False) + [student.eos_token_id]
+    for teacher_id, name in (
+        ("llama", "trl-internal-testing/tiny-LlamaForCausalLM-3.2"),
+        ("smol", "HuggingFaceTB/SmolLM2-135M-Instruct"),
+    ):
+        tokenizer = AutoTokenizer.from_pretrained(name)
+        model = copy.deepcopy(teacher_model)
+        model.resize_token_embeddings(len(tokenizer))
+        server.models[teacher_id] = model
+        server.tokenizers[teacher_id] = tokenizer
+        path = tmp_path / teacher_id
+        tokenizer.save_pretrained(path)
+        server.paths[teacher_id] = str(path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@require_torch_accelerator
+class TestAsyncDistillationCSD(TrlTestCase):
+    def test_train_with_different_teacher_and_student_tokenizers(self, fake_vllm, csd_teacher_server, monkeypatch):
+        # Restore the real worker instead of this module's default stub. Only
+        # the external servers/weight transport are simulated, as above.
+        monkeypatch.setattr(async_distillation_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker)
+        server = csd_teacher_server
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        monkeypatch.setattr(FakeVLLMServer, "url", base_url)
+        dataset = Dataset.from_list(
+            [
+                {"prompt": [{"role": "user", "content": question}], "teacher_id": expert}
+                for expert, question in (
+                    ("llama", "What is two plus two?"),
+                    ("smol", "Write an explanation."),
+                    ("llama", "What is three plus one?"),
+                    ("smol", "Answer briefly."),
+                )
+            ]
+        )
+        config = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            distillation_method="csd",
+            teacher_server_urls={key: f"{base_url}/{key}" for key in server.models},
+            teacher_tokenizers=server.paths,
+            vllm_server_base_url=base_url,
+            max_steps=2,
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=2,
+            max_completion_length=32,
+            beta=0.5,
+            teacher_top_k=8,
+            token_budget=128,
+            max_concurrent_rollouts=1,
+            max_staleness=1,
+            rollout_worker_timeout=600,
+            save_strategy="no",
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5", args=config, train_dataset=dataset
+        )
+        before = {name: p.detach().clone() for name, p in trainer.model.named_parameters() if "q_proj" in name}
+        try:
+            trainer.train()
+            assert trainer.state.global_step == 2
+            assert any(
+                not torch.equal(before[name], p) for name, p in trainer.model.named_parameters() if name in before
+            )
+            history = [row for row in trainer.state.log_history if "teacher/llama/chunk_frac" in row]
+            for expert, tokenizer in server.tokenizers.items():
+                assert server.scored[expert]
+                assert server.answer in tokenizer.decode(server.scored[expert][0])
+                assert any(row[f"teacher/{expert}/chunk_frac"] > 0 for row in history)
+                assert all(math.isfinite(row[f"teacher/{expert}/jsd"]) for row in history)
+            assert all(row["csd/alignment_coverage"] == 1.0 for row in history)
+        finally:
+            trainer.end()
+
+
+def _csd_tokenizer(teacher=False, permute_ids=False):
+    alphabet = sorted(ByteLevelPreTokenizer.alphabet())
+    merges = (
+        [("b", "c"), ("a", "bc"), ("x", "y"), ("b", "d")]
+        if teacher
+        else [("a", "b"), ("ab", "c"), ("x", "y"), ("a", "c")]
+    )
+    if permute_ids:
+        alphabet = alphabet[::-1]
+    tokens = alphabet + [a + b for a, b in merges]
+    backend = Tokenizer(BPE(vocab={token: i for i, token in enumerate(tokens)}, merges=merges))
+    backend.pre_tokenizer = ByteLevelPreTokenizer(add_prefix_space=False, use_regex=False)
+    backend.decoder = ByteLevel()
+    return PreTrainedTokenizerFast(tokenizer_object=backend, eos_token="<eos>", pad_token="<eos>")
+
+
+@pytest.fixture(scope="module")
+def csd_builder():
+    return CSDTargetBuilder(_csd_tokenizer(), _csd_tokenizer(teacher=True), top_k=4)
+
+
+def test_prefix_alternatives(csd_builder):
+    s = csd_builder.student_tokenizer.convert_tokens_to_ids(["ab"])
+    t = csd_builder.teacher_tokenizer.convert_tokens_to_ids(["a", "b"])
+    c = csd_builder.teacher_tokenizer.convert_tokens_to_ids("c")
+    ids, lps, _, _ = csd_builder.build(s, t, csd_builder.align(s, t), [[t[0]], [t[1], c]], [[-1.0], [-1.0, -2.0]], 5.0)
+    assert ids[0, :2].tolist() == [s[0], csd_builder.student_tokenizer.convert_tokens_to_ids("ac")]
+    np.testing.assert_allclose(lps[0, :2], [-2.0, -3.0])
+
+
+@pytest.mark.parametrize("top_k", [1, 4])
+def test_csd_does_not_equate_ordinary_and_special_tokens(top_k):
+    student, teacher = _csd_tokenizer(), _csd_tokenizer(teacher=True)
+    student.add_tokens(["<control>"])
+    teacher.add_special_tokens({"additional_special_tokens": ["<control>"]})
+    csd_builder = CSDTargetBuilder(student, teacher, top_k=top_k)
+    s_id = student.convert_tokens_to_ids("<control>")
+    t_id = teacher.convert_tokens_to_ids("<control>")
+    alternative = teacher.convert_tokens_to_ids("a")
+    chunks = csd_builder.align([s_id], [t_id])
+    ids, lps, _, weights = csd_builder.build([s_id], [t_id], chunks, [[t_id, alternative]], [[-1.0, -2.0]], 5.0)
+    if top_k == 1:
+        assert weights.sum() == 1
+        student_logps = torch.zeros_like(torch.as_tensor(lps), requires_grad=True)
+        divergence, _ = csd_divergence(student_logps, torch.as_tensor(lps), torch.as_tensor(ids) >= 0, 0.5)
+        divergence.sum().backward()
+        assert torch.equal(divergence, torch.zeros_like(divergence))
+        assert torch.equal(student_logps.grad, torch.zeros_like(student_logps))
+    else:
+        assert ids[0][ids[0] >= 0].tolist() == [student.convert_tokens_to_ids("a")]
+        assert lps[0, 0] == -2.0
+        assert weights[0] == 1.0
+
+
+def test_csd_forced_label_replaces_topk_before_common_mapping():
+    student, teacher = _csd_tokenizer(), _csd_tokenizer(teacher=True)
+    csd_builder = CSDTargetBuilder(student, teacher, top_k=2)
+    s_id, t_id = student.convert_tokens_to_ids("a"), teacher.convert_tokens_to_ids("a")
+    # The teacher's top token is not a common 1:1 event. Keeping the realized
+    # label replaces 'b' before mapping, as in the reference sparse reader.
+    teacher_ids = teacher.convert_tokens_to_ids(["bc", "b", "a"])
+    ids, lps, _, _ = csd_builder.build([s_id], [t_id], [(0, 1, 0, 1)], [teacher_ids], [[-0.3, -0.8, -10.0]], 5.0)
+    assert ids[0][ids[0] >= 0].tolist() == [s_id]
+    assert lps[0, 0] == -10.0
+
+
+def test_noncanonical_generation_and_unicode(csd_builder):
+    s = csd_builder.student_tokenizer.convert_tokens_to_ids(["a", "b", "c"])
+    t = csd_builder.teacher_tokenizer.encode("abc", add_special_tokens=False)
+    assert s != csd_builder.student_tokenizer.encode("abc", add_special_tokens=False)
+    assert csd_builder.align(s, t) == [(0, 3, 0, 1)]
+    text = "café 🙂 中文"
+    s = csd_builder.student_tokenizer.encode(text, add_special_tokens=False)
+    t = csd_builder.teacher_tokenizer.encode(text, add_special_tokens=False)
+    chunks = csd_builder.align(s, t)
+    assert sum(s1 - s0 for s0, s1, _, _ in chunks) == len(s)
+    assert sum(t1 - t0 for _, _, t0, t1 in chunks) == len(t)
+    assert csd_builder.align(s, csd_builder.teacher_tokenizer.encode("different", add_special_tokens=False)) == []
+
+
+@pytest.fixture(scope="module")
+def csd_tiny_model():
+    return (
+        AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32)
+        .cpu()
+        .eval()
+    )
+
+
+@pytest.fixture(scope="module")
+def csd_mixed_teachers(csd_tiny_model):
+    # Both experts differ from the student. The second reverses the byte ID
+    # order as well, so using teacher IDs to gather student logits is wrong
+    # even for ordinary single-byte tokens. These are actual BPE tokenizers.
+    student = _csd_tokenizer()
+    teachers = [_csd_tokenizer(teacher=True), _csd_tokenizer(teacher=True, permute_ids=True)]
+    builders = [CSDTargetBuilder(student, teacher, top_k=4) for teacher in teachers]
+    models = [copy.deepcopy(csd_tiny_model) for _ in teachers]
+    for model, tokenizer in zip(models, teachers, strict=True):
+        model.resize_token_embeddings(len(tokenizer))
+        model.requires_grad_(False)
+    # Same coverage as NeMo's common/mismatch fixtures, with genuine token
+    # events instead of pseudo tables. Include unequal teacher cohorts and a
+    # sample with no valid teacher scores.
+    cases = [
+        (0, ["abc"], ["abc"]),
+        (1, ["ab"], ["a", "b"]),
+        (0, ["b", "c"], ["bc"]),
+        (1, ["ab", "c"], ["a", "bc"]),
+        (1, ["abc"], ["abc"]),
+        (0, ["ab"], ["a", "b"]),
+    ]
+    samples = []
+    for index, (expert, s_tokens, t_tokens) in enumerate(cases):
+        teacher = teachers[expert]
+        s_ids = student.convert_tokens_to_ids(s_tokens)
+        t_ids = teacher.convert_tokens_to_ids(t_tokens)
+        with torch.no_grad():
+            teacher_logits = models[expert](torch.tensor([[teacher.eos_token_id] + t_ids])).logits[0]
+            logps = teacher_logits[:-1].log_softmax(-1)
+        # A full teacher row makes the support/mapping oracle independent of
+        # random top-k membership, as in NeMo's full-support transport tests.
+        top_ids = [list(range(len(teacher)))] * len(t_ids)
+        top_lps = logps.tolist()
+        if index == len(cases) - 1:
+            top_ids[0], top_lps[0] = [], []
+        chunks = builders[expert].align(s_ids, t_ids)
+        ids, lps, lengths, weights = builders[expert].build(s_ids, t_ids, chunks, top_ids, top_lps, 5.0)
+        samples.append(
+            dict(
+                expert=expert,
+                s_ids=s_ids,
+                t_ids=t_ids,
+                chunks=chunks,
+                teacher_logps=logps,
+                teacher_logits=teacher_logits,
+                input_ids=np.array([student.eos_token_id] + s_ids),
+                completion_mask=np.array([0] + [1] * len(s_ids)),
+                teacher_topk_ids=np.concatenate([np.full((1, 5), -1), ids]),
+                teacher_topk_logprobs=np.concatenate([np.full((1, 5), -np.inf), lps]),
+                csd_prefix_lengths=np.concatenate([[0], lengths]),
+                csd_weights=np.concatenate([[0.0], weights]).astype(np.float32),
+                teacher_id=str(expert),
+                prompt_id=index,
+                metrics={},
+            )
+        )
+    return student, teachers, samples
+
+
+def _csd_probability_reference(q, p, beta):
+    # Independent probability-space reference, matching NeMo's parity tests.
+    if beta == 0:
+        return (p * (p.log() - q.log())).sum()
+    if beta == 1:
+        return (q * (q.log() - p.log())).sum()
+    mixture = (1 - beta) * q + beta * p
+    return (beta * p * (p.log() - mixture.log()) + (1 - beta) * q * (q.log() - mixture.log())).sum()
+
+
+@pytest.mark.parametrize("beta", [0.5, 1.0])
+def test_mixed_tokenizers_packed_loss_and_gradients_match_dense_oracle(csd_tiny_model, csd_mixed_teachers, beta):
+    student, teachers, samples = csd_mixed_teachers
+    model = copy.deepcopy(csd_tiny_model)
+    model.resize_token_embeddings(len(student))
+    collator = DataCollatorForRollout(student.pad_token_id, 2, {"0": 0, "1": 1})
+    # Unequal packed rows; teacher 1 contributes three chunks while teacher 0
+    # contributes two. The final sample has no usable teacher-prefix score.
+    batch = collator([[samples[:2], samples[2:]]])
+    hidden, dense_logps = [], []
+    for sample in samples:
+        tokens = torch.as_tensor(sample["input_ids"]).unsqueeze(0)
+        hidden.append(model.base_model(input_ids=tokens).last_hidden_state[0, :-1])
+        dense_logps.append(model(tokens).logits[0, :-1].double().log_softmax(-1))
+    targets = torch.cat([torch.as_tensor(sample["teacher_topk_ids"][1:]) for sample in samples])
+    teacher_events = torch.cat([torch.as_tensor(sample["teacher_topk_logprobs"][1:]) for sample in samples]).float()
+    prefixes = torch.cat([torch.as_tensor(sample["csd_prefix_lengths"][1:]) for sample in samples])
+    weights = torch.cat([torch.as_tensor(sample["csd_weights"][1:]) for sample in samples])
+    actual_ids = torch.tensor([token for sample in samples for token in sample["s_ids"]])
+    expert_ids = torch.tensor([sample["expert"] for sample in samples for _ in sample["s_ids"]])
+    result = _chunked_csd_loss(
+        torch.cat(hidden),
+        model.get_output_embeddings().weight,
+        None,
+        1.0,
+        None,
+        targets,
+        teacher_events,
+        actual_ids,
+        prefixes,
+        weights,
+        beta,
+        1.0,
+        expert_ids,
+        2,
+        1,  # Prefix chains cross checkpoint boundaries.
+    )
+    actual_loss = result[0] / batch["global_n_chunks"][0]
+    actual_loss.backward()
+    actual_grads = {name: param.grad.clone() for name, param in model.named_parameters() if param.grad is not None}
+    model.zero_grad()
+    reference = dense_logps[0].new_zeros(())
+    count = 0
+    for sample, student_logps in zip(samples, dense_logps, strict=True):
+        teacher = teachers[sample["expert"]]
+        for s0, s1, t0, t1 in sample["chunks"]:
+            if sample["csd_weights"][s1] == 0:
+                continue
+            q_events, p_events = [], []
+            s_prefix = sample["s_ids"][s0 : s1 - 1]
+            t_prefix = sample["t_ids"][t0 : t1 - 1]
+            for sid in sample["teacher_topk_ids"][s1]:
+                if sid < 0:
+                    continue
+                event = "".join(student.convert_ids_to_tokens(s_prefix + [int(sid)]))
+                # Brute-force vocabulary surfaces form an independent mapping
+                # oracle: never read the production sub-token tables here.
+                matching = [
+                    tid
+                    for tid in range(len(teacher))
+                    if "".join(teacher.convert_ids_to_tokens(t_prefix + [tid])) == event
+                ]
+                assert len(matching) == 1
+                tid = matching[0]
+                s_lp = sum(student_logps[pos, token] for pos, token in enumerate(s_prefix, start=s0))
+                t_lp = sum(
+                    sample["teacher_logps"][pos, token].double() for pos, token in enumerate(t_prefix, start=t0)
+                )
+                q_events.append((s_lp + student_logps[s1 - 1, sid]).exp())
+                p_events.append((t_lp + sample["teacher_logps"][t1 - 1, tid].double()).exp())
+            q, p = torch.stack(q_events), torch.stack(p_events)
+            q = torch.cat([q, (1 - q.sum()).unsqueeze(0)])
+            p = torch.cat([p, (1 - p.sum()).unsqueeze(0)])
+            reference = reference + sample["csd_weights"][s1] * _csd_probability_reference(q, p, beta)
+            count += 1
+    reference = reference / count
+    reference.backward()
+    assert count == 5
+    torch.testing.assert_close(actual_loss.double(), reference, atol=2e-7, rtol=1e-4)
+    for name, param in model.named_parameters():
+        if name in actual_grads:
+            assert torch.isfinite(actual_grads[name]).all()
+            torch.testing.assert_close(actual_grads[name], param.grad, atol=2e-6, rtol=3e-4)
+    assert result[4][::3].tolist() == [2.0, 3.0]
+
+
+@pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+def test_softmax_cancellation_at_and_near_matched_cross_tokenizer_events(beta):
+    # Unequal chain event masses plus REST, including a nearly deterministic
+    # event. The teacher support is already mapped across tokenizer IDs.
+    teacher = torch.tensor([[-0.4, -2.0, -4.0], [-2e-8, -20.0, -22.0]], dtype=torch.float32)
+    mask = torch.ones_like(teacher, dtype=torch.bool)
+    equal = teacher.clone().requires_grad_()
+    loss, _ = csd_divergence(equal, teacher, mask, beta)
+    loss.sum().backward()
+    assert torch.equal(loss, torch.zeros_like(loss))
+    assert torch.equal(equal.grad, torch.zeros_like(equal))
+    near = (teacher + torch.tensor([[2e-7, -2e-7, 1e-7], [-1e-9, 2e-6, -2e-6]])).requires_grad_()
+    actual, _ = csd_divergence(near, teacher, mask, beta)
+    actual.sum().backward()
+    # Double-precision probability equations retain the true tiny signal and
+    # provide an independent gradient oracle for Barron's cancellation case.
+    oracle = near.detach().double().requires_grad_()
+    expected = []
+    for s, t in zip(oracle, teacher.double(), strict=True):
+        q, p = s.exp(), t.exp()
+        q = torch.cat([q, (1 - q.sum()).unsqueeze(0)])
+        p = torch.cat([p, (1 - p.sum()).unsqueeze(0)])
+        expected.append(_csd_probability_reference(q, p, beta))
+    torch.stack(expected).sum().backward()
+    assert torch.isfinite(near.grad).all()
+    assert near.grad.abs().sum() > 0
+    torch.testing.assert_close(near.grad.double(), oracle.grad, atol=2e-13, rtol=3e-5)
+
+
+@pytest.mark.parametrize("head_size", [1, 4])
+def test_csd_forward_kl_preserves_head_weights_and_tail_gradient(head_size):
+    logits = torch.tensor([[1.2, -0.8, 0.3, 2.1, -1.4]], dtype=torch.float64, requires_grad=True)
+    teacher_logps = torch.tensor([[0.8, -1.0, 1.7, 0.1, 0.2]], dtype=torch.float64).log_softmax(-1)
+    selected = torch.tensor([0, 2, 4, 1])[:head_size]
+    student_logps = logits.log_softmax(-1)
+    loss, _ = csd_divergence(
+        student_logps[:, selected], teacher_logps[:, selected], torch.ones((1, head_size), dtype=torch.bool), 0.0
+    )
+    (gradient,) = torch.autograd.grad(loss.sum(), logits)
+    p, q = student_logps.detach().exp(), teacher_logps.exp()
+    p_head, q_head = p[:, selected], q[:, selected]
+    p_tail, q_tail = 1 - p_head.sum(-1), 1 - q_head.sum(-1)
+    rho = q_tail / p_tail
+    reference_loss = (q_head * (teacher_logps[:, selected] - student_logps.detach()[:, selected])).sum(-1)
+    reference_loss = reference_loss + q_tail * rho.log()
+    # REST distributes its gradient over every omitted student logit. Merely
+    # matching forward values, or detaching the tail, would miss this check.
+    reference_gradient = p * (1 - rho.unsqueeze(-1))
+    reference_gradient[:, selected] = p_head - q_head
+    torch.testing.assert_close(loss, reference_loss, atol=1e-12, rtol=1e-10)
+    torch.testing.assert_close(gradient, reference_gradient, atol=1e-12, rtol=1e-10)
+    torch.testing.assert_close(gradient.sum(-1), torch.zeros(1, dtype=gradient.dtype), atol=1e-12, rtol=0)
+    if head_size == logits.size(-1) - 1:
+        # With a single omitted token, the partition is the full distribution.
+        full_kl = (q * (teacher_logps - student_logps.detach())).sum(-1)
+        torch.testing.assert_close(loss, full_kl, atol=1e-12, rtol=1e-10)
+
+
+def test_csd_chain_loss_and_gradients_ignore_long_masked_prefix(csd_tiny_model, csd_mixed_teachers):
+    student, _, samples = csd_mixed_teachers
+    sample = samples[2]  # Two student tokens aligned to one teacher token.
+    model = copy.deepcopy(csd_tiny_model)
+    model.resize_token_embeddings(len(student))
+    hidden = model.base_model(input_ids=torch.as_tensor(sample["input_ids"]).unsqueeze(0)).last_hidden_state[0, :-1]
+    ids = torch.as_tensor(sample["teacher_topk_ids"][1:])
+    teacher_logps = torch.as_tensor(sample["teacher_topk_logprobs"][1:]).float()
+    actual_ids = torch.tensor(sample["s_ids"])
+    lengths = torch.as_tensor(sample["csd_prefix_lengths"][1:])
+    weights = torch.as_tensor(sample["csd_weights"][1:])
+    head = model.get_output_embeddings().weight
+
+    def loss(hidden, ids, teacher_logps, actual_ids, lengths, weights):
+        return _chunked_csd_loss(
+            hidden,
+            head,
+            None,
+            1.0,
+            None,
+            ids,
+            teacher_logps,
+            actual_ids,
+            lengths,
+            weights,
+            0.5,
+            1.0,
+            None,
+            1,
+            256,
+        )[0]
+
+    reference = loss(hidden, ids, teacher_logps, actual_ids, lengths, weights)
+    (reference_grad,) = torch.autograd.grad(reference, head, retain_graph=True)
+    n_masked = 8192
+    actual = loss(
+        torch.cat([hidden[:1].expand(n_masked, -1), hidden]),
+        torch.cat([ids.new_full((n_masked, ids.size(1)), -1), ids]),
+        torch.cat([teacher_logps.new_full((n_masked, ids.size(1)), -torch.inf), teacher_logps]),
+        torch.cat([actual_ids[:1].expand(n_masked), actual_ids]),
+        torch.cat([lengths.new_zeros(n_masked), lengths]),
+        torch.cat([weights.new_zeros(n_masked), weights]),
+    )
+    (actual_grad,) = torch.autograd.grad(actual, head)
+    torch.testing.assert_close(actual, reference, atol=1e-12, rtol=1e-7)
+    torch.testing.assert_close(actual_grad, reference_grad, atol=1e-10, rtol=1e-6)
 
 
 def _start_stop_watcher_and_exit(stop_event):
