@@ -2940,7 +2940,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 output_dir=self.tmp_dir,
                 dtype="bfloat16",
                 temperature=temperature,
-                score_centering=True,
                 num_generations=2,
                 max_concurrent_rollouts=2,
                 max_completion_length=8,
@@ -2949,14 +2948,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 save_strategy="no",
                 vllm_server_base_url=server.url,
                 vllm_server_timeout=5.0,
-                report_to="none",
             ),
             train_dataset=dataset,
         )
         if temperature != 1.0 and logprobs_mode == "raw_logprobs":
             # The server reports a different distribution from the one it samples; reject it before collecting data.
-            with pytest.raises(RuntimeError, match="processed_logprobs"):
+            with pytest.raises(RuntimeError, match="Rollout worker child") as excinfo:
                 trainer.train()
+            assert "processed_logprobs" in str(excinfo.value.__cause__)
             assert server.generation_requests == 0
         else:
             trainer.train()
@@ -3028,12 +3027,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
                 bf16=False,
-                dtype="float32",
-                temperature=1.0,
                 top_k=top_k,
                 num_sampler_logprobs=num_sampler_logprobs,
                 max_steps=1,
-                report_to="none",
             ),
             train_dataset=dataset,
         )
