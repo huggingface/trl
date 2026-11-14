@@ -326,3 +326,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
                 "sharding cannot be applied to the raw generation batch. Set both `cp_size=1` and `sp_size=1`, "
                 "or disable `parallelism_config`."
             )
+
+        # Accelerator config: every rank draws its own prompts. Dispatching, where the main process walks an iterable
+        # dataset and broadcasts its batches, only carries tensors, not the prompts' messages.
+        self.accelerator_config.dispatch_batches = False

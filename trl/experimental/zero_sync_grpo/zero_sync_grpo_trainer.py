@@ -1854,11 +1854,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def _build_train_dataloader(self):
         # The prompts keep the sampler and the per-replica sharding; every prompt produces `num_generations`
-        # rollouts, so this feeds `per_device_train_batch_size / num_generations` prompts for each batch of samples.
+        # rollouts, so this feeds `per_device_train_batch_size / num_generations` prompts for each batch of samples,
+        # and at least one when a group is larger than the batch.
         prompt_loader = self._get_dataloader(
             dataset=self.train_dataset,
             description="Training",
-            batch_size=self._train_batch_size // self.args.num_generations,
+            batch_size=max(1, self._train_batch_size // self.args.num_generations),
             sampler_fn=self._get_train_sampler,
             is_training=True,
         )
