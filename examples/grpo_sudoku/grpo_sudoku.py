@@ -183,7 +183,7 @@ def main() -> None:
             # One game per forward pass: games can reach 16k tokens, since every move returns the whole grid.
             per_device_train_batch_size=1,
             gradient_accumulation_steps=64,
-            gradient_checkpointing=True,
+            activation_checkpointing=True,
             bf16=True,
             chat_template_kwargs={"enable_thinking": True},
             max_completion_length=16384,

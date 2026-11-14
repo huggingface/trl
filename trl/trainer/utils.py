@@ -1603,6 +1603,9 @@ def add_fused_lm_head(
     tokens at each position as well, returned as `score_log_probs` and normalized like `log_probs`. It is aligned and
     shifted like `support_ids`.
 
+    For MoE models, `loss` includes the load-balancing loss weighted by `router_aux_loss_coef`, the one of the model
+    config unless passed to the forward.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1648,6 +1651,7 @@ def add_fused_lm_head(
         num_items_in_batch=None,
         support_ids=None,
         score_ids=None,
+        router_aux_loss_coef=None,
         **kwargs,
     ):
         if not fused_lm_head:
@@ -1759,7 +1763,9 @@ def add_fused_lm_head(
             else:
                 # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
                 aux_loss = loss.new_zeros(())
-            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
+            if router_aux_loss_coef is None:
+                router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
+            loss = loss + router_aux_loss_coef * aux_loss
 
         return FusedCausalLMOutput(
             loss=loss,

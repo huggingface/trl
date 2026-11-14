@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import math
+import queue
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
 
@@ -23,6 +27,101 @@ from ..import_utils import is_math_verify_available
 if is_math_verify_available():
     from latex2sympy2_extended import NormalizationConfig
     from math_verify import LatexExtractionConfig, parse, verify
+
+
+# Seconds one answer may take to grade before the grading process is killed and the answer scores 0.
+GRADE_TIMEOUT = 30
+
+
+def _grade(solution: str, content: str) -> tuple[float | None, str, str]:
+    """Parse and verify one answer against its solution, returning the reward and the parsed strings to log."""
+    gold_parsed = parse(solution, parsing_timeout=10)
+    if len(gold_parsed) == 0:
+        # If the gold solution cannot be parsed, we assign `None` to skip this example
+        return None, "[unparseable]", "[skipped]"
+    # We require the answer to be provided in correct latex (no malformed operators)
+    answer_parsed = parse(
+        content,
+        extraction_config=[
+            LatexExtractionConfig(
+                normalization_config=NormalizationConfig(units=True),
+                # Ensures that boxed is tried first
+                boxed_match_priority=0,
+                try_extract_without_anchor=False,
+            )
+        ],
+        extraction_mode="first_match",
+        parsing_timeout=10,
+    )
+    reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=5))
+    return reward, str(gold_parsed), str(answer_parsed) if answer_parsed else "[unparseable]"
+
+
+def _grading_loop() -> None:
+    """Grade the `[solution, content]` lines read from stdin, one result line per answer on stdout."""
+    for line in sys.stdin:
+        solution, content = json.loads(line)
+        try:
+            result = {"result": _grade(solution, content)}
+        except Exception as e:
+            result = {"error": repr(e)}
+        sys.stdout.write("GRADE " + json.dumps(result) + "\n")
+        sys.stdout.flush()
+
+
+class _Grader:
+    """
+    Grades answers in a separate process. math-verify's timeouts use `signal.alarm()`, which neither works outside the
+    main thread nor interrupts sympy arithmetic running in C: an answer like `5^{5^{5^{5^5}}}` makes `parse` or
+    `verify` run forever (huggingface/Math-Verify#65). In the grading process they run on the main thread, so the
+    timeouts work for the slow cases they can stop, and a process stuck past `GRADE_TIMEOUT` is killed and restarted.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._process = None
+
+    def _start(self):
+        self._process = subprocess.Popen(
+            [sys.executable, "-c", "from trl.rewards.accuracy_rewards import _grading_loop; _grading_loop()"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self._lines = queue.Queue()
+
+        def read_results(stdout, lines):
+            # Libraries may print to stdout, so only the lines starting with "GRADE " are results
+            for line in stdout:
+                if line.startswith("GRADE "):
+                    lines.put(line.removeprefix("GRADE "))
+
+        threading.Thread(target=read_results, args=(self._process.stdout, self._lines), daemon=True).start()
+
+    def grade(self, solution: str, content: str) -> tuple[float | None, str, str]:
+        with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                self._start()
+            self._process.stdin.write(json.dumps([solution, content]) + "\n")
+            self._process.stdin.flush()
+            try:
+                line = self._lines.get(timeout=GRADE_TIMEOUT)
+            except queue.Empty:
+                self._process.kill()
+                self._process = None
+                logging.getLogger(__name__).warning(
+                    "Grading an answer took more than %s s, so it scores 0 and the grading process was restarted.",
+                    GRADE_TIMEOUT,
+                )
+                return 0.0, "[timeout]", "[timeout]"
+        output = json.loads(line)
+        if "error" in output:
+            raise RuntimeError(f"Grading failed: {output['error']}")
+        return tuple(output["result"])
+
+
+_grader = _Grader()
 
 
 def accuracy_reward(
@@ -66,48 +165,14 @@ def accuracy_reward(
             "`accuracy_reward` requires the `math-verify` library. Install it with `pip install trl[math_verify]`."
         )
 
-    contents = [completion[0]["content"] for completion in completions]
     rewards = []
     gold_parsed_strs = []
     answer_parsed_strs = []
-
-    # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
-    # Disable timeouts when running in a non-main thread to avoid ValueError.
-    is_main_thread = threading.current_thread() is threading.main_thread()
-    parsing_timeout = None if not is_main_thread else 10
-    verify_timeout = None if not is_main_thread else 5
-
-    # Suppress the "Timeout is disabled" warnings from math_verify when we intentionally disable timeouts
-    if not is_main_thread:
-        logging.getLogger("math_verify.parser").setLevel(logging.ERROR)
-        logging.getLogger("math_verify.grader").setLevel(logging.ERROR)
-
-    for content, sol in zip(contents, solution, strict=True):
-        gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
-        if len(gold_parsed) != 0:
-            # We require the answer to be provided in correct latex (no malformed operators)
-            answer_parsed = parse(
-                content,
-                extraction_config=[
-                    LatexExtractionConfig(
-                        normalization_config=NormalizationConfig(units=True),
-                        # Ensures that boxed is tried first
-                        boxed_match_priority=0,
-                        try_extract_without_anchor=False,
-                    )
-                ],
-                extraction_mode="first_match",
-                parsing_timeout=parsing_timeout,
-            )
-            reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
-            gold_parsed_strs.append(str(gold_parsed))
-            answer_parsed_strs.append(str(answer_parsed) if answer_parsed else "[unparseable]")
-        else:
-            # If the gold solution cannot be parsed, we assign `None` to skip this example
-            reward = None
-            gold_parsed_strs.append("[unparseable]")
-            answer_parsed_strs.append("[skipped]")
+    for completion, sol in zip(completions, solution, strict=True):
+        reward, gold_parsed_str, answer_parsed_str = _grader.grade(sol, completion[0]["content"])
         rewards.append(reward)
+        gold_parsed_strs.append(gold_parsed_str)
+        answer_parsed_strs.append(answer_parsed_str)
 
     if log_extra is not None:
         log_extra("solution", list(solution))
@@ -293,17 +358,6 @@ def reasoning_accuracy_reward(
     gold_parsed_strs = []
     answer_parsed_strs = []
 
-    # math_verify uses signal.alarm() for timeouts, which only works in the main thread.
-    # Disable timeouts when running in a non-main thread to avoid ValueError.
-    is_main_thread = threading.current_thread() is threading.main_thread()
-    parsing_timeout = None if not is_main_thread else 10
-    verify_timeout = None if not is_main_thread else 5
-
-    # Suppress the "Timeout is disabled" warnings from math_verify when we intentionally disable timeouts
-    if not is_main_thread:
-        logging.getLogger("math_verify.parser").setLevel(logging.ERROR)
-        logging.getLogger("math_verify.grader").setLevel(logging.ERROR)
-
     for content, sol in zip(contents, solution, strict=True):
         # Split final answer from reasoning content
         is_reasoning_complete = False
@@ -319,31 +373,9 @@ def reasoning_accuracy_reward(
             answer_parsed_strs.append("[incomplete reasoning]")
             continue
 
-        gold_parsed = parse(sol, parsing_timeout=parsing_timeout)
-        if len(gold_parsed) != 0:
-            # We require the answer to be provided in correct latex (no malformed operators)
-            answer_parsed = parse(
-                content,
-                extraction_config=[
-                    LatexExtractionConfig(
-                        boxed_match_priority=0,
-                        normalization_config=NormalizationConfig(
-                            units=True,
-                        ),
-                        try_extract_without_anchor=False,
-                    )
-                ],
-                extraction_mode="first_match",
-                parsing_timeout=parsing_timeout,
-            )
-            reward = float(verify(gold_parsed, answer_parsed, timeout_seconds=verify_timeout))
-            gold_parsed_strs.append(str(gold_parsed))
-            answer_parsed_strs.append(str(answer_parsed) if answer_parsed else "[unparseable]")
-        else:
-            # If the gold solution cannot be parsed, we assign `None` to skip this example
-            reward = None
-            gold_parsed_strs.append("[unparseable]")
-            answer_parsed_strs.append("[skipped]")
+        reward, gold_parsed_str, answer_parsed_str = _grader.grade(sol, content)
+        gold_parsed_strs.append(gold_parsed_str)
+        answer_parsed_strs.append(answer_parsed_str)
         rewards.append(reward)
 
     if log_extra is not None:
