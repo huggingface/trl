@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import re
 import tempfile
 
 import torch
-from transformers import AutoConfig, AutoProcessor, FineGrainedFP8Config, GenerationConfig
+from safetensors.torch import load_file, save_file
+from transformers import AutoConfig, AutoProcessor, GenerationConfig
 from transformers.models.mistral_large4 import MistralLarge4ForConditionalGeneration
 
 from .._common import (
@@ -23,7 +26,7 @@ from .._common import (
     check_transformers_version,
     init_weights_tiny_model,
     print_config_diff,
-    push_to_hub,
+    push_dir_to_hub,
     set_seed,
     smoke_test,
 )
@@ -74,24 +77,36 @@ vision_config = {
 }
 
 config = AutoConfig.from_pretrained(MODEL_ID, text_config=text_config, vision_config=vision_config)
-# FP8 weights, like the reference checkpoint: build the model in bfloat16, then quantize it at load with the
-# reference's quantization config, which computes the scale of each block (needs a GPU with FP8 support). The blocks
-# shrink with the model, from 128x128 to 32x32 (the FP8 kernel's smallest), so that every quantized weight is tiled.
-quantization_config = FineGrainedFP8Config.from_dict({**config.quantization_config, "weight_block_size": [32, 32]})
+# Set aside: the model is built and saved in bfloat16, then quantized below
+quantization_config = config.quantization_config
 del config.quantization_config
 model = MistralLarge4ForConditionalGeneration(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 
-# Restore float32 for the router and the learned RoPE scaling, which the reference keeps in fp32
-for layer in model.model.language_model.layers[config.text_config.first_k_dense_replace :]:
-    layer.mlp.gate.weight.data = layer.mlp.gate.weight.data.float()
-model.model.language_model.rotary_emb.alpha.data = model.model.language_model.rotary_emb.alpha.data.float()
+# FP8 weights, like the reference checkpoint: quantize the linears the reference stores in FP8 (attention, MLPs,
+# experts) in blocks scaled down from the reference's 128x128 to 32x32, each block scaled to the e4m3 range by a power
+# of two (the reference's UE8M0 scales), with the scale of each block stored in `qscale_weight`
+fp8_weights = re.compile(
+    r"layers\.\d+\.(attention\.(wq|wo|indexer\.wq_b)|(feed_forward|shared_experts|experts\.\d+)\.w[123])\.weight"
+)
 with tempfile.TemporaryDirectory() as tmp_dir:
+    # Saved with the checkpoint names of the reference (consolidated format, unfused experts)
     model.save_pretrained(tmp_dir)
-    model = MistralLarge4ForConditionalGeneration.from_pretrained(
-        tmp_dir, quantization_config=quantization_config, device_map="cuda"
-    )
-smoke_test(model, processor)
-check_dtype_pattern(MODEL_ID, model)
-print_config_diff(MODEL_ID, model)
-push_to_hub(model, processor, generation_config, "tiny")
+    state_dict = load_file(os.path.join(tmp_dir, "model.safetensors"))
+    for name, weight in list(state_dict.items()):
+        if fp8_weights.fullmatch(name):
+            rows, cols = weight.shape
+            blocks = weight.float().view(rows // 32, 32, cols // 32, 32)
+            scale = torch.exp2(
+                torch.ceil(torch.log2(blocks.abs().amax(dim=(1, 3)) / torch.finfo(torch.float8_e4m3fn).max))
+            )
+            state_dict[name] = (blocks / scale[:, None, :, None]).view(rows, cols).to(torch.float8_e4m3fn)
+            state_dict[name.removesuffix("weight") + "qscale_weight"] = scale
+    config.quantization_config = {**quantization_config, "weight_block_size": [32, 32]}
+    check_dtype_pattern(MODEL_ID, state_dict)
+    print_config_diff(MODEL_ID, model)
+    config.save_pretrained(tmp_dir)
+    save_file(state_dict, os.path.join(tmp_dir, "model.safetensors"), metadata={"format": "pt"})
+    model = MistralLarge4ForConditionalGeneration.from_pretrained(tmp_dir, device_map="cuda")
+    smoke_test(model, processor)
+    push_dir_to_hub(tmp_dir, model, processor, generation_config, "tiny")

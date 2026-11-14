@@ -446,10 +446,10 @@ training_args = GRPOConfig(
 )
 ```
 
-In the [`experimental.async_grpo.AsyncGRPOTrainer`], the old log-probabilities are the sampler's, so the ratio is taken directly between the trained policy and the sampler, and tokens outside  \\( [C_{\min}, C_{\max}] \\) are dropped from the loss. It is on by default:
+In the [`AsyncGRPOTrainer`], the old log-probabilities are the sampler's, so the ratio is taken directly between the trained policy and the sampler, and tokens outside  \\( [C_{\min}, C_{\max}] \\) are dropped from the loss. It is on by default:
 
 ```python
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
@@ -616,10 +616,10 @@ $$
 \log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
 $$
 
-Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
 
 ```python
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
@@ -737,10 +737,10 @@ $$
 
 with  \\( f \\) the importance weight of [Masked Importance Sampling](#masked-importance-sampling):  \\( f(r) = r \\) inside  \\( [C_{\min}, C_{\max}] \\) and  \\( 0 \\) outside. The inner expectation is taken over the sampler's most likely tokens at each position, whose log-probabilities it reports; on the rest of the vocabulary the sampler is taken as the trained policy rescaled to the remaining mass.
 
-It is the default objective of the [`experimental.async_grpo.AsyncGRPOTrainer`], whose rollout worker requests the top log-probabilities of every generated token from vLLM:
+It is the default objective of the [`AsyncGRPOTrainer`], whose rollout worker requests the top log-probabilities of every generated token from vLLM:
 
 ```python
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
@@ -779,7 +779,7 @@ trainer = A2POTrainer(
 trainer.train()
 ```
 
-## Direct Policy Optimization
+## Direct Preference Optimization
 
 Papers relating to the [`DPOTrainer`]
 
@@ -1265,6 +1265,33 @@ training_args = DPOConfig(
 )
 ```
 
+### Unbiased Alignment for Large Language Models with Noisy Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2607.03248
+
+This paper models preference noise as labels flipped with probability  \\( \varepsilon \\) and inverts this transition, so that the policy trained on noisy preferences has the same optimum as with clean preferences. TRL implements the normalized form of the resulting Unbiased DPO (UDPO) loss, called α-UDPO in the paper:
+
+$$
+\mathcal{L}_{\text{UDPO}} = -\alpha \log \frac{e^{z} + a}{e^{z} + 1}, \quad z = \beta \left( \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
+$$
+
+which is the DPO loss for  \\( a = 0 \\). The constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as for DPO. Unlike [Robust DPO](#provably-robust-dpo-aligning-language-models-with-noisy-feedback), the paper shows that the optimum stays unbiased when the true flip probability is lower than the assumed  \\( \varepsilon \\) (Corollary 4.7), so  \\( \varepsilon \\) does not have to be estimated exactly. In TRL,  \\( \varepsilon \\) is set with `label_smoothing`. To use  \\( a = 0.8 \\), the value the paper recommends to practitioners:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="udpo",
+    label_smoothing=4 / 9,  # flip probability ε, for a = ε / (1 - ε) = 0.8 as recommended in Appendix B.1 of the paper
+    beta=0.1,  # 0.1 for HH and UltraFeedback, 0.5 for TL;DR (Appendix B.1 of the paper)
+    learning_rate=5e-6,  # 5e-6 for Llama-3.2-3B and Qwen3-1.7B, 1e-6 for 8B models (Appendix B.1 of the paper)
+    num_train_epochs=3,  # Appendix B.1 of the paper
+    per_device_train_batch_size=16,  # total batch size of 128 on 8 GPUs (Appendix B.1 of the paper)
+    max_grad_norm=10.0,  # Appendix B.1 of the paper
+    warmup_ratio=0.1,  # Appendix B.1 of the paper
+)
+```
+
 ## Kahneman–Tversky Optimization
 
 Papers relating to the [`KTOTrainer`]
@@ -1402,7 +1429,7 @@ i.e. an additive correction on the logit of the observed token, where \\( K \\) 
 torchrun --nproc_per_node 8 examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
     --deepspeed examples/deepspeed_configs/zero3.json \
     --use_peft \
-    --gradient_checkpointing \
+    --activation_checkpointing \
     --model_prediction_type mean_loo \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
@@ -1417,8 +1444,8 @@ Full activation checkpointing recomputes every op in a checkpointed region durin
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"selective": True},
+    activation_checkpointing=True,
+    activation_checkpointing_kwargs={"selective": True},
 )
 ```
 

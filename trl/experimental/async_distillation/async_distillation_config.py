@@ -26,8 +26,8 @@ class AsyncDistillationConfig(_BaseConfig):
     This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full list
     of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default
     values in this class may differ from those in [`~transformers.TrainingArguments`]. Its structure mirrors
-    [`~trl.experimental.async_grpo.AsyncGRPOConfig`] (async pipeline, vLLM server, logging fields are the same), with
-    GRPO's clipping/group fields replaced by the teacher-distillation loss fields below.
+    [`AsyncGRPOConfig`] (async pipeline, vLLM server, logging fields are the same), with GRPO's clipping/group fields
+    replaced by the teacher-distillation loss fields below.
 
     Parameters:
         > Parameters that control the model
@@ -38,12 +38,10 @@ class AsyncDistillationConfig(_BaseConfig):
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
             defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
-            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788), walked
-            through for them in [Defeating the trainer-generator precision mismatch in
-            TRL](https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch)) is sensitive to the
-            trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
-            same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
-            unaffected: they are never updated.
+            ([Defeating the Training-Inference Mismatch via FP16](https://huggingface.co/papers/2510.26788)) is
+            sensitive to the trainer's own precision. Closing that gap end to end also requires serving the student's
+            vLLM server in the same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence.
+            Teacher servers are unaffected: they are never updated.
 
             This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
             default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
@@ -146,19 +144,17 @@ class AsyncDistillationConfig(_BaseConfig):
             independently of the sample count (the number of samples per row becomes dynamic). If `None` (default), it
             is set to the student vLLM server's `max_model_len` (queried at train start) — the cap on prompt +
             completion length — so no rollout sample can ever exceed the budget. A sample longer than `token_budget`
-            fits in no row and is dropped with a warning, counted as `batch/dropped_oversize_total`.
+            fits in no row and is dropped with a warning, counted as `batch/dropped_oversize_count`.
 
         > Parameters that control the async rollout pipeline
 
-        max_concurrent_rollouts (`int`, *optional*):
+        max_concurrent_rollouts (`int`, *optional*, defaults to `512`):
             Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, generating
-            or being scored. If `None`, it is set to `max(max_staleness, 1) * per_device_train_batch_size *
-            gradient_accumulation_steps * num_processes`.
+            or being scored.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped.
-        queue_maxsize (`int`, *optional*, defaults to `1024`):
-            Maximum number of rollout samples to buffer in the rollout queue.
+            being dropped. Generation is held to it: a rollout starts only while the tokens queued and in flight fit in
+            what the trainer consumes in `max(max_staleness, 1)` steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the student's vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -354,24 +350,20 @@ class AsyncDistillationConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_concurrent_rollouts: int | None = field(
-        default=None,
+    max_concurrent_rollouts: int = field(
+        default=512,
         metadata={
             "help": "Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, "
-            "generating or being scored. If `None`, it is set to `max(max_staleness, 1) * "
-            "per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
+            "generating or being scored."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model "
-            "version before being dropped."
+            "version before being dropped. Generation is held to it: a rollout starts only while the tokens queued "
+            "and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
         },
-    )
-    queue_maxsize: int = field(
-        default=1024,
-        metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
     )
     weight_sync_steps: int = field(
         default=1,
@@ -426,11 +418,5 @@ class AsyncDistillationConfig(_BaseConfig):
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader
         # and batches are broadcast to other processes rather than each process pulling independently.
-        if not hasattr(self, "accelerator_config") or self.accelerator_config is None:
-            self.accelerator_config = {"split_batches": True, "dispatch_batches": True}
-        elif isinstance(self.accelerator_config, dict):
-            self.accelerator_config["split_batches"] = True
-            self.accelerator_config["dispatch_batches"] = True
-        else:
-            self.accelerator_config.split_batches = True
-            self.accelerator_config.dispatch_batches = True
+        self.accelerator_config.split_batches = True
+        self.accelerator_config.dispatch_batches = True

@@ -19,6 +19,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -96,11 +97,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
-    to `False`, the following key is also returned:
+    to `False` and the examples are not packed, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following keys are also returned:
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
-    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths of the flattened sequence.
+    If `padding_free` is set to `True` or the examples are packed (they have a `"seq_lengths"` key, as produced by BFD
+    packing), the following keys are returned instead:
+    - `"position_ids"`: Tensor of position IDs, restarting at each sequence, padded to the maximum length of the batch.
+    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths over the flattened rows, padded with empty
+      sequences to a multiple of 16.
     - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence.
     - `"seq_idx"`: Tensor of the sequence index of each token.
 
@@ -109,7 +112,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             Token ID to use for padding.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly and returned instead of the attention mask.
+            generated accordingly and returned instead of the attention mask. Packed examples get position IDs instead
+            of the attention mask either way, but stay as rows unless this is set.
         return_position_ids (`bool`, *optional*, defaults to `False`):
             If set to `True`, position IDs are returned alongside the attention mask in the padded (non-padding-free)
             mode. Required by sequence parallelism (Ulysses/ALST), which shards batches along the sequence dimension
@@ -152,8 +156,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
      'labels': tensor([[-100, 2, 3, -100, 5]]),
-     'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
-     'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
+     'cu_seq_lens_q': tensor([0, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5], dtype=torch.int32),
+     'cu_seq_lens_k': tensor([0, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5], dtype=torch.int32),
      'max_length_q': 3,
      'max_length_k': 3,
      'seq_idx': tensor([[0, 0, 0, 1, 1]], dtype=torch.int32)}
@@ -175,14 +179,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         input_ids = [torch.tensor(ids) for ids in input_ids]
         labels = [torch.tensor(lbl) for lbl in labels]
 
-        # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
-        # compute wrong cu_seq_lens from the all-1s mask
-        if self.padding_free or self.return_position_ids:
+        # Packed examples hold several sequences per row. Like padding-free batches, they get per-sequence position IDs
+        # and sequence boundaries instead of an attention mask, which would let the sequences of a row see each other
+        per_sequence = self.padding_free or batch_seq_lengths is not None
+        if per_sequence or self.return_position_ids:
             if batch_seq_lengths is not None:
                 position_ids = self.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        if not self.padding_free:
+        if not per_sequence:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         # If padding_free, flatten everything into a single sequence
@@ -202,21 +207,27 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
-        if self.padding_free:
+        if per_sequence:
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
+            # The padding of each row is one sequence, not one per padding token
+            for row, ids in zip(output["position_ids"], position_ids, strict=True):
+                row[len(ids) :] = torch.arange(row.numel() - len(ids))
             output["labels"][output["position_ids"] == 0] = -100
-            # Sequence boundaries for the varlen kernels (flash attention, linear attention). Computed here, on CPU,
-            # since the model would otherwise derive them from `position_ids` with device-to-host syncs in every layer.
-            seq_starts = (output["position_ids"][0] == 0).nonzero().flatten()
-            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
+            # Sequence boundaries for the varlen kernels (flash attention, linear attention), indexing the flattened
+            # rows. Computed here, on CPU, since the model would otherwise derive them from `position_ids` with
+            # device-to-host syncs in every layer.
+            seq_starts = (output["position_ids"].flatten() == 0).nonzero().flatten()
+            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].numel()])]).to(torch.int32)
+            # Rounded up to a multiple of 16 with empty sequences, so that a compiled model only sees a few shapes
+            cu_seq_lens = torch.cat([cu_seq_lens, cu_seq_lens[-1:].repeat(-cu_seq_lens.numel() % 16)])
             output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
             output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
             # Sequence index of each token, for the short convolutions of linear-attention layers
             output["seq_idx"] = torch.repeat_interleave(
                 torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32), cu_seq_lens.diff()
-            )[None]
+            ).view_as(output["position_ids"])
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
@@ -890,11 +901,11 @@ class SFTTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and any(
                     isinstance(module, torch.nn.Linear)
@@ -910,40 +921,47 @@ class SFTTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
-                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
-                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
-        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing before DeepSpeed 0.19.3. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703 and
+        # https://github.com/deepspeedai/DeepSpeed/pull/8148.
+        # Can be removed once the minimum supported DeepSpeed version is 0.19.3.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
+            and Version(version("deepspeed")) < Version("0.19.3")
         ):
             if (args.gradient_checkpointing_kwargs or {}).get("selective"):
                 raise ValueError(
                     "`gradient_checkpointing_kwargs={'selective': True}` is not supported with PEFT + DeepSpeed "
-                    "ZeRO-3, which requires reentrant gradient checkpointing while SAC requires non-reentrant "
-                    "checkpointing."
+                    "ZeRO-3 on DeepSpeed < 0.19.3, which requires reentrant gradient checkpointing while SAC requires "
+                    "non-reentrant checkpointing. Upgrade DeepSpeed to 0.19.3 or later to use SAC."
                 )
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
                     "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
-                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
-                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training with "
+                    "DeepSpeed < 0.19.3. To remove this warning, upgrade DeepSpeed to 0.19.3 or later, unset "
+                    "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
-        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -958,12 +976,18 @@ class SFTTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
-        # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
-        # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
+        # Recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as they are to varlen kernels
+        # that only take a single row, so BFD-packed batches are flattened for these models
+        # (huggingface/transformers#50185)
+        text_config = model.config.get_text_config()
+        layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
+        bfd_packing = args.packing and args.packing_strategy in {"bfd", "bfd_split"}
+        self.padding_free = args.padding_free or (bfd_packing and bool(layer_types))
+        # Only this collator gives the sequences of a BFD-packed row their own position IDs; any other would let them
+        # attend to each other
+        if data_collator is not None and (self.padding_free or bfd_packing):
+            raise ValueError("Passing a custom data collator is not supported when using padding-free or BFD packing.")
         if self.padding_free:
-            if data_collator is not None:
-                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if args.packing and args.packing_strategy == "wrapped":
                 logger.warning(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
@@ -1243,12 +1267,6 @@ class SFTTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
-        if hasattr(text_config, "router_aux_loss_coef"):
-            # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
-            # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
-            # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
-            text_config.output_router_logits = self.aux_loss_enabled
-            text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1622,10 +1640,10 @@ class SFTTrainer(_BaseTrainer):
                 and parallelism_config.sp_enabled
                 and self.model.training
             ):
-                # Ulysses sequence parallelism reduces the model's own `loss` across ranks
+                # Ulysses sequence parallelism reduces the model's own `loss` across ranks, which includes the aux loss
                 loss, outputs = super().compute_loss(
                     model,
-                    {**inputs, "fused_lm_head": True},
+                    {**inputs, "fused_lm_head": True, "router_aux_loss_coef": self.router_aux_loss_coef},
                     return_outputs=True,
                     num_items_in_batch=num_items_in_batch,
                 )
@@ -1689,7 +1707,7 @@ class SFTTrainer(_BaseTrainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                local_num_tokens = torch.tensor(inputs["position_ids"].numel(), device=inputs["position_ids"].device)
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")

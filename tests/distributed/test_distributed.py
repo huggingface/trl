@@ -68,7 +68,9 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
+    @pytest.mark.parametrize(
+        "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
+    )
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file):
         run_command(
             [
@@ -77,7 +79,7 @@ class TestDistributed(TrlTestCase):
                 "2",
                 "-m",
                 "pytest",
-                f"tests/experimental/{test_file}.py",
+                f"tests/{test_file}",
                 "-k",
                 "test_fsdp_checkpoint_body",
                 "-x",
@@ -96,6 +98,50 @@ class TestDistributed(TrlTestCase):
         assert AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto").dtype == torch.bfloat16
         master = torch.load(os.path.join(checkpoint, "pytorch_model_fsdp.bin"), map_location="cpu", weights_only=True)
         assert {tensor.dtype for tensor in master.values() if tensor.is_floating_point()} == {torch.float32}
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_lora(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_lora_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
 
     @pytest.mark.parametrize("config", ["ddp", "zero3"])
     @pytest.mark.parametrize("trainer", ["sdpo", "sdft"])
