@@ -282,11 +282,11 @@ Qwen3-Coder-Next chat template (as shipped by `Qwen/Qwen3-Coder-Next`). Same as 
 
 ### `smolvlm.jinja`
 
-Original SmolVLM chat template. Also matches SmolVLM2 (as shipped by `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`, and by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d)), which ships a byte-identical template. Does not support tool calling.
+Original SmolVLM chat template. Also matches SmolVLM2 (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e)), which shipped a byte-identical template. Does not support tool calling.
 
 ### `smolvlm_v2.jinja`
 
-SmolVLM2 chat template (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` since [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d)). Same as `smolvlm.jinja`, except that string message content is rendered instead of dropped. Does not support tool calling.
+SmolVLM2 chat template (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` since [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` since [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e)). Same as `smolvlm.jinja`, except that string message content is rendered instead of dropped. Does not support tool calling.
 
 ## Training templates
 
@@ -523,7 +523,7 @@ Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` 
 
 ### `smolvlm_training.jinja`
 
-Patched SmolVLM template (also used for SmolVLM2-500M-Video-Instruct, and SmolVLM2-2.2B-Instruct before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d), which ship a byte-identical template). Diff vs `smolvlm.jinja`:
+Patched SmolVLM template (also used for SmolVLM2-2.2B-Instruct before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and SmolVLM2-500M-Video-Instruct before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e), which shipped a byte-identical template). Diff vs `smolvlm.jinja`:
 
 Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
