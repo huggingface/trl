@@ -392,6 +392,25 @@ The batch metrics compose: one step holds `gradient_accumulation_steps × num_pr
 > [!TIP]
 > Anything that makes rows longer or fewer removes the sharing. A multi-turn conversation that never forks is one long sample, and `rollout/samples_per_rollout` says how many samples a conversation gives.
 
+### Attention backend
+
+Tree attention uses FlashAttention 4 (Hub version 1) on NVIDIA Blackwell GPUs, FlashAttention 3 on other NVIDIA GPUs, and AITER on AMD GPUs by default. Set `attn_implementation` in `model_init_kwargs` to select another variable-length FlashAttention backend through Transformers, for example FlashAttention 2:
+
+```python
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
+
+trainer = AsyncGRPOTrainer(
+    model="Qwen/Qwen3-4B",
+    args=AsyncGRPOConfig(model_init_kwargs={"attn_implementation": "flash_attention_2"}),
+    reward_funcs=accuracy_reward,
+    train_dataset=dataset,
+)
+```
+
+The Trainer retains the selected backend and passes it through the shared tree attention adapter on every forward. Tree packing and sample boundaries are preserved. SDPA and eager attention are not supported. This setting applies to the training model, not the vLLM server.
+
+For an instantiated model, `model_init_kwargs` is ignored and the Trainer uses the platform default.
+
 ### Top-k and top-p sampling
 
 Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:

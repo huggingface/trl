@@ -38,7 +38,6 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from functools import cache
 from itertools import chain, repeat
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
@@ -60,6 +59,7 @@ from transformers import AttentionInterface, AutoTokenizer, PreTrainedModel, Pre
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
+from transformers.modeling_flash_attention_utils import _flash_attention_forward, lazy_import_flash_attention
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
@@ -302,18 +302,6 @@ def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
 TREE_ATTENTION = "tree_fa3"
 
 
-@cache
-def _flash_attn():
-    from kernels import get_kernel
-
-    if torch.version.hip:
-        return get_kernel("kernels-community/aiter-flash-attn", version=2)
-    # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
-    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
-        return get_kernel("kernels-community/flash-attn4", version=1)
-    return get_kernel("kernels-community/flash-attn3", version=1)
-
-
 def tree_attention(
     module,
     query,
@@ -325,6 +313,7 @@ def tree_attention(
     tree_cu_seqlens_k,
     tree_max_seqlen_q,
     tree_max_seqlen_k,
+    tree_attn_implementation,
     scaling=None,
     sliding_window=None,
     softcap=None,
@@ -346,22 +335,27 @@ def tree_attention(
     ```
     """
     dtype = get_target_dtype(query, module) or query.dtype
-    query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn().flash_attn_varlen_func(
+    query, key, value = (x.transpose(1, 2).to(dtype) for x in (query, key, value))
+    # Transformers selects the requested FlashAttention backend and adapts its kernel arguments.
+    # Each segment queries its root-to-segment path, whose K/V length can exceed the query length.
+    out = _flash_attention_forward(
         query,
-        key.index_select(0, tree_kv_index),
-        value.index_select(0, tree_kv_index),
-        cu_seqlens_q=tree_cu_seqlens_q,
-        cu_seqlens_k=tree_cu_seqlens_k,
-        max_seqlen_q=tree_max_seqlen_q,
-        max_seqlen_k=tree_max_seqlen_k,
+        key.index_select(1, tree_kv_index),
+        value.index_select(1, tree_kv_index),
+        attention_mask=None,
+        query_length=query.shape[1],
+        is_causal=True,
+        cu_seq_lens_q=tree_cu_seqlens_q,
+        cu_seq_lens_k=tree_cu_seqlens_k,
+        max_length_q=tree_max_seqlen_q,
+        max_length_k=tree_max_seqlen_k,
         softmax_scale=scaling,
-        causal=True,
-        window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        **({"softcap": softcap} if softcap else {}),
+        sliding_window=sliding_window,
+        softcap=softcap,
+        target_dtype=dtype,
+        attn_implementation=tree_attn_implementation,
     )
-    out = out[0] if isinstance(out, tuple) else out
-    return out.unsqueeze(0), None
+    return out, None
 
 
 def register_tree_attention() -> None:
@@ -2968,17 +2962,38 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
-
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
+        self.attn_implementation = None
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
             model_revision = model_init_kwargs.get("revision")
+            self.attn_implementation = model_init_kwargs.pop("attn_implementation", None)
+        else:
+            model_revision = None
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
+        if self.attn_implementation is None:
+            if torch.version.hip:
+                self.attn_implementation = "kernels-community/aiter-flash-attn@v2"
+            elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+                # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above),
+                # FlashAttention-4 does.
+                self.attn_implementation = "kernels-community/flash-attn4@v1"
+            else:
+                self.attn_implementation = "kernels-community/flash-attn3"
+        if lazy_import_flash_attention(self.attn_implementation)[0][1] is None:
+            raise ValueError("Tree attention requires a FlashAttention implementation with variable-length support.")
+        # The model uses the tree adapter; each forward selects the Trainer's underlying FlashAttention backend.
+        register_tree_attention()
+        if isinstance(model, str):
             model = create_model_from_path(
                 model,
                 device_map=None,
@@ -2986,13 +3001,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 **model_init_kwargs,
             )
         else:
-            model_revision = None
             model.set_attn_implementation(TREE_ATTENTION)
-            if args.model_init_kwargs is not None:
-                logger.warning(
-                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
-                    "The `model_init_kwargs` will be ignored."
-                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -3448,6 +3457,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             support_ids=sampling_mask,
             score_ids=sampler_ids,
             fused_lm_head=True,
+            tree_attn_implementation=self.attn_implementation,
             **router_kwargs,
             **unpad_tree(inputs),
         )
