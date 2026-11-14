@@ -57,7 +57,9 @@ from ...chat_template_utils import (
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
+    supports_tool_calling,
 )
+from ...import_utils import is_jmespath_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     add_fused_lm_head,
@@ -99,7 +101,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
-    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `count` word in the name is a count of events in the window, summed (producers push deltas).
     - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
       (`completions/max_length`, `clip_ratio/high_max`) working alongside this trainer's own (`row_tokens_max`).
     - anything else is a gauge, and its window mean is meaningful.
@@ -110,7 +112,7 @@ def _reduce_metric(key: str, values: list[MetricValue]) -> float:
         numerator, denominator = (sum(v) for v in zip(*values, strict=True))
         return numerator / denominator if denominator else float("nan")
     words = key.split("/")[-1].split("_")
-    if "total" in words:
+    if "count" in words:
         return sum(values)
     if "max" in words:
         return max(values)
@@ -242,7 +244,6 @@ class _SampleBuilder:
     def _append(
         self,
         ids: list[int],
-        *,
         mask: int | list[int],
         logprobs: list[float] | None = None,
         sampling_mask: list[list[int]] | None = None,
@@ -426,7 +427,6 @@ class ZeroSyncRolloutLoop:
     def __init__(
         self,
         config: ZeroSyncGRPOConfig,
-        *,
         manager: ContinuousBatchingManager,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
@@ -442,19 +442,6 @@ class ZeroSyncRolloutLoop:
         self._epoch, self._row_index = 0, 0
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
-        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
-        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
-        has_template = getattr(processing_class, "response_template", None) is not None
-        has_schema = getattr(processing_class, "response_schema", None) is not None
-        if not has_template and not has_schema:
-            processing_class = add_response_schema(processing_class)
-        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
-            warnings.warn(
-                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
-                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
-                "support will eventually be removed. See the Transformers response-parsing docs.",
-                FutureWarning,
-            )
         self.tokenizer = processing_class
         self.eos_token_ids = eos_token_ids
         self.rollout_buffer: deque[RolloutSample] = deque()  # scored samples, taken by the trainer
@@ -521,6 +508,25 @@ class ZeroSyncRolloutLoop:
         else:
             self.tools = tools
 
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        has_template = getattr(processing_class, "response_template", None) is not None
+        has_schema = getattr(processing_class, "response_schema", None) is not None
+        if not has_template and not has_schema:
+            try:
+                processing_class = add_response_schema(processing_class)
+            except ValueError:
+                # Only tool calls need a parser: without tools, turns of an unknown template are decoded as plain text
+                if self.tools:
+                    raise
+        elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+            warnings.warn(
+                "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                "support will eventually be removed. See the Transformers response-parsing docs.",
+                FutureWarning,
+            )
+
         # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
         # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
         self.reward_func_names.append("rollout")
@@ -539,7 +545,7 @@ class ZeroSyncRolloutLoop:
             max_workers=max(1, config.max_concurrent_rollouts), thread_name_prefix="grpo-tool"
         )
 
-        self._concurrency_cap = config.max_concurrent_rollouts
+        self._kv_cap = config.max_concurrent_rollouts
         self._total_rollouts = 0
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
@@ -612,7 +618,7 @@ class ZeroSyncRolloutLoop:
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         logger.info(
             f"rollout loop started: num_generations={self.config.num_generations}, "
-            f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
+            f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, kv_cap={self._kv_cap}, "
             f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}"
         )
         await self.setup()
@@ -653,7 +659,7 @@ class ZeroSyncRolloutLoop:
 
         try:
             while True:
-                while len(rollout_tasks) < self._concurrency_cap and not stop_event.is_set():
+                while len(rollout_tasks) < self._kv_cap and not stop_event.is_set():
                     work = next(work_iter)
                     if work is None:  # the epoch's prompts are all started
                         break
@@ -671,10 +677,9 @@ class ZeroSyncRolloutLoop:
                         )
                     # Draw a reusable environment instance for this rollout (creating one only if the pool is
                     # exhausted); it is returned to the pool when the task completes. Reset it BEFORE building the
-                    # prompt and capture its initial observation (e.g. a task instruction). The reset() return was
-                    # previously discarded, so an environment_factory whose task lives in the observation (not the
-                    # dataset prompt) was generated against the bare prompt. Mirror GRPOTrainer: fold the observation
-                    # into the last prompt message. reset() may be stochastic, so this is done per generation (each
+                    # prompt and capture its initial observation (e.g. a task instruction), since an environment can
+                    # hold the task in the observation rather than in the dataset prompt. Mirror GRPOTrainer: fold the
+                    # observation into the last prompt message. reset() may be stochastic, so this is done per generation (each
                     # generation gets its own observation -> its own prompt and prompt_ids). `environment` is a control
                     # field in multi-environment mode, so it is not forwarded to `reset`.
                     environment = None
@@ -863,7 +868,7 @@ class ZeroSyncRolloutLoop:
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
                     "rollout/concurrency": float(self._concurrency),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
-                    "rollout/generated_tok_s": (
+                    "rollout/generated_tokens_per_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),
                         now - self._pushed_at,
                     ),
@@ -876,7 +881,7 @@ class ZeroSyncRolloutLoop:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward_trained"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.config.num_completions_to_print,
@@ -884,19 +889,15 @@ class ZeroSyncRolloutLoop:
             self._total_groups_scored += 1
 
             for item in samples:
-                if not await self._put_in_buffer(item, stop_event):
-                    return
+                self._put_in_buffer(item)
             self._groups_unscored -= 1
 
             t_idle_start = time.monotonic()
 
-    async def _put_in_buffer(self, item: RolloutSample, stop_event: asyncio.Event) -> bool:
-        """Put `item` in the rollout buffer. Returns `False` if `stop_event` is set first."""
-        if stop_event.is_set():
-            return False
+    def _put_in_buffer(self, item: RolloutSample) -> None:
+        """Put `item` in the rollout buffer."""
         item.enqueued_at = time.time()
         self.rollout_buffer.append(item)
-        return True
 
     def _push_metrics(self, values: dict[str, float | tuple[float, float]]) -> None:
         """Send metrics to the trainer, along with the counters and rates accumulated since the last push."""
@@ -910,7 +911,6 @@ class ZeroSyncRolloutLoop:
 
     def _push_rollout_metrics(
         self,
-        *,
         turns: int,
         sequences: int,
         completion_ids: list[int],
@@ -925,15 +925,24 @@ class ZeroSyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
-            # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by
-            # `max_new_tokens` rather than finishing. Deliberately NOT the engine's own status, so the metric means the
-            # same thing here
+            # `max_new_tokens` rather than finishing. Deliberately NOT the engine's own status, so the metric means
+            # the same thing here.
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            # Identify sequences that terminated with EOS and log their lengths
+            if not is_truncated:
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         if turns > 1:
             self._rates["rollout/fork_frac"][0] += len(drifts)
             self._rates["rollout/fork_frac"][1] += turns - 1
@@ -946,6 +955,7 @@ class ZeroSyncRolloutLoop:
                 "rollout/drift_tokens_max": float(max(drifts, default=0)),
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -1039,7 +1049,15 @@ class ZeroSyncRolloutLoop:
                 **self.chat_template_kwargs,
             )
             turn = await self.generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            # Decode the turn. It's important to use `parse_response` when possible, because it handles tool calls.
+            if (
+                getattr(self.tokenizer, "response_template", None) is not None  # new-style
+                or getattr(self.tokenizer, "response_schema", None) is not None  # old-style
+            ):
+                assistant_message = parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
+            else:
+                content = self.tokenizer.decode(turn.output_ids, skip_special_tokens=True)
+                assistant_message = {"role": "assistant", "content": content}
             completion.append(assistant_message)
             completion_ids.extend(turn.output_ids)
             messages.append(assistant_message)
@@ -1076,14 +1094,14 @@ class ZeroSyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
-            self._counters[f"tools/{name}/call_total"] += 1
+            self._counters[f"tools/{name}/call_count"] += 1
             tool = tool_dict.get(name)
             if tool is None:
                 # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
                 # and raised — which is an environment problem. Counted apart so the two are not one number.
                 n_failures += 1
-                self._counters["tools/unknown_name_total"] += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters["tools/unknown_name_count"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             t0 = time.monotonic()
@@ -1095,7 +1113,7 @@ class ZeroSyncRolloutLoop:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
-                self._counters[f"tools/{name}/failure_total"] += 1
+                self._counters[f"tools/{name}/failure_count"] += 1
                 result = {"error": str(error)}
             elapsed = time.monotonic() - t0
             self._rates["tools/latency_s"][0] += elapsed
@@ -1146,6 +1164,13 @@ class ZeroSyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        for reward_func_name, rewards in zip(self.reward_func_names, all_rewards, strict=False):
+            if len(rewards) != len(group.completions):
+                raise ValueError(
+                    f"The reward function '{reward_func_name}' returned {len(rewards)} rewards, but "
+                    f"{len(group.completions)} were expected (one per prompt-completion pair). Make sure the reward "
+                    f"function returns exactly one reward per completion."
+                )
         # Each environment that owns its reward contributes one reward column (named after its env class, in
         # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
         # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
@@ -1157,8 +1182,21 @@ class ZeroSyncRolloutLoop:
         all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
-        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        return np.array(all_rewards, dtype=float)
+        all_rewards = np.array(
+            [[r if r is not None else float("nan") for r in row] for row in all_rewards], dtype=float
+        )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if np.isnan(all_rewards).all(axis=0).any():
+            nan_row_idx = int(np.isnan(all_rewards).all(axis=0).nonzero()[0][0])
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in group.reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = group.prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = group.completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        return all_rewards
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """
@@ -1198,28 +1236,38 @@ class ZeroSyncRolloutLoop:
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
+        # Completions that repeat an earlier one of the group token for token; about 0 when sampling is random
+        num_completions = len(group.completions_ids)
+        num_distinct = len({tuple(ids) for ids in group.completions_ids})
+        self._rates["completions/duplicate_frac"][0] += num_completions - num_distinct
+        self._rates["completions/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         self._rates["reward"][0] += float(scored.sum())
         self._rates["reward"][1] += len(scored)
+        # Each reward function's mean over the rollouts it scored, dropped groups included, like `reward`. A function
+        # that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no reward) adds nothing.
+        for name, func_rewards in zip(self.reward_func_names, per_func_rewards, strict=True):
+            func_scored = func_rewards[~np.isnan(func_rewards)]
+            if len(func_scored):
+                self._rates[f"rewards/{name}/mean"][0] += float(func_scored.sum())
+                self._rates[f"rewards/{name}/mean"][1] += len(func_scored)
+        if self.tools or any(group.tool_call_counts):
+            self._rates["tools/call_frequency"][0] += sum(group.tool_call_counts)
+            self._rates["tools/call_frequency"][1] += len(group.tool_call_counts)
+            self._rates["tools/failure_frequency"][0] += sum(group.tool_failure_counts)
+            self._rates["tools/failure_frequency"][1] += sum(group.tool_call_counts)
         zero_std = bool(np.all(scored == scored[:1]))
-        self._rates["frac_reward_zero_std"][0] += zero_std
-        self._rates["frac_reward_zero_std"][1] += 1
+        self._rates["frac_zero_std_groups"][0] += zero_std
+        self._rates["frac_zero_std_groups"][1] += 1
         if zero_std:
+            if len(scored):
+                # The reward a dropped group is stuck at: near the top of its range, the prompts are too easy; near the
+                # bottom, too hard. With 0/1 rewards, this is the share of dropped groups whose completions all pass.
+                self._rates["reward_zero_std_groups"][0] += reward_mean
+                self._rates["reward_zero_std_groups"][1] += 1
             return []
 
-        total_calls = sum(group.tool_call_counts)
-        tool_metrics = (
-            [
-                {
-                    "tools/call_frequency": float(n_calls),
-                    "tools/failure_frequency": (n_failures / n_calls) if n_calls > 0 else 0.0,
-                }
-                for n_calls, n_failures in zip(group.tool_call_counts, group.tool_failure_counts, strict=True)
-            ]
-            if total_calls > 0
-            else [{}] * len(group.completions)
-        )
         # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
@@ -1229,33 +1277,17 @@ class ZeroSyncRolloutLoop:
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
         samples = []
-        for i, (prompt, completion, sequences, advantage, reward, tm) in enumerate(
-            zip(
-                group.prompts,
-                group.completions,
-                group.completions_sequences,
-                advantages,
-                rewards,
-                tool_metrics,
-                strict=True,
-            )
+        for prompt, completion, sequences, advantage, reward in zip(
+            group.prompts, group.completions, group.completions_sequences, advantages, rewards, strict=True
         ):
             metrics = {
-                "reward_kept": float(reward),
+                "reward_trained": float(reward),
                 "reward_group_std": reward_std,
-                **{
-                    f"rewards/{name}/mean": float(func_reward)
-                    for name, func_reward, used in zip(
-                        self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
-                    )
-                    if used
-                },
                 **{
                     f"rewards/{name}/group_std": std
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
-                **tm,
             }
             for seq in sequences:
                 width = max(map(len, seq.sampler_logprobs))
@@ -1315,7 +1347,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
+                    **sample.metrics,  # reward_trained, reward_group_std, rewards/<func>/group_std
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -1394,8 +1426,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-              vision-language checkpoint (whose vision tower is loaded but frozen),
-              [`~transformers.AutoModelForCausalLM`] otherwise.
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Training Vision Language
+              Models](zero_sync_grpo_trainer#training-vision-language-models)), [`~transformers.AutoModelForCausalLM`]
+              otherwise.
             - A [`~transformers.PreTrainedModel`] object.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -1416,11 +1449,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
-            ignored. The format of the samples can be either:
-
-            - [Standard](dataset_formats#standard): Each sample contains plain text.
-            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
-              and content).
+            ignored. The samples must be in [conversational](dataset_formats#conversational) format: each sample
+            contains structured messages (e.g., role and content).
 
             May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
             generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
@@ -1679,11 +1709,39 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
         self.eos_token_ids = eos_token_ids
 
+        if tools or environment_factory:
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with ZeroSyncGRPOTrainer on transformers below 5.13.0 requires the jmespath library "
+                    "for response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+
         # Reward functions
         if reward_funcs is None:
             reward_funcs = []
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+
+        # At least one reward source is required: either `reward_funcs`, an environment that owns the reward via a
+        # `get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`. Environments are created in the
+        # rollout loop, which checks that they define `get_reward`.
+        if (
+            not reward_funcs
+            and environment_factory is None
+            and self.loop_cls.generate_one is ZeroSyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
 
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
@@ -1705,12 +1763,26 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
+
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        if "image" in dataset_sample or "images" in dataset_sample:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but "
+                "`ZeroSyncGRPOTrainer` trains on text only, vision-language models included. Please remove the images "
+                "from your dataset."
+            )
 
         # The rollout loop gets them, with the tools and the environments, when the engine starts
         self.reward_funcs = reward_funcs
         self.tools = tools
         self.environment_factory = environment_factory
 
+        # Initialize the Trainer
         super().__init__(
             model=model,
             args=args,
@@ -1720,6 +1792,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         precision = self.accelerator.mixed_precision
         self.compute_dtype = {
@@ -1797,14 +1872,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             collate_fn=self.data_collator,
             num_workers=0,  # the engine lives in this process
         )
-
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
-        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
 
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
@@ -2065,6 +2132,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             samples = [buffer.popleft() for _ in range(num_samples)]
         now = time.time()
         for sample in samples:
+            # Three different views of the same buffer, and they must not be confused with each other:
+            #   `rollout/queue_size`         how many scored samples are in it, counted where the TRAINER consumes
+            #                                them rather than where the loop filled it
+            #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
+            #                                half of its off-policyness
+            #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the buffer was short
+            self._metrics[mode]["rollout/queue_size"].append(float(len(buffer)))
             if sample.enqueued_at is not None:
                 self._metrics[mode]["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
@@ -2319,16 +2393,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
+        # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
+        # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
         loss = per_token_loss.sum()
         global_n_tokens = global_counts[0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
         loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
         loss = loss / self.current_gradient_accumulation_steps
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
@@ -2473,24 +2544,24 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._step_rollout_wait_s = 0.0
 
         # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
-        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
-        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        ## `fwd_bwd_` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `wall_clock_` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
             mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
-            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            if self._peak_flops_per_device is not None:
-                metrics["perf/mfu_fwd_bwd"].append(
+            metrics["perf/fwd_bwd_forwarded_tokens_per_s"].append((self._step_forward_tokens, fwd_bwd_s))
+            if self._peak_flops_per_device is not None and flops_per_token is not None:
+                metrics["perf/fwd_bwd_mfu"].append(
                     compute_mfu(
                         flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
-                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
-                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                if self._peak_flops_per_device is not None:
-                    metrics["perf/mfu_wall_clock"].append(
+                metrics["perf/wall_clock_forwarded_tokens_per_s"].append((self._step_forward_tokens, step_s))
+                metrics["perf/wall_clock_trained_tokens_per_s"].append((self._step_trained_tokens, step_s))
+                if self._peak_flops_per_device is not None and flops_per_token is not None:
+                    metrics["perf/wall_clock_mfu"].append(
                         compute_mfu(
                             flops_per_token,
                             self._step_forward_tokens / step_s,

@@ -41,18 +41,12 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
             disable it. Fails when used with a non-MoE model.
 
-        > Parameters that control the data preprocessing
-
-        remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
-            requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
-
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         max_completion_length (`int`, *optional*, defaults to `2048`):
-            Maximum length of the generated completion.
+            Maximum number of tokens generated per engine request, so per turn in a multi-turn rollout.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -65,8 +59,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_completion_length`.
+            stops when the model generates a response turn with no tool calls.
 
         > Parameters that control the generation engine
 
@@ -126,6 +119,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the rollout stream.
+    > - `remove_unused_columns`: Defaults to `False` instead of `True`, and must stay `False`: every dataset column is passed to the reward functions.
     """
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
@@ -177,13 +171,11 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "rollout stream."
         },
     )
-
-    # Parameters that control the data preprocessing
-    remove_unused_columns: bool | None = field(
+    remove_unused_columns: bool = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
-            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
+            "help": "Must be `False` for ZeroSyncGRPO: every dataset column is passed to the reward functions. Remove "
+            "the columns you don't need from the dataset instead."
         },
     )
 
@@ -194,7 +186,9 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     )
     max_completion_length: int = field(
         default=2048,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={
+            "help": "Maximum number of tokens generated per engine request, so per turn in a multi-turn rollout."
+        },
     )
     temperature: float = field(
         default=1.0,
@@ -225,8 +219,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total response "
-            "length reaches `max_completion_length`."
+            "generation stops when the model generates a response turn with no tool calls."
         },
     )
 
@@ -309,6 +302,13 @@ class ZeroSyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.remove_unused_columns:
+            raise ValueError(
+                "`remove_unused_columns=True` is not supported: ZeroSyncGRPO passes every dataset column to the reward "
+                "functions. Remove the columns you don't need from the dataset before passing it to the trainer, for "
+                "example with `dataset.remove_columns(...)`."
+            )
 
         if self.num_generations < 2:
             raise ValueError(
