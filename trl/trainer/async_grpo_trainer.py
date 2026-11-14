@@ -3467,7 +3467,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 q = sampler_log_probs.exp()
                 p = score_log_probs.exp() * (q > 0)
                 head = torch.where((p >= low * q) & (p <= high * q), p, 0.0)
-                tail_ratio = (1 - p.sum(-1)).clamp(min=1e-6) / (1 - q.sum(-1)).clamp(min=1e-6)
+                # Flooring positive tail masses can move their ratio inside the IS bounds and retain a filtered tail.
+                # Only guard a zero denominator; keep small positive masses intact on both sides of the ratio.
+                tail_ratio = (1 - p.sum(-1)).clamp(min=0.0) / (1 - q.sum(-1)).clamp(min=torch.finfo(q.dtype).tiny)
                 tail = ((tail_ratio >= low) & (tail_ratio <= high)).float()
                 residual = head - tail.unsqueeze(-1) * p
                 weight = torch.where(is_masked, 0.0, coef_1)

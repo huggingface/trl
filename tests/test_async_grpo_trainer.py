@@ -4108,14 +4108,17 @@ def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group
 class TestScoreCentering(TrlTestCase):
     @pytest.mark.parametrize("advantage", [-1.0, 1.0])
     @pytest.mark.parametrize(
-        ("top_k", "num_sampler_logprobs", "tail_mass"),
+        ("top_k", "num_sampler_logprobs", "tail_mass", "sampler_tail_mass"),
         [
-            pytest.param(0, 2, 2e-2, id="unfiltered"),
-            pytest.param(0, 2, 2e-6, id="confident-tail"),
-            pytest.param(4, 4, None, id="full-support"),
+            pytest.param(0, 2, 2e-2, 2e-4, id="unfiltered"),
+            pytest.param(0, 2, 2e-6, 2e-8, id="small-sampler-tail"),
+            pytest.param(0, 2, 6e-7, 1.5e-6, id="small-policy-tail"),
+            pytest.param(4, 4, None, None, id="full-support"),
         ],
     )
-    def test_constant_advantage_has_zero_expected_gradient(self, advantage, top_k, num_sampler_logprobs, tail_mass):
+    def test_constant_advantage_has_zero_expected_gradient(
+        self, advantage, top_k, num_sampler_logprobs, tail_mass, sampler_tail_mass
+    ):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         # MFU initialization queries CUDA even with `use_cpu=True`; there is no GPU device name to report here.
         with patch("torch.cuda.get_device_name", return_value="cpu"):
@@ -4149,9 +4152,9 @@ class TestScoreCentering(TrlTestCase):
             q = torch.tensor([0.6, 0.2, 0.19, 0.01, 0.0])
         else:
             # Keep q proportional to p on the tail so centering is exact under the estimator's tail assumption.
-            # The tail's p/q ratio of 100 puts all of it outside the masked-IS bounds.
+            # The entire tail lies outside the masked-IS bounds, so its retained mass should be zero.
             p = torch.tensor([0.6, 0.4 - tail_mass, tail_mass / 2, tail_mass / 2])
-            q = torch.tensor([0.6, 0.4 - tail_mass / 100, tail_mass / 200, tail_mass / 200])
+            q = torch.tensor([0.6, 0.4 - sampler_tail_mass, sampler_tail_mass / 2, sampler_tail_mass / 2])
         with torch.no_grad():
             hidden = model.base_model(input_ids=torch.tensor([[1]])).last_hidden_state[0, 0]
             model.get_output_embeddings().weight.copy_(p.log()[:, None] * hidden / hidden.square().sum())
