@@ -762,6 +762,8 @@ class TransformersVLLMServer:
     Args:
         model_id (`str`):
             The model to serve, the trainer's.
+        logprobs_mode (`str`, *optional*, defaults to `"processed_logprobs"`):
+            Whether to report the sampling distribution or the raw policy log-probabilities.
 
     Attributes:
         script (`Callable[[list[int]], list[int]]`, *optional*):
@@ -769,8 +771,10 @@ class TransformersVLLMServer:
             the tests whose rollouts must follow a fixed path, like a tool call.
     """
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, logprobs_mode: str = "processed_logprobs"):
         self.model_id = model_id
+        self.logprobs_mode = logprobs_mode
+        self.generation_requests = 0
         config = AutoConfig.from_pretrained(model_id)
         loader = AutoModelForImageTextToText if config.get_text_config() is not config else AutoModelForCausalLM
         self.model = loader.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
@@ -811,7 +815,7 @@ class TransformersVLLMServer:
         if path == "/server_info":
             return {
                 "vllm_config": {
-                    "model_config": {"return_sampling_mask": True},
+                    "model_config": {"return_sampling_mask": True, "logprobs_mode": self.logprobs_mode},
                     # As without `--enable-lora`: the trainer syncs a PEFT model's merged weights
                     "lora_config": None,
                     "parallel_config": {"data_parallel_size": 1},
@@ -822,6 +826,8 @@ class TransformersVLLMServer:
         return None
 
     def post(self, path: str, body: dict):
+        if path in ("/v1/completions", "/inference/v1/generate"):
+            self.generation_requests += 1
         if path == "/v1/completions":
             completion_ids, logprobs = self.generate(body["prompt"], body)
             top = logprobs.topk(body["logprobs"])
@@ -876,9 +882,8 @@ class TransformersVLLMServer:
 
         Returns:
             `tuple[torch.Tensor, torch.Tensor]`:
-                The completion's token ids, and the log-probs over the vocabulary at each of its positions, after the
-                penalty, the temperature and the truncation, as `vllm serve --logprobs-mode processed_logprobs` returns
-                them.
+                The completion's token ids and per-position vocabulary log-probabilities, before or after sampling
+                transformations according to `logprobs_mode`.
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
         if self.script is not None:
@@ -887,7 +892,8 @@ class TransformersVLLMServer:
                 logits = self.model(torch.cat([prompt_ids[0], completion_ids])[None]).logits[
                     0, prompt_ids.shape[1] - 1 : -1
                 ]
-            return completion_ids, (logits.float() / sampling_params["temperature"]).log_softmax(-1)
+            temperature = sampling_params["temperature"] if self.logprobs_mode == "processed_logprobs" else 1.0
+            return completion_ids, (logits.float() / temperature).log_softmax(-1)
         with self.generate_lock:
             output = self.model.generate(
                 prompt_ids,
@@ -902,7 +908,13 @@ class TransformersVLLMServer:
                 output_scores=True,
                 return_dict_in_generate=True,
             )
-        return output.sequences[0, prompt_ids.shape[1] :], torch.cat(output.scores).float().log_softmax(-1)
+        completion_ids = output.sequences[0, prompt_ids.shape[1] :]
+        if self.logprobs_mode == "raw_logprobs":
+            # Sampling still uses temperature, but a raw-logprobs server reports the unmodified policy distribution.
+            with self.generate_lock, torch.no_grad():
+                logits = self.model(output.sequences).logits[0, prompt_ids.shape[1] - 1 : -1]
+            return completion_ids, logits.float().log_softmax(-1)
+        return completion_ids, torch.cat(output.scores).float().log_softmax(-1)
 
     def _handler(self):
         server = self
@@ -974,8 +986,8 @@ def make_vllm_server(monkeypatch):
     """
     servers = []
 
-    def make(model_id: str) -> TransformersVLLMServer:
-        server = TransformersVLLMServer(model_id)
+    def make(model_id: str, logprobs_mode: str = "processed_logprobs") -> TransformersVLLMServer:
+        server = TransformersVLLMServer(model_id, logprobs_mode=logprobs_mode)
         servers.append(server)
         monkeypatch.setattr(
             async_grpo_trainer_module, "WeightTransferClient", functools.partial(InProcessWeightTransferClient, server)
@@ -2912,6 +2924,45 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         for name, param in previous.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
+
+    @pytest.mark.parametrize(
+        ("temperature", "logprobs_mode"),
+        [(0.7, "processed_logprobs"), (0.7, "raw_logprobs"), (1.0, "raw_logprobs")],
+    )
+    def test_score_centering_checks_sampler_logprobs(self, temperature, logprobs_mode, make_vllm_server):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        server = make_vllm_server(model_id, logprobs_mode=logprobs_mode)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=str_length_reward,
+            args=AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                dtype="bfloat16",
+                temperature=temperature,
+                score_centering=True,
+                num_generations=2,
+                max_concurrent_rollouts=2,
+                max_completion_length=8,
+                token_budget=128,
+                max_steps=1,
+                save_strategy="no",
+                vllm_server_base_url=server.url,
+                vllm_server_timeout=5.0,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        if temperature != 1.0 and logprobs_mode == "raw_logprobs":
+            # The server reports a different distribution from the one it samples; reject it before collecting data.
+            with pytest.raises(RuntimeError, match="processed_logprobs"):
+                trainer.train()
+            assert server.generation_requests == 0
+        else:
+            trainer.train()
+            assert trainer.state.global_step == 1
+            assert server.generation_requests > 0
+            assert math.isfinite(trainer.state.log_history[-1]["train_loss"])
 
     @pytest.mark.parametrize(
         "correction",
