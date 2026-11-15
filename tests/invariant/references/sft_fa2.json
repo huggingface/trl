@@ -1,0 +1,51 @@
+{
+  "config": {
+    "name": "sft_fa2",
+    "method": "sft",
+    "args": {
+      "model_name_or_path": "Qwen/Qwen2.5-0.5B-Instruct",
+      "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+      "attn_implementation": "kernels-community/flash-attn2@v2",
+      "dataset_name": "trl-lib/Capybara",
+      "max_steps": "4",
+      "max_length": "None",
+      "logging_steps": "1",
+      "report_to": "none",
+      "seed": "42",
+      "data_seed": "42",
+      "full_determinism": "True",
+      "bf16": "True",
+      "per_device_train_batch_size": "2"
+    }
+  },
+  "env": {
+    "accelerate": "1.14.0",
+    "torch": "2.13.0+cu130",
+    "transformers": "5.19.0.dev0",
+    "trl": "541b348f9382b4f059670a375bc26a5a92c21c18",
+    "python": "3.13.13",
+    "gpu": "NVIDIA H100 80GB HBM3"
+  },
+  "steps": [
+    {
+      "step": 1,
+      "loss": 2.0777089595794678,
+      "grad_norm": 23.317625045776367
+    },
+    {
+      "step": 2,
+      "loss": 1.5334177017211914,
+      "grad_norm": 18.652774810791016
+    },
+    {
+      "step": 3,
+      "loss": 1.3671374320983887,
+      "grad_norm": 16.248981475830078
+    },
+    {
+      "step": 4,
+      "loss": 2.4324307441711426,
+      "grad_norm": 10.404301643371582
+    }
+  ]
+}

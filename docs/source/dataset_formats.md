@@ -1,0 +1,879 @@
+# Dataset formats and types
+
+This guide provides an overview of the dataset formats and types supported by each trainer in TRL.
+
+## Overview of the dataset formats and types
+
+- The *format* of a dataset refers to how the data is structured, typically categorized as either *standard* or *conversational*.
+- The *type* is associated with the specific task the dataset is designed for, such as *prompt-only* or *preference*. Each type is characterized by its columns, which vary according to the task, as shown in the table.
+
+<table>
+  <tr>
+    <th>Type \ Format</th>
+    <th>Standard</th>
+    <th>Conversational</th>
+  </tr>
+  <tr>
+    <td>Language modeling</td>
+    <td>
+      <pre><code>{"text": "The sky is blue."}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"messages": [{"role": "user", "content": "What color is the sky?"},
+              {"role": "assistant", "content": "It is blue."}]}</code></pre>
+    </td>
+  </tr>
+  <tr>
+    <td>Prompt-only</td>
+    <td>
+      <pre><code>{"prompt": "The sky is"}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}]}</code></pre>
+    </td>
+  </tr>
+  <tr>
+    <td>Prompt-completion</td>
+    <td>
+      <pre><code>{"prompt": "The sky is",
+ "completion": " blue."}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "It is blue."}]}</code></pre>
+    </td>
+  </tr>
+  </tr>
+  <tr>
+    <td>Preference</td>
+    <td>
+      <pre><code>{"prompt": "The sky is",
+ "chosen": " blue.",
+ "rejected": " green."}</code></pre>
+      or, with implicit prompt:
+      <pre><code>{"chosen": "The sky is blue.",
+ "rejected": "The sky is green."}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "chosen": [{"role": "assistant", "content": "It is blue."}],
+ "rejected": [{"role": "assistant", "content": "It is green."}]}</code></pre>
+      or, with implicit prompt:
+      <pre><code>{"chosen": [{"role": "user", "content": "What color is the sky?"},
+              {"role": "assistant", "content": "It is blue."}],
+ "rejected": [{"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is green."}]}</code></pre>
+    </td>
+  </tr>
+    <td>Unpaired preference</td>
+    <td>
+      <pre><code>{"prompt": "The sky is",
+ "completion": " blue.",
+ "label": True}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "It is green."}],
+ "label": False}</code></pre>
+    </td>
+  </tr>
+</table>
+
+### Formats
+
+#### Standard
+
+The standard dataset format typically consists of plain text strings. The columns in the dataset vary depending on the task. This is the format expected by TRL trainers. Below are examples of standard dataset formats for different tasks:
+
+```python
+# Language modeling
+language_modeling_example = {"text": "The sky is blue."}
+# Preference
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Unpaired preference
+unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
+```
+
+#### Conversational
+
+Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard dataset formats, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text).
+
+```python
+messages = [
+    {"role": "user", "content": "Hello, how are you?"},
+    {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
+    {"role": "user", "content": "I'd like to show off how chat templating works!"},
+]
+```
+
+Just like standard datasets, the columns in conversational datasets vary depending on the task. Below are examples of conversational dataset formats for different tasks:
+
+```python
+# Prompt-completion
+prompt_completion_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                             "completion": [{"role": "assistant", "content": "It is blue."}]}
+# Preference
+preference_example = {
+    "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    "chosen": [{"role": "assistant", "content": "It is blue."}],
+    "rejected": [{"role": "assistant", "content": "It is green."}],
+}
+```
+
+#### Tool Calling
+
+Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
+
+After the assistant initiates a tool call, the tool executes and returns its output. The assistant can then process this output and continue the conversation accordingly.
+
+Here’s a simple example of a tool-calling interaction:
+
+```python
+messages = [
+    {"role": "user", "content": "Turn on the living room lights."},
+    {"role": "assistant", "tool_calls": [
+        {"type": "function", "function": {
+            "name": "control_light",
+            "arguments": {"room": "living room", "state": "on"}
+        }}]
+    },
+    {"role": "tool", "name": "control_light", "content": "The lights in the living room are now on."},
+    {"role": "assistant", "content": "Done!"}
+]
+```
+
+When preparing datasets for Supervised Fine-Tuning (SFT) with tool calling, it is important that your dataset includes an additional column named `tools`. This column contains the list of available tools for the model, which is usually used by the chat template to construct the system prompt.
+
+The tools must be specified in a codified JSON schema format. You can automatically generate this schema from Python function signatures using the [`~transformers.utils.get_json_schema`] utility:
+
+```python
+import json
+from transformers.utils import get_json_schema
+
+def control_light(room: str, state: str) -> str:
+    """
+    Controls the lights in a room.
+
+    Args:
+        room: The name of the room.
+        state: The desired state of the light ("on" or "off").
+
+    Returns:
+        str: A message indicating the new state of the lights.
+    """
+    return f"The lights in {room} are now {state}."
+
+# Generate JSON schema
+json_schema = get_json_schema(control_light)
+```
+
+The generated schema would look like:
+
+```python
+{"type": "function", "function": {"name": "control_light", "description": "Controls the lights in a room.", "parameters": {"type": "object", "properties": {"room": {"type": "string", "description": "The name of the room."}, "state": {"type": "string", "description": "The desired state of the light (\"on\" or \"off\")."}}, "required": ["room", "state"]}, "return": {"type": "string", "description": "str: A message indicating the new state of the lights."}}}
+```
+
+A complete dataset entry for SFT might look like:
+
+```python
+{"messages": messages, "tools": [json_schema]}
+```
+
+To get a `Dataset` you need to use the `Json()` type for tool arguments since they are arbitrary JSON objects, and not dictionaries with fixed fields and types:
+
+```python
+from datasets import Dataset
+
+data = [
+    {"messages": messages1, "tools": [json_schema1]},
+    {"messages": messages2, "tools": [json_schema2]},
+]
+# auto-apply the Json() type
+dataset = Dataset.from_list(data, on_mixed_types="use_json")
+
+# or specify the features manually
+from datasets import Features, Json, List, Value
+
+features = Features(
+    {
+        "messages": List({"role": Value("string"), "content": Value("string"), "tool_calls": List(Json())}),
+        "tools": List(Json()),
+    }
+)
+dataset = Dataset.from_list(data, features=features)
+```
+
+On older versions of `datasets` (<4.7.0) that don't have the `Json()` type, you should store `tools` as a JSON `str` (with `json.dumps([...])`):
+
+```python
+dataset = Dataset.from_list(
+    [{"messages": messages1, "tools": json.dumps([json_schema1])},
+     {"messages": messages2, "tools": json.dumps([json_schema2])}]
+)
+```
+
+For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+
+### Harmony
+
+The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
+
+- **Developer role** – Provides high level instructions (similar to a system prompt) and lists available tools.
+- **Channels** – Separate types of assistant output into distinct streams:
+
+  - `analysis` – for internal reasoning, from the key `"thinking"`
+  - `final` – for the user-facing answer, from the key `"content"`
+  - `commentary` – for tool calls or meta notes
+
+- **Reasoning effort** – Signals how much thinking the model should show (e.g., `"low"`, `"medium"`, `"high"`).
+- **Model identity** – Explicitly defines the assistant’s persona.
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
+
+messages = [
+    {"role": "developer", "content": "Use a friendly tone."},
+    {"role": "user", "content": "What is the meaning of life?"},
+    {"role": "assistant", "thinking": "Deep reflection...", "content": "The final answer is..."},
+]
+
+print(
+    tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        reasoning_effort="low",
+        model_identity="You are HuggingGPT, a large language model trained by Hugging Face.",
+    )
+)
+```
+
+This produces:
+
+```txt
+<|start|>system<|message|>You are HuggingGPT, a large language model trained by Hugging Face.
+Knowledge cutoff: 2024-06
+Current date: 2025-08-03
+
+Reasoning: low
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep reflection...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
+```
+
+For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](https://cookbook.openai.com/articles/openai-harmony).
+
+### Types
+
+#### Language modeling
+
+A language modeling dataset consists of a column `"text"` (or `"messages"` for conversational datasets) containing a full sequence of text.
+
+```python
+# Standard format
+language_modeling_example = {"text": "The sky is blue."}
+# Conversational format
+language_modeling_example = {"messages": [
+    {"role": "user", "content": "What color is the sky?"},
+    {"role": "assistant", "content": "It is blue."}
+]}
+```
+
+#### Prompt-only
+
+In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating completion based on this prompt, where the model learns to continue or complete the given input.
+
+```python
+# Standard format
+prompt_only_example = {"prompt": "The sky is"}
+# Conversational format
+prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+```
+
+For examples of prompt-only datasets, refer to the [Prompt-only datasets collection](https://huggingface.co/collections/trl-lib/prompt-only-datasets-677ea25245d20252cea00368).
+
+> [!TIP]
+> While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
+>
+> ```python
+> from transformers import AutoTokenizer
+> from trl import apply_chat_template
+>
+> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+>
+> # Example for prompt-only type
+> prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+> apply_chat_template(prompt_only_example, tokenizer)
+> # Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+>
+> # Example for language modeling type
+> lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
+> apply_chat_template(lm_example, tokenizer)
+> # Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
+> ```
+>
+> - The prompt-only output includes a `'<|assistant|>\n'`, indicating the beginning of the assistant’s turn and expecting the model to generate a completion.
+> - In contrast, the language modeling output treats the input as a complete sequence and terminates it with `'<|endoftext|>'`, signaling the end of the text and not expecting any additional content.
+
+#### Prompt-completion
+
+A prompt-completion dataset includes a `"prompt"` and a `"completion"`.
+
+```python
+# Standard format
+prompt_completion_example = {"prompt": "The sky is", "completion": " blue."}
+# Conversational format
+prompt_completion_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                             "completion": [{"role": "assistant", "content": "It is blue."}]}
+```
+
+For examples of prompt-completion datasets, refer to the [Prompt-completion datasets collection](https://huggingface.co/collections/trl-lib/prompt-completion-datasets-677ea2bb20bbb6bdccada216).
+
+#### Preference
+
+A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
+Some datasets may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
+
+```python
+# Standard format
+## Explicit prompt (recommended)
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Implicit prompt
+preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+
+# Conversational format
+## Explicit prompt (recommended)
+preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                      "chosen": [{"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "assistant", "content": "It is green."}]}
+## Implicit prompt
+preference_example = {"chosen": [{"role": "user", "content": "What color is the sky?"},
+                                 {"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "user", "content": "What color is the sky?"},
+                                   {"role": "assistant", "content": "It is green."}]}
+```
+
+For examples of preference datasets, refer to the [Preference datasets collection](https://huggingface.co/collections/trl-lib/preference-datasets-677e99b581018fcad9abd82c).
+
+Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
+
+#### Unpaired preference
+
+An unpaired preference dataset is similar to a preference dataset but instead of having `"chosen"` and `"rejected"` completions for the same prompt, it includes a single `"completion"` and a `"label"` indicating whether the completion is preferred or not.
+
+```python
+# Standard format
+unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
+# Conversational format
+unpaired_preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                               "completion": [{"role": "assistant", "content": "It is blue."}],
+                               "label": True}
+```
+
+For examples of unpaired preference datasets, refer to the [Unpaired preference datasets collection](https://huggingface.co/collections/trl-lib/unpaired-preference-datasets-677ea22bf5f528c125b0bcdf).
+
+## Which dataset type to use?
+
+Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
+
+| Trainer | Expected dataset type |
+| --- | --- |
+| [`DPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`GRPOTrainer`] | [Prompt-only](#prompt-only) |
+| [`KTOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`RewardTrainer`] | [Preference (implicit prompt recommended)](#preference) |
+| [`RLOOTrainer`] | [Prompt-only](#prompt-only) |
+| [`SFTTrainer`] | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion) |
+| [`experimental.cpo.CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+| [`experimental.gkd.GKDTrainer`] | [Prompt-completion](#prompt-completion) |
+| [`experimental.online_dpo.OnlineDPOTrainer`] | [Prompt-only](#prompt-only) |
+| [`experimental.orpo.ORPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |
+
+## Using any dataset with TRL: preprocessing and conversion
+
+Many datasets come in formats tailored to specific tasks, which might not be directly compatible with TRL. To use such datasets with TRL, you may need to preprocess and convert them into the required format.
+
+To make this easier, we provide a set of [example scripts](https://github.com/huggingface/trl/tree/main/examples/datasets) that cover common dataset conversions.
+
+### Example: UltraFeedback dataset
+
+Let’s take the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback) as an example. Here's a preview of the dataset:
+
+<iframe
+  src="https://huggingface.co/datasets/openbmb/UltraFeedback/embed/viewer/default/train"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+As shown above, the dataset format does not match the expected structure. It’s not in a conversational format, the column names differ, and the results pertain to different models (e.g., Bard, GPT-4) and aspects (e.g., "helpfulness", "honesty").
+
+By using the provided conversion script [`examples/datasets/ultrafeedback.py`](https://github.com/huggingface/trl/tree/main/examples/datasets/ultrafeedback.py), you can transform this dataset into an unpaired preference type, and push it to the Hub:
+
+```sh
+python examples/datasets/ultrafeedback.py --push_to_hub --repo_id trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness
+```
+
+Once converted, the dataset will look like this:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+Now, you can use this dataset with TRL!
+
+By adapting the provided scripts or creating your own, you can convert any dataset into a format compatible with TRL.
+
+## Utilities for converting dataset types
+
+This section provides example code to help you convert between different dataset types. While some conversions can be performed after applying the chat template (i.e., in the standard format), we recommend performing the conversion before applying the chat template to ensure it works consistently.
+
+For simplicity, some of the examples below do not follow this recommendation and use the standard format. However, the conversions can be applied directly to the conversational format without modification.
+
+| From \ To | Language modeling | Prompt-completion | Prompt-only | Preference with implicit prompt | Preference | Unpaired preference |
+| --- | --- | --- | --- | --- | --- | --- |
+| Language modeling | N/A | N/A | N/A | N/A | N/A | N/A |
+| Prompt-completion | [🔗](#from-prompt-completion-to-language-modeling-dataset) | N/A | [🔗](#from-prompt-completion-to-prompt-only-dataset) | N/A | N/A | N/A |
+| Prompt-only | N/A | N/A | N/A | N/A | N/A | N/A |
+| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
+| Preference | [🔗](#from-preference-to-language-modeling-dataset) | [🔗](#from-preference-to-prompt-completion-dataset) | [🔗](#from-preference-to-prompt-only-dataset) | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A | [🔗](#from-preference-to-unpaired-preference-dataset) |
+| Unpaired preference | [🔗](#from-unpaired-preference-to-language-modeling-dataset) | [🔗](#from-unpaired-preference-to-prompt-completion-dataset) | [🔗](#from-unpaired-preference-to-prompt-only-dataset) | N/A | N/A | N/A |
+
+### From prompt-completion to language modeling dataset
+
+To convert a prompt-completion dataset into a language modeling dataset, concatenate the prompt and the completion.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky."],
+})
+
+def concat_prompt_completion(example):
+    return {"text": example["prompt"] + example["completion"]}
+
+dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
+```
+
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
+
+### From prompt-completion to prompt-only dataset
+
+To convert a prompt-completion dataset into a prompt-only dataset, remove the completion.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky."],
+})
+
+dataset = dataset.remove_columns("completion")
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is'}
+```
+
+### From preference with implicit prompt to language modeling dataset
+
+To convert a preference with implicit prompt dataset into a language modeling dataset, remove the rejected, and rename the column `"chosen"` to `"text"`.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "chosen": ["The sky is blue.", "The sun is in the sky."],
+    "rejected": ["The sky is green.", "The sun is in the sea."],
+})
+
+dataset = dataset.rename_column("chosen", "text").remove_columns("rejected")
+```
+
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
+
+### From preference with implicit prompt to prompt-completion dataset
+
+To convert a preference dataset with implicit prompt into a prompt-completion dataset, extract the prompt with [`extract_prompt`], remove the rejected, and rename the column `"chosen"` to `"completion"`.
+
+```python
+from datasets import Dataset
+from trl import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+dataset = dataset.map(extract_prompt).remove_columns("rejected").rename_column("chosen", "completion")
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}], 'completion': [{'role': 'assistant', 'content': 'It is blue.'}]}
+```
+
+### From preference with implicit prompt to prompt-only dataset
+
+To convert a preference dataset with implicit prompt into a prompt-only dataset, extract the prompt with [`extract_prompt`], and remove the rejected and the chosen.
+
+```python
+from datasets import Dataset
+from trl import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+dataset = dataset.map(extract_prompt).remove_columns(["chosen", "rejected"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}]}
+```
+
+### From implicit to explicit prompt preference dataset
+
+To convert a preference dataset with implicit prompt into a preference dataset with explicit prompt, extract the prompt with [`extract_prompt`].
+
+```python
+from datasets import Dataset
+from trl import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+
+dataset = dataset.map(extract_prompt)
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+ 'chosen': [{'role': 'assistant', 'content': 'It is blue.'}],
+ 'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
+```
+
+### From preference with implicit prompt to unpaired preference dataset
+
+To convert a preference dataset with implicit prompt into an unpaired preference dataset, extract the prompt with [`extract_prompt`], and unpair the dataset with [`unpair_preference_dataset`].
+
+```python
+from datasets import Dataset
+from trl import extract_prompt, unpair_preference_dataset
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+
+dataset = dataset.map(extract_prompt)
+dataset = unpair_preference_dataset(dataset)
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+ 'completion': [{'role': 'assistant', 'content': 'It is blue.'}],
+ 'label': True}
+```
+
+> [!WARNING]
+> Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+> Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+> This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+### From preference to language modeling dataset
+
+To convert a preference dataset into a language modeling dataset, remove the rejected, concatenate the prompt and the chosen into the `"text"` column.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "chosen": [" blue.", " in the sky."],
+    "rejected": [" green.", " in the sea."],
+})
+
+def concat_prompt_chosen(example):
+    return {"text": example["prompt"] + example["chosen"]}
+
+dataset = dataset.map(concat_prompt_chosen, remove_columns=["prompt", "chosen", "rejected"])
+```
+
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
+
+### From preference to prompt-completion dataset
+
+To convert a preference dataset into a prompt-completion dataset, remove the rejected, and rename the column `"chosen"` to `"completion"`.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "chosen": [" blue.", " in the sky."],
+    "rejected": [" green.", " in the sea."],
+})
+
+dataset = dataset.remove_columns("rejected").rename_column("chosen", "completion")
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is', 'completion': ' blue.'}
+```
+
+### From preference to prompt-only dataset
+
+To convert a preference dataset into a prompt-only dataset, remove the rejected and the chosen.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "chosen": [" blue.", " in the sky."],
+    "rejected": [" green.", " in the sea."],
+})
+
+dataset = dataset.remove_columns(["chosen", "rejected"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is'}
+```
+
+### From explicit to implicit prompt preference dataset
+
+To convert a preference dataset with explicit prompt into a preference dataset with implicit prompt, concatenate the prompt to both chosen and rejected, and remove the prompt.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": [
+        [{"role": "user", "content": "What color is the sky?"}],
+        [{"role": "user", "content": "Where is the sun?"}],
+    ],
+    "chosen": [
+        [{"role": "assistant", "content": "It is blue."}],
+        [{"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "assistant", "content": "It is green."}],
+        [{"role": "assistant", "content": "In the sea."}],
+    ],
+})
+
+def concat_prompt_to_completions(example):
+    return {"chosen": example["prompt"] + example["chosen"], "rejected": example["prompt"] + example["rejected"]}
+
+dataset = dataset.map(concat_prompt_to_completions, remove_columns="prompt")
+```
+
+```python
+>>> dataset[0]
+{'chosen': [{'role': 'user', 'content': 'What color is the sky?'}, {'role': 'assistant', 'content': 'It is blue.'}],
+ 'rejected': [{'role': 'user', 'content': 'What color is the sky?'}, {'role': 'assistant', 'content': 'It is green.'}]}
+```
+
+### From preference to unpaired preference dataset
+
+To convert dataset into an unpaired preference dataset, unpair the dataset with [`unpair_preference_dataset`].
+
+```python
+from datasets import Dataset
+from trl import unpair_preference_dataset
+
+dataset = Dataset.from_dict({
+    "prompt": [
+        [{"role": "user", "content": "What color is the sky?"}],
+        [{"role": "user", "content": "Where is the sun?"}],
+    ],
+    "chosen": [
+        [{"role": "assistant", "content": "It is blue."}],
+        [{"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "assistant", "content": "It is green."}],
+        [{"role": "assistant", "content": "In the sea."}],
+    ],
+})
+
+dataset = unpair_preference_dataset(dataset)
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+ 'completion': [{'role': 'assistant', 'content': 'It is blue.'}],
+ 'label': True}
+```
+
+> [!WARNING]
+> Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+> Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+> This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+### From unpaired preference to language modeling dataset
+
+To convert an unpaired preference dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column, and remove the prompt, completion and label columns.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is", "The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky.", " green.", " in the sea."],
+    "label": [True, True, False, False],
+})
+
+def concatenate_prompt_completion(example):
+    return {"text": example["prompt"] + example["completion"]}
+
+dataset = dataset.filter(lambda x: x["label"]).map(concatenate_prompt_completion).remove_columns(["prompt", "completion", "label"])
+```
+
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
+
+### From unpaired preference to prompt-completion dataset
+
+To convert an unpaired preference dataset into a prompt-completion dataset, filter for good labels, then remove the label columns.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is", "The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky.", " green.", " in the sea."],
+    "label": [True, True, False, False],
+})
+
+dataset = dataset.filter(lambda x: x["label"]).remove_columns(["label"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is', 'completion': ' blue.'}
+```
+
+### From unpaired preference to prompt-only dataset
+
+To convert an unpaired preference dataset into a prompt-only dataset, remove the completion and the label columns.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is", "The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky.", " green.", " in the sea."],
+    "label": [True, True, False, False],
+})
+
+dataset = dataset.remove_columns(["completion", "label"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is'}
+```
+
+## Vision datasets
+
+Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently.
+
+A conversational vision dataset differs from a standard conversational dataset in two key ways:
+
+1. The dataset must contain the key `images` with the image data (as lists of PIL images) or `image` with a single PIL image.
+2. The `"content"` field in messages must be a list of dictionaries, where each dictionary specifies the type of data: `"image"` or `"text"`.
+
+Example:
+
+```python
+# Textual dataset:
+"content": "What color is the sky?"
+
+# Vision dataset:
+"content": [
+    {"type": "image"},
+    {"type": "text", "text": "What color is the sky in the image?"}
+]
+```
+
+An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset). Below is an embedded view of the dataset's training data, allowing you to explore it directly:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/rlaif-v/embed/viewer/default/train"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+> [!NOTE]
+> Mixing text-only and vision-language data in the dataset is possible, but it requires `transformers` version 4.57.0 or later. Example:
+>
+> ```python
+> dataset = Dataset.from_dict({
+>     "prompt": [
+>         [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky in the image?"}]}],
+>         [{"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]}],
+>     ],
+>     "completion": [
+>         [{"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]}],
+>         [{"role": "assistant", "content": [{"type": "text", "text": "Paris."}]}],
+>     ],
+>     "images": [
+>         [PIL.Image.open("path/to/sky_image1.png")],
+>         [],
+>     ],
+> })
+> ```

@@ -1,0 +1,16 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 9c89adb347f6b973f4905a4be0051eb2ecf85dea  # v0.13.3
+    hooks:
+      - id: ruff-check
+        types_or: [ python, pyi ]
+        args: [ --fix ]
+      - id: ruff-format
+        types_or: [ python, pyi ]
+
+  - repo: https://github.com/huggingface/doc-builder
+    rev: ecdecfb9b66123f9078fa5ec62296cba6fdc971b  # v0.6.0
+    hooks:
+      - id: doc-builder-style
+        args: [--max_len, "119"]
+        files: ^(trl|tests|docs/source)/

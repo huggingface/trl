@@ -1,0 +1,407 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import pytest
+import torch
+import torch.nn.functional as F
+from accelerate import PartialState
+from torch import nn
+from torch.backends.cuda import SDPAParams, can_use_efficient_attention
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from transformers import AutoModelForCausalLM
+from transformers.testing_utils import torch_device
+from transformers.utils import is_peft_available
+
+from trl.models import activation_offloading as activation_offloading_module
+from trl.models.activation_offloading import NoOpManager, OffloadActivations
+
+from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model
+
+
+class TestActivationOffloading(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    @require_torch_accelerator
+    @require_peft
+    def test_offloading_with_peft_models(self) -> None:
+        """Test that activation offloading works with PEFT models."""
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
+        peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, peft_config)
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
+
+        # First forward-backward pass without offloading
+        torch.manual_seed(42)
+        loss = model(inp, labels=inp).loss
+        loss.backward()
+
+        # Store gradients - only from trainable parameters
+        grads_original = []
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                grads_original.append((name, param.grad.clone()))
+
+        # Reset gradients
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad = None
+
+        # Second forward-backward pass with offloading
+        torch.manual_seed(42)
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
+            loss_c = model(inp, labels=inp).loss
+        loss_c.backward()
+
+        # Compare gradients - only trainable parameters
+        for name_orig, grad_orig in grads_original:
+            for name_param, param in model.named_parameters():
+                if name_param == name_orig and param.requires_grad and param.grad is not None:
+                    (
+                        torch.testing.assert_close(grad_orig, param.grad, rtol=1e-4, atol=1e-5),
+                        (f"Gradient mismatch for {name_orig}"),
+                    )
+
+    @require_torch_accelerator
+    def test_noop_manager_with_offloading(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
+
+        # Run with offloading but disable for specific section
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
+            # First forward-backward with normal offloading
+            torch.manual_seed(42)
+            out1 = model(inp, labels=inp)
+            out1.loss.backward()
+            grads1 = [p.grad.clone() for p in model.parameters()]
+
+            # Reset grads
+            for p in model.parameters():
+                p.grad = None
+
+            # Second forward-backward with NoOpManager
+            with NoOpManager():
+                torch.manual_seed(42)
+                out2 = model(inp, labels=inp)
+                out2.loss.backward()
+
+            grads2 = [p.grad.clone() for p in model.parameters()]
+
+        # Gradients should match as NoOpManager should have prevented offloading
+        for g1, g2 in zip(grads1, grads2, strict=True):
+            torch.testing.assert_close(g1, g2, rtol=1e-4, atol=1e-5)
+
+    @require_torch_accelerator
+    def test_min_offload_size(self):
+        """Test that tensors smaller than min_offload_size aren't offloaded"""
+        model = nn.Sequential(
+            nn.Linear(5, 5),  # Small layer that shouldn't be offloaded
+            nn.Linear(5, 1000),  # Large layer that should be offloaded
+        ).to(torch_device)
+
+        inp = torch.randn(2, 5, device=torch_device)
+
+        with OffloadActivations(min_offload_size=1000):
+            out = model(inp)
+            out.sum().backward()
+
+        # The test passes if no errors occur, as we're mainly testing
+        # that the logic handles both offloaded and non-offloaded tensors
+
+    @require_torch_accelerator
+    def test_real_hf_model(self):
+        """Test with an actual HuggingFace model"""
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
+
+        # Create small input
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
+
+        # Baseline without offloading
+        torch.manual_seed(42)
+        out1 = model(inp, labels=inp).loss
+        out1.backward()
+        grads1 = [p.grad.clone() for p in model.parameters()]
+
+        # Reset grads
+        for p in model.parameters():
+            p.grad = None
+
+        # With offloading
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
+            torch.manual_seed(42)
+            out2 = model(inp, labels=inp).loss
+            out2.backward()
+
+        grads2 = [p.grad.clone() for p in model.parameters()]
+
+        # Check outputs and gradients match
+        torch.testing.assert_close(out1, out2)
+        for g1, g2 in zip(grads1, grads2, strict=True):
+            torch.testing.assert_close(g1, g2)
+
+    @require_torch_accelerator
+    @pytest.mark.parametrize("use_streams", [False, True])
+    @pytest.mark.parametrize(
+        ("view", "dense"),
+        [
+            (lambda t: t.transpose(1, 2), True),
+            (lambda t: t[1:], True),  # storage offset
+            (lambda t: t[:, :-1], False),  # gaps between rows
+            (lambda t: t[1:, 1:], False),  # storage offset and gaps
+            (lambda t: t[1:].transpose(1, 2), True),
+        ],
+        ids=["transposed", "offset", "gaps", "offset_and_gaps", "transposed_offset"],
+    )
+    def test_saved_views_are_restored(self, use_streams, view, dense):
+        """Backward gets a saved view's values back, and a dense view also its strides."""
+        restored = []
+
+        class SavesView(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x):
+                # A tensor saved after the view evicts it from the forward stash, so even with streams it is
+                # restored from the CPU copy.
+                ctx.save_for_backward(view(x), x.new_ones(64))
+                ctx.input_shape = x.shape
+                return x.sum()
+
+            @staticmethod
+            def backward(ctx, grad):
+                saved, _ = ctx.saved_tensors
+                restored.append((saved.detach().clone(), saved.stride()))
+                return grad.expand(ctx.input_shape)
+
+        x = torch.randn(4, 6, 8, device=torch_device, requires_grad=True)
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0, max_fwd_stash_size=1):
+            SavesView.apply(x).backward()
+
+        ((values, stride),) = restored
+        torch.testing.assert_close(values, view(x).detach(), rtol=0, atol=0)
+        if dense:
+            assert stride == view(x).stride()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="SDPA memory-efficient attention requires CUDA")
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_sdpa_efficient_attention_gradients(self, use_streams):
+        """SDPA's memory-efficient attention backward depends on the layout of the transposed query and output it saves."""
+        torch.manual_seed(0)
+        batch, heads, seq, head_dim = 2, 4, 64, 32
+        # half precision: the float32 kernel does not depend on the saved layout
+        q, k, v = (
+            torch.randn(batch, seq, heads, head_dim, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+            for _ in range(3)
+        )
+        mask = torch.ones(batch, 1, seq, seq, device="cuda", dtype=torch.bool).tril()
+        mask[1, :, :, seq // 2 :] = False  # padding: a mask routes SDPA to memory-efficient attention
+        weight = torch.randn(batch, heads, seq, head_dim, device="cuda", dtype=torch.bfloat16)
+
+        with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+            params = SDPAParams(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), mask, 0.0, False, False)
+            if not can_use_efficient_attention(params):
+                pytest.skip("Memory-efficient SDPA is unavailable for these inputs")
+
+        def grads():
+            for t in (q, k, v):
+                t.grad = None
+            with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask
+                )
+                (out * weight).sum().backward()
+            return [t.grad.clone() for t in (q, k, v)]
+
+        expected = grads()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = grads()
+
+        for a, e in zip(actual, expected, strict=True):
+            torch.testing.assert_close(a, e)
+
+    @require_torch_accelerator
+    def test_tensor_deduplication(self):
+        """Test that deduplication works correctly for tensors sharing storage"""
+
+        class ModelWithViews(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(100, 100)
+
+            def forward(self, x):
+                out = self.linear(x)
+                view1 = out.view(-1)
+                view2 = out.transpose(0, 1)
+                return view1.sum() + view2.sum()
+
+        model = ModelWithViews().to(torch_device)
+        offload_ctx = OffloadActivations(min_offload_size=1)
+        offload_ctx.update_model_params(model)
+
+        x = torch.randn(10, 100, device=torch_device, requires_grad=True)
+        with offload_ctx:
+            loss = model(x)
+
+        total_tensor_ids = offload_ctx.tensor_id
+        assert total_tensor_ids > 0, "Should have created tensor IDs"
+
+        # modified=True means offloaded to CPU, modified=False means kept on GPU (deduplicated)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+
+        assert offloaded_count > 0, "Should have offloaded at least one tensor"
+        assert deduplicated_count > 0, "Should have deduplicated at least one tensor (view)"
+
+        unique_storages_offloaded = len(offload_ctx.storage_to_tensor_id)
+        assert unique_storages_offloaded < total_tensor_ids, (
+            f"Deduplication should result in fewer storages ({unique_storages_offloaded}) "
+            f"than total tensors ({total_tensor_ids})"
+        )
+
+        loss.backward()
+
+    @require_torch_accelerator
+    def test_reused_storage_key_after_stash_reap_is_not_deduplicated(self):
+        """A reused allocator address should not be treated as a live view."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        first = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        filler = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        reused = torch.randn(4, 4, device=torch_device, requires_grad=True)
+
+        def fake_storage_key(tensor):
+            if id(tensor) in {id(first), id(reused)}:
+                return ("reused-storage-key", tensor.dtype)
+            return (id(tensor), tensor.dtype)
+
+        offload_ctx = OffloadActivations(
+            use_pin_memory=False,
+            use_streams=True,
+            min_offload_size=1,
+            max_fwd_stash_size=1,
+        )
+
+        original_get_unique_tensor_key = activation_offloading_module._get_unique_tensor_key
+        activation_offloading_module._get_unique_tensor_key = fake_storage_key
+        try:
+            with offload_ctx:
+                loss = SaveTensor.apply(first) + SaveTensor.apply(filler) + SaveTensor.apply(reused)
+        finally:
+            activation_offloading_module._get_unique_tensor_key = original_get_unique_tensor_key
+
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+
+        assert offloaded_count == 3
+        assert deduplicated_count == 0
+
+        loss.backward()
+
+    @require_torch_accelerator
+    def test_stale_tracker_state_is_cleared_between_forwards(self):
+        """Test that tensors from unused graph branches don't accumulate across steps."""
+
+        class ModelWithUnusedBranch(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.used = nn.Linear(8, 8)
+                self.unused = nn.Linear(8, 8)
+
+            def forward(self, x):
+                return self.used(x).sum(), self.unused(x).sum()
+
+        model = ModelWithUnusedBranch().to(torch_device)
+        offload_ctx = OffloadActivations(use_pin_memory=False, use_streams=False, min_offload_size=1)
+        offload_ctx.update_model_params(model)
+        inp = torch.randn(4, 8, device=torch_device)
+
+        tracker_counts = []
+        for _ in range(3):
+            model.zero_grad(set_to_none=True)
+            with offload_ctx:
+                loss, _ = model(inp)
+            loss.backward()
+            tracker_counts.append(len(offload_ctx.tracker))
+
+        assert tracker_counts == [tracker_counts[0]] * len(tracker_counts)
+
+    @require_torch_accelerator
+    def test_parameter_filtering(self):
+        """Test that model parameters are filtered during offloading"""
+        model = nn.Sequential(nn.Linear(10, 20), nn.Linear(20, 10)).to(torch_device)
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+
+        assert len(offload_ctx.param_storages) > 0, "Should have tracked parameter storages"
+
+        param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
+        assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
+
+    @require_torch_accelerator
+    def test_tensor_deduplication_only_happens_in_streams_mode(self):
+        """Two saved views of the same storage are deduplicated (one re-offload skipped) only when use_streams=True."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        def offload_two_views(use_streams: bool) -> list[bool]:
+            base = torch.randn(64, 64, device=torch_device, requires_grad=True)
+            view1 = base.view(-1)
+            view2 = base.transpose(0, 1)
+            offload_ctx = OffloadActivations(use_streams=use_streams, min_offload_size=1)
+            with offload_ctx:
+                loss = SaveTensor.apply(view1) + SaveTensor.apply(view2)
+            modified_flags = [modified for _, modified, _, _, _ in offload_ctx.tracker.values()]
+            loss.backward()
+            return modified_flags
+
+        assert offload_two_views(use_streams=False) == [True, True]
+        assert offload_two_views(use_streams=True) == [True, False]

@@ -1,0 +1,2391 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import copy
+import functools
+import textwrap
+from io import StringIO
+from unittest.mock import patch
+
+import pytest
+import torch
+import torch.nn.functional as F
+import transformers
+from datasets import IterableDataset
+from packaging.version import Version
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, Qwen2Config
+from transformers.testing_utils import torch_device
+from transformers.utils import is_peft_available
+
+import trl.trainer.utils as trainer_utils
+from trl import ModelConfig
+from trl.trainer.utils import (
+    RepeatSampler,
+    add_fused_lm_head,
+    compute_flops_per_token,
+    compute_mfu,
+    create_model_from_path,
+    entropy_from_logits,
+    flush_left,
+    generate_model_card,
+    get_callable_name,
+    get_peak_flops,
+    get_peft_config,
+    hash_module,
+    is_async_callable,
+    model_accepts_images,
+    nanstd,
+    pad,
+    print_prompt_completions_sample,
+    repeat_iterable_dataset,
+    selective_log_softmax,
+    selective_log_softmax_and_entropy,
+    shuffle_sequence_dict,
+    split_pixel_values_by_grid,
+    split_tensor_dict,
+    unsplit_pixel_values_by_grid,
+    use_adapter,
+)
+
+from .testing_utils import TrlTestCase, require_kernels, require_peft, require_rich, require_torch_accelerator
+
+
+if is_peft_available():
+    import peft
+    from peft import (
+        AutoPeftModelForCausalLM,
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
+
+
+@require_peft
+class TestUseAdapter(TrlTestCase):
+    def test_disables_on_none(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        enabled = model(input_ids).logits
+        with model.disable_adapter():
+            expected = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(enabled, expected)
+
+        with use_adapter(model, None):
+            output = model(input_ids).logits
+
+        assert torch.equal(output, expected)
+
+    def test_restores_previous_adapter(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
+        )
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected = model(input_ids).logits
+        with use_adapter(model, "my_adapter"):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+        with use_adapter(model, None):
+            pass
+        output = model(input_ids).logits
+        assert torch.equal(output, expected)
+
+    def test_with_multiple_adapters(self):
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter_1"
+        )
+        model.load_adapter("trl-internal-testing/tiny-PeftModel-2", "my_adapter_2")
+        input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        model.set_adapter("my_adapter_1")  # should be a no-op, but let's keep it for clarity
+        expected_1 = model(input_ids).logits
+        model.set_adapter("my_adapter_2")
+        expected_2 = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(expected_1, expected_2)
+
+        with use_adapter(model, "my_adapter_1"):
+            output_1 = model(input_ids).logits
+
+        with use_adapter(model, "my_adapter_2"):
+            output_2 = model(input_ids).logits
+
+        assert torch.equal(output_1, expected_1)
+        assert torch.equal(output_2, expected_2)
+
+
+class TestPad(TrlTestCase):
+    def test_pad_1_dim_left(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        output = pad((x, y), padding_value=0, padding_side="left")
+        expected = torch.tensor([[1, 2, 3], [0, 4, 5]])
+        assert torch.equal(output, expected)
+
+    def test_pad_1_dim_right(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        output = pad((x, y), padding_value=0, padding_side="right")
+        expected = torch.tensor([[1, 2, 3], [4, 5, 0]])
+        assert torch.equal(output, expected)
+
+    def test_pad_2_dim_left(self):
+        x = torch.tensor([[1, 2], [3, 4]])
+        y = torch.tensor([[5, 6]])
+        output = pad((x, y), padding_value=0, padding_side="left")
+        expected = torch.tensor(
+            [
+                [[1, 2], [3, 4]],
+                [[0, 0], [5, 6]],
+            ]
+        )
+        assert torch.equal(output, expected)
+
+    def test_pad_2_dim_right(self):
+        x = torch.tensor([[1, 2], [3, 4]])
+        y = torch.tensor([[5, 6]])
+        output = pad((x, y), padding_value=0, padding_side="right")
+        expected = torch.tensor(
+            [
+                [[1, 2], [3, 4]],
+                [[5, 6], [0, 0]],
+            ]
+        )
+        assert torch.equal(output, expected)
+
+    def test_pad_2_dim_right_multidim(self):
+        x = torch.tensor([[1, 2], [3, 4]])
+        y = torch.tensor([[5]])
+        output = pad((x, y), padding_value=0, padding_side="right")
+        expected = torch.tensor(
+            [
+                [[1, 2], [3, 4]],
+                [[5, 0], [0, 0]],
+            ]
+        )
+        assert torch.equal(output, expected)
+
+    def test_pad_to_multiple_of_1(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]])
+        assert torch.equal(output, expected)
+
+    def test_pad_to_multiple_of_2(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0], [6, 7, 8, 0, 0, 0, 0, 0]])
+        assert torch.equal(output, expected)
+
+    def test_pad_to_multiple_of_side_left(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[0, 0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0, 6, 7, 8]])
+        assert torch.equal(output, expected)
+
+    def test_pad_to_multiple_of_no_extra_padding(self):
+        x = torch.tensor([1, 2, 3, 4])
+        y = torch.tensor([5, 6, 7, 8])
+        # Already multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
+        assert torch.equal(output, expected)
+
+
+class TestHashModule(TrlTestCase):
+    def test_hash_module_deterministic_across_order(self):
+        class ModAB(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.a = torch.nn.Parameter(a)
+                self.b = torch.nn.Parameter(b)
+
+        class ModBA(torch.nn.Module):
+            def __init__(self, a: torch.Tensor, b: torch.Tensor):
+                super().__init__()
+                self.b = torch.nn.Parameter(b)
+                self.a = torch.nn.Parameter(a)
+
+        a = torch.tensor([[1.0, 2.0]])
+        b = torch.tensor([3.0])
+        assert hash_module(ModAB(a, b)) == hash_module(ModBA(a, b))
+
+    def test_hash_module_changes_with_value(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([value, 2.0]))
+
+        assert hash_module(Mod(1.0)) != hash_module(Mod(1.5))
+
+    def test_hash_module_includes_dtype(self):
+        class Mod(torch.nn.Module):
+            def __init__(self, dtype: torch.dtype):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=dtype))
+
+        assert hash_module(Mod(torch.float32)) != hash_module(Mod(torch.float16))
+
+    def test_hash_module_tiny_model_twice(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model_a = AutoModelForCausalLM.from_pretrained(model_id)
+        model_b = AutoModelForCausalLM.from_pretrained(model_id)
+        assert hash_module(model_a) == hash_module(model_b)
+
+    def test_hash_module_tiny_model_change_layer(self):
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        h1 = hash_module(model)
+        with torch.no_grad():
+            model.lm_head.weight.add_(0.01)
+        h2 = hash_module(model)
+        assert h1 != h2
+
+
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
+    )
+    def test_dequantizes_fp8_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
+        assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.23.0"),
+        reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+    )
+    def test_dequantizes_mxfp4_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-GptOssForCausalLM")
+        assert model.model.layers[0].mlp.experts.gate_up_proj.dtype == torch.float32
+
+
+class TestModelAcceptsImages(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id, architecture, expected",
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForImageTextToText,
+                True,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForCausalLM,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_model_accepts_images(self, model_id, architecture, expected):
+        model = architecture.from_pretrained(model_id)
+        assert model_accepts_images(model) is expected
+
+
+@require_peft
+class TestGetPEFTConfig(TrlTestCase):
+    def test_create_peft_config_use_peft_false(self):
+        """Test that when use_peft is False, the function returns None."""
+        model_args = ModelConfig(use_peft=False)
+        peft_config = get_peft_config(model_args)
+        assert peft_config is None
+
+    def test_create_peft_config_use_peft_true(self):
+        """Test that when use_peft is True, the function returns a LoraConfig object."""
+        # Provide non-default values to the model config for testing
+        peft_kwargs = {
+            "lora_r": 8,
+            "lora_alpha": 16,
+            "lora_dropout": 0.1,
+            "lora_task_type": "SEQ_CLS",
+            "use_rslora": True,
+            "lora_target_modules": ["up_proj", "down_proj"],
+            "lora_modules_to_save": ["up_proj"],
+        }
+        model_args = ModelConfig(use_peft=True, **peft_kwargs)
+        peft_config = get_peft_config(model_args)
+        assert isinstance(peft_config, LoraConfig)
+        for arg, value in peft_kwargs.items():
+            # Test that lists of modules are converted to sets
+            if arg == "lora_target_modules":
+                value = set(value)
+            # Rename the argument to match the LoraConfig attribute name
+            if arg in ["lora_r", "lora_task_type", "lora_target_modules", "lora_modules_to_save"]:
+                arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
+
+            assert getattr(peft_config, arg) == value
+
+    @pytest.mark.parametrize(
+        "lora_target_modules",
+        [["q_proj"], "q_proj", ["self_attn.q_proj"], [r".*\.q_proj"], ["q_proj", "v_proj"], ["all-linear"]],
+    )
+    def test_lora_target_modules(self, lora_target_modules):
+        # A single value from the CLI or a config file is a module name, a regex or "all-linear" (#7795)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_args = ModelConfig(use_peft=True, lora_target_modules=lora_target_modules)
+        model = get_peft_model(model, get_peft_config(model_args))
+        targeted = {name.split(".lora_A")[0] for name, _ in model.named_parameters() if ".lora_A." in name}
+        assert any(name.endswith(".q_proj") for name in targeted)
+
+
+class TestGetCallableName(TrlTestCase):
+    def test_function(self):
+        def accuracy_reward(completions):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(accuracy_reward) == "accuracy_reward"
+
+    def test_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(reward, threshold=0.5)) == "reward"
+
+    def test_nested_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(functools.partial(reward), threshold=0.5)) == "reward"
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert get_callable_name(LengthReward()) == "LengthReward"
+
+    def test_lambda(self):
+        assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
+
+
+class TestIsAsyncCallable(TrlTestCase):
+    def test_function(self):
+        def reward(completions):
+            return [0.0] * len(completions)
+
+        assert not is_async_callable(reward)
+
+    def test_async_function(self):
+        async def reward(completions):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(reward)
+
+    def test_partial(self):
+        async def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(reward, threshold=0.5))
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert not is_async_callable(LengthReward())
+
+    def test_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(LengthReward())
+
+    def test_partial_of_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions, threshold):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
+
+
+class TestNanStd(TrlTestCase):
+    def test_nanstd_ignores_nans(self):
+        x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
+        result = nanstd(x)
+        torch.testing.assert_close(result, torch.tensor(1.0))
+
+    def test_nanstd_dim_and_keepdim(self):
+        x = torch.tensor([[1.0, float("nan")], [3.0, 5.0]])
+        result = nanstd(x, dim=1, keepdim=True)
+        assert torch.isnan(result[0, 0])
+        torch.testing.assert_close(result[1, 0], torch.tensor(1.4142135), rtol=1e-5, atol=1e-6)
+
+    def test_nanstd_all_nan(self):
+        x = torch.tensor([float("nan"), float("nan")])
+        result = nanstd(x)
+        assert torch.isnan(result)
+
+
+class TestGenerateModelCard(TrlTestCase):
+    def test_full(self):
+        model_card = generate_model_card(
+            base_model="username/my_base_model",
+            model_name="my_model",
+            hub_model_id="username/my_hub_model",
+            dataset_name="username/my_dataset",
+            tags=["trl", "trainer-tag"],
+            wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trackio_url="https://huggingface.co/spaces/username/space_id",
+            comet_url="https://www.comet.com/username/project_id/experiment_id",
+            trainer_name="My Trainer",
+            trainer_citation="@article{my_trainer, ...}",
+            paper_title="My Paper",
+            paper_id="1234.56789",
+        )
+        card_text = str(model_card)
+        assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
+        assert "datasets: username/my_dataset" in card_text
+        assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://huggingface.co/spaces/username/space_id)" in card_text
+        assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
+        assert "My Trainer" in card_text
+        assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
+        assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
+
+    def test_val_none(self):
+        model_card = generate_model_card(
+            base_model=None,
+            model_name="my_model",
+            hub_model_id="username/my_hub_model",
+            dataset_name=None,
+            tags=[],
+            wandb_url=None,
+            trackio_url=None,
+            comet_url=None,
+            trainer_name="My Trainer",
+            trainer_citation=None,
+            paper_title=None,
+            paper_id=None,
+        )
+        card_text = str(model_card)
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
+        assert "My Trainer" in card_text
+
+
+class TestFlushLeft(TrlTestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
+        tensor2 = torch.tensor([[0, 0, 7, 8, 9], [0, 10, 11, 0, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_left(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
+
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+        assert torch.equal(new_tensor2, expected_tensor2)
+
+    def test_single_row(self):
+        mask = torch.tensor([[0, 0, 1, 1]])
+        tensor1 = torch.tensor([[0, 0, 2, 3]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[1, 1, 0, 0], [1, 0, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 0, 0, 0]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [1, 0]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 0]])
+
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        new_mask = flush_left(mask)
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        assert torch.equal(new_mask, expected_mask)
+
+
+class TestRepeatRandomSampler(TrlTestCase):
+    def test_sampler(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated twice
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+
+    def test_sampler_no_shuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
+        sampled = list(sampler)
+        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+        assert sampled == expected
+
+    def test_sampler_no_repeat(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1)
+        # Should output something like [4, 3, 0, 1, 2, 6, 5]
+        sampled = list(sampler)
+        # Check that the length is the same
+        assert len(sampled) == len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+
+    def test_sampler_with_batch_size(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_batch_size_and_drop(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * (
+            len(dataset) - 1
+        )  # one element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
+        #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is quadrupled
+        assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
+        #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+        #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+        assert sampled[24:30] == sampled[30:36]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
+        #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+        #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:4] == sampled[4:8] == sampled[8:12]
+        assert sampled[12:16] == sampled[16:20] == sampled[20:24]
+        assert sampled[24:28] == sampled[28:32] == sampled[32:36]
+
+
+class TestRepeatIterableDataset(TrlTestCase):
+    @staticmethod
+    def _make_dataset(n):
+        return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
+
+    @pytest.mark.parametrize("mini_repeat_count,batch_size,repeat_count", [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)])
+    def test_matches_repeat_sampler(self, mini_repeat_count, batch_size, repeat_count):
+        # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
+        # map-style dataset (unshuffled), across a representative range of arguments.
+        n = 12
+        expected = list(
+            RepeatSampler(
+                list(range(n)),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+                shuffle=False,
+            )
+        )
+        actual = [
+            record["x"]
+            for record in repeat_iterable_dataset(
+                self._make_dataset(n),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+            )
+        ]
+        assert actual == expected
+
+    def test_default_arguments(self):
+        dataset = self._make_dataset(4)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=2)]
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    def test_drops_incomplete_batch(self):
+        dataset = self._make_dataset(7)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=2)]
+        # The last element is dropped because it can't form a full batch of size 2.
+        assert sampled == [0, 1, 2, 3, 4, 5]
+
+    def test_preserves_all_columns(self):
+        dataset = IterableDataset.from_generator(lambda: ({"x": i, "answer": str(i)} for i in range(2)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled == [
+            {"x": 0, "answer": "0"},
+            {"x": 0, "answer": "0"},
+            {"x": 1, "answer": "1"},
+            {"x": 1, "answer": "1"},
+        ]
+
+    def test_repeats_are_independent_objects(self):
+        # Repeated records must be independent objects (like the map-style path, where the dataset re-materializes a
+        # fresh object per access), so an in-place edit to one repeat doesn't corrupt the others.
+        dataset = IterableDataset.from_generator(lambda: ({"prompt": [{"content": "hi"}]} for _ in range(1)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled[0] is not sampled[1]
+        assert sampled[0]["prompt"] is not sampled[1]["prompt"]
+        sampled[0]["prompt"][-1]["content"] += " there"
+        assert sampled[1]["prompt"][-1]["content"] == "hi"
+
+    def test_reshuffles_across_epochs(self):
+        # The transform stays chained to the source, so `set_epoch` reaches an upstream `shuffle` and the order is
+        # reshuffled every epoch, matching RepeatSampler (whose RNG advances on each `__iter__`).
+        dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(8))).shuffle(seed=42)
+        repeated = repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=8)
+
+        repeated.set_epoch(0)
+        epoch_0 = [record["x"] for record in repeated]
+        repeated.set_epoch(1)
+        epoch_1 = [record["x"] for record in repeated]
+
+        assert sorted(epoch_0) == sorted(epoch_1) == list(range(8))  # same content
+        assert epoch_0 != epoch_1  # different order
+
+
+class TestEntropyFromLogits(TrlTestCase):
+    @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
+    @pytest.mark.parametrize("chunk_size", [1, 16])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
+        logits = torch.randn(*shape, dtype=dtype)
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
+        else:
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
+
+
+@require_rich
+class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_output(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_advantages(self, mock_stdout):
+        # When `advantages` is None, the Advantage column is omitted (e.g. distillation, which has no advantages).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Correctness" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_rewards_no_advantages(self, mock_stdout):
+        # Prompt/completion-only table: empty rewards and `advantages=None` (the distillation case).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, {}, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_extra_columns(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        extra = {"source": ["dataset_A", "dataset_B"]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, extra=extra)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ source    ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ dataset_A │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ dataset_B │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_num_samples(self, mock_stdout):
+        prompts = ["A", "B"]
+        completions = ["1", "2"]
+        rewards = {"Score": [0.1, 0.2]}
+        advantages = [0.3, 0.4]
+        step = 10
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        possible_outputs = [
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.10 │      0.30 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+            # docstyle-ignore
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ B      │ 2          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+        ]
+        assert output in possible_outputs
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages(self, mock_stdout):
+        prompts = [
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "Where is the sun?"},
+            ],
+        ]
+        completions = [
+            [{"role": "assistant", "content": "It is blue."}],
+            [{"role": "assistant", "content": "In the sky."}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                  ┃ Completion  ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.12 │   0.79 │      0.99 │ │
+        │ │ You are an helpful      │ It is blue. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ What color is the sky?  │             │             │        │           │ │
+        │ ├─────────────────────────┼─────────────┼─────────────┼────────┼───────────┤ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.46 │   0.10 │      0.65 │ │
+        │ │ You are an helpful      │ In the sky. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ Where is the sun?       │             │             │        │           │ │
+        │ └─────────────────────────┴─────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_tools(self, mock_stdout):
+        prompts = [
+            [{"role": "user", "content": "What is the temperature in Paris?"}],
+            [{"role": "user", "content": "What is the weather in London?"}],
+        ]
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_temperature", "arguments": {"location": "Paris"}}}],
+                },
+                {"role": "tool", "content": "22 degrees"},
+                {"role": "assistant", "content": "The temperature in Paris is 22 degrees."},
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_weather", "arguments": {"location": "London"}}}],
+                },
+                {"role": "tool", "content": "Cloudy"},
+                {"role": "assistant", "content": "The weather in London is cloudy."},
+            ],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER              │ ASSISTANT         │        0.12 │   0.79 │      0.99 │ │
+        │ │ What is the       │ get_temperature(… │             │        │           │ │
+        │ │ temperature in    │                   │             │        │           │ │
+        │ │ Paris?            │ TOOL              │             │        │           │ │
+        │ │                   │ 22 degrees        │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The temperature   │             │        │           │ │
+        │ │                   │ in Paris is 22    │             │        │           │ │
+        │ │                   │ degrees.          │             │        │           │ │
+        │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
+        │ │ USER              │ ASSISTANT         │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather(loca… │             │        │           │ │
+        │ │ weather in        │                   │             │        │           │ │
+        │ │ London?           │ TOOL              │             │        │           │ │
+        │ │                   │ Cloudy            │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The weather in    │             │        │           │ │
+        │ │                   │ London is cloudy. │             │        │           │ │
+        │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_reasoning_content(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "reasoning_content": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_thinking(self, mock_stdout):
+        prompts = [[{"role": "user", "content": "What color is the sky?"}]]
+        completions = [[{"role": "assistant", "thinking": "I think it is blue.", "content": "It is blue."}]]
+        rewards = {"Score": [0.5]}
+        advantages = [0.9]
+        step = 1
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭─────────────────────────────── Step 1 ───────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                 ┃ Completion          ┃ Score ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER                   │ ASSISTANT           │  0.50 │      0.90 │ │
+        │ │ What color is the sky? │ I think it is blue. │       │           │ │
+        │ │                        │ It is blue.         │       │           │ │
+        │ └────────────────────────┴─────────────────────┴───────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────╯
+        """)
+
+        assert output == expected_output
+
+
+class TestSelectiveLogSoftmax(TrlTestCase):
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    def test_selective_log_softmax(self, dtype):
+        """Test selective_log_softmax with logits of different dtypes"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids)
+
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
+
+        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
+        (logprobs + 0.1 * entropy).sum().backward()
+
+        reference_logits = logits.detach().clone().requires_grad_()
+        reference_logprobs = (reference_logits / 0.7).log_softmax(-1)
+        reference_entropy = -(reference_logprobs.exp() * reference_logprobs).sum(-1)
+        reference_logprobs = reference_logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
+        reference_logprobs = reference_logprobs.masked_fill(~row_mask, 0.0)
+        reference_entropy = reference_entropy.masked_fill(~row_mask, 0.0)
+        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
+
+        torch.testing.assert_close(logprobs, reference_logprobs)
+        torch.testing.assert_close(entropy, reference_entropy)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+        assert torch.count_nonzero(logits.grad[~row_mask]) == 0
+
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("k", [1, 8])
+    def test_selective_log_softmax_multi_index(self, dtype, k):
+        """Test selective_log_softmax with logits of different dtypes and index widths"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        index = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len, k))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=index)
+        actual_output = selective_log_softmax(logits, index)
+
+        assert actual_output.shape == (batch_size, seq_len, k)
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            assert torch.equal(actual_output, expected_output)
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+
+class TestShuffleSequenceDict(TrlTestCase):
+    def test_shuffle_preserves_shape(self):
+        x = torch.arange(6).reshape(3, 2)
+        y = torch.arange(3).reshape(3, 1)
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_sequence_dict(tensor_dict)
+
+        assert shuffled["x"].shape == x.shape
+        assert shuffled["y"].shape == y.shape
+
+    def test_shuffle_consistent_across_tensors(self):
+        # Use known patterns to check alignment
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = torch.tensor([[1], [2], [3]])
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_sequence_dict(tensor_dict)
+
+        # Build a reverse map from shuffled x rows to y values
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i].item()
+
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                assert y_val == 1
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                assert y_val == 2
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                assert y_val == 3
+            else:
+                pytest.fail("Unexpected x row in shuffled output.")
+
+    def test_none_tensor_remains_none(self):
+        x = torch.arange(6).reshape(3, 2)
+        tensor_dict = {"x": x.clone(), "y": None}
+
+        shuffled = shuffle_sequence_dict(tensor_dict)
+
+        assert shuffled["y"] is None
+        assert shuffled["x"].shape == x.shape
+
+    def test_shuffle_with_list(self):
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = ["a", "b", "c"]
+
+        sequence_dict = {"x": x.clone(), "y": y}
+
+        shuffled = shuffle_sequence_dict(sequence_dict)
+
+        # Check that the list y is shuffled in the same order as x
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i]
+
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                assert y_val == "a"
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                assert y_val == "b"
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                assert y_val == "c"
+            else:
+                pytest.fail("Unexpected x row in shuffled output.")
+
+
+class TestSplitTensorDict(TrlTestCase):
+    def test_split_equal_chunks(self):
+        x = torch.arange(12).reshape(6, 2)
+        y = torch.arange(6).reshape(6, 1)
+        tensor_dict = {"x": x, "y": y}
+
+        result = split_tensor_dict(tensor_dict, 3)
+
+        expected_x_chunks = torch.chunk(x, 3, dim=0)
+        expected_y_chunks = torch.chunk(y, 3, dim=0)
+        assert len(result) == 3
+        for i in range(3):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], expected_y_chunks[i])
+
+    def test_with_none_tensor(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": None}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        assert len(result) == 2
+        for i in range(2):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert result[i]["y"] is None
+
+    def test_with_scalar(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": torch.tensor(1)}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        assert len(result) == 2
+        for i in range(2):
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], torch.tensor(1))
+
+
+class TestSplitPixelValuesByGrid(TrlTestCase):
+    def test_split_correctly_0(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
+            "num_images": [1, 1],
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2]]))
+
+    def test_split_correctly_1(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),
+            "num_images": [1, 1],
+            "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 4]]))
+
+    def test_missing_keys(self):
+        batch = {"pixel_values": torch.tensor([1.0])}
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
+    def test_mismatched_length(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 1],
+            "pixel_values": torch.randn(3, 5),  # Only 3 rows
+        }
+        with pytest.raises(ValueError):
+            split_pixel_values_by_grid(batch)
+
+    def test_multi_images(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:2])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][2:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
+
+    def test_split_by_image_position_ids(self):
+        # Gemma-style: no image_grid_thw, split by num_images using image_position_ids
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_position_ids": torch.tensor([[0, 1], [2, 3], [4, 5]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_position_ids"], list)
+        assert len(result["image_position_ids"]) == 2
+        assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
+        assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
+
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
+    def test_split_without_grid_metadata(self):
+        # LLaVA-style: no grid metadata at all, pixel_values and image_sizes are indexed by image
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_sizes": torch.tensor([[8, 8], [4, 4], [2, 2]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_sizes"], list)
+        assert len(result["image_sizes"]) == 2
+        assert torch.equal(result["image_sizes"][0], batch["image_sizes"][:1])
+        assert torch.equal(result["image_sizes"][1], batch["image_sizes"][1:])
+
+    def test_no_split_when_padded_by_sample(self):
+        # Idefics-style: pixel_values is padded to (num_samples, max_num_images, ...), already sample-indexed
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(2 * 2 * 4).reshape(2, 2, 4),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
+
+class TestUnsplitPixelValuesByGrid(TrlTestCase):
+    def test_unsplit_correctly(self):
+        pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
+        pixel_values_merged = torch.cat(pixel_values, dim=0)
+        image_grid_thw = [torch.tensor([[1, 2, 2]]), torch.tensor([[1, 2, 1]])]
+        image_grid_thw_merged = torch.cat(image_grid_thw, dim=0)
+        batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], pixel_values_merged)
+        assert isinstance(result["image_grid_thw"], torch.Tensor)
+        assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
+        assert "other_key" in result
+
+    def test_unsplit_image_position_ids(self):
+        image_position_ids = [torch.tensor([[0, 1]]), torch.tensor([[2, 3], [4, 5]])]
+        image_position_ids_merged = torch.cat(image_position_ids, dim=0)
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        batch = {"pixel_values": pixel_values, "image_position_ids": image_position_ids}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_position_ids"], torch.Tensor)
+        assert torch.equal(result["image_position_ids"], image_position_ids_merged)
+
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
+    def test_unsplit_image_sizes(self):
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        image_sizes = [torch.tensor([[8, 8]]), torch.tensor([[4, 4], [2, 2]])]
+        batch = {"pixel_values": pixel_values, "image_sizes": image_sizes}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_sizes"], torch.Tensor)
+        assert torch.equal(result["image_sizes"], torch.cat(image_sizes, dim=0))
+
+    def test_no_op_if_not_list(self):
+        original = torch.randn(5, 3)
+        batch = {"pixel_values": original}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert torch.equal(result["pixel_values"], original)
+
+
+_FUSED_LM_HEAD_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    "trl-internal-testing/tiny-Cohere2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GPT2LMHeadModel",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+]
+
+
+@require_torch_accelerator
+class TestAddFusedLMHead:
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_masked_labels(self, device):
+        """Positions labelled `-100` are zero and the others match an unmasked run."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=device)
+        labels = input_ids.masked_fill(torch.arange(16, device=device) < 8, -100)
+
+        out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], out_full["log_probs"][mask])
+        torch.testing.assert_close(out["entropy"][mask], out_full["entropy"][mask])
+        assert (out["log_probs"][~mask] == 0).all()
+        assert (out["entropy"][~mask] == 0).all()
+
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_support_ids_masked_labels(self, device):
+        """With `support_ids`, valid positions are normalized over their support, and masked ones stay zero."""
+        torch.manual_seed(0)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=device)
+        labels = input_ids.masked_fill(torch.arange(16, device=device) < 8, -100)
+        support_ids = torch.randint(0, model.config.vocab_size, (2, 16, 4), device=device)
+        support_ids[..., 0] = input_ids
+        support_ids[..., 3] = -1
+
+        out = model(input_ids=input_ids, labels=labels, support_ids=support_ids, fused_lm_head=True)
+        out["log_probs"].sum().backward()
+
+        logits = model(input_ids=input_ids).logits[:, :-1].float()
+        keep = F.one_hot(support_ids[:, 1:] + 1, model.config.vocab_size + 1)[..., 1:].any(-2)
+        ref = logits.masked_fill(~keep, float("-inf")).log_softmax(-1).gather(-1, input_ids[:, 1:, None]).squeeze(-1)
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], ref[mask], atol=1e-4, rtol=1e-4)
+        assert (out["log_probs"][~mask] == 0).all()
+        assert torch.isfinite(model.lm_head.weight.grad).all()
+
+    def test_outputs(self):
+        """Only the requested per-token fields are computed; the others are `None`."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model, outputs=("log_probs", "is_top1"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert out.log_probs is not None and out.is_top1 is not None
+        assert out.entropy is None and out.log_sum_sq_probs is None and out.mean_logits is None
+
+    def test_shift_labels(self):
+        """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out_shifted = model(input_ids=input_ids, shift_labels=shift_labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_shifted["log_probs"][:, :-1], out["log_probs"])
+        torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
+        assert (out_shifted["log_probs"][:, -1] == 0).all()
+
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_all_masked_labels_backward(self, device):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
+
+        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
+        out["log_probs"].sum().backward()
+
+        assert out["log_probs"].count_nonzero() == 0
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
+
+    def test_generate_unchanged(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
+        expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
+
+        add_fused_lm_head(model)
+
+        torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    def test_log_sum_sq_probs(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logits = model(input_ids=input_ids).logits[:, :-1]
+        expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
+
+        add_fused_lm_head(model, outputs=("log_probs", "log_sum_sq_probs"))
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert not out["log_sum_sq_probs"].requires_grad
+        torch.testing.assert_close(out["log_sum_sq_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    def test_output_multiplier(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        model.config.output_multiplier = 0.5
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_type, config_kwargs",
+        [
+            ("granite", {"logits_scaling": 8.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
+            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+        ],
+    )
+    def test_logits_scaling(self, model_type, config_kwargs):
+        """Models that rescale the logits around the LM head get the same log-probabilities as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            **config_kwargs,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, config.vocab_size, (2, 16), device=torch_device)
+        logps = model(input_ids=input_ids).logits[:, :-1].log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    def test_cast_lm_head_to_fp32(self):
+        """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        add_fused_lm_head(model, cast_lm_head_to_fp32=True)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        with torch.autocast(torch_device, dtype=torch.bfloat16):
+            out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+            hidden_states = model.model(input_ids=input_ids).last_hidden_state[:, :-1]
+        logps = torch.nn.functional.linear(hidden_states.float(), model.lm_head.weight).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
+        ],
+    )
+    def test_aux_loss(self, model_id):
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model = model.to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[1, 8:] = 0
+        expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
+
+        add_fused_lm_head(model)
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            output_router_logits=True,
+            fused_lm_head=True,
+        )
+
+        torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_forward(self, model_id, temperature):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        model.eval()
+
+        B, S = 2, 8
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+
+        # Reference: standard forward → shifted logits → logprobs & entropy
+        with torch.no_grad():
+            ref_logits = model(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        shifted_labels = labels[:, 1:]
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_p = ref_logits.softmax(dim=-1)
+        ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
+
+        # Chunked forward
+        add_fused_lm_head(model, temperature, outputs=("log_probs", "entropy"))
+        with torch.no_grad():
+            out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
+        torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward(self, model_id, temperature):
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model_ref = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model_ref = model_ref.to(torch_device)
+        model_chunked = copy.deepcopy(model_ref)
+
+        B, S = 2, 8
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        shifted_labels = labels[:, 1:]
+
+        # Reference backward: standard logits → logprobs → backward
+        ref_logits = model_ref(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_logprobs.sum().backward()
+        ref_grad = model_ref.lm_head.weight.grad.clone()
+
+        # Chunked backward
+        add_fused_lm_head(model_chunked, temperature)
+        out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out["log_probs"].sum().backward()
+        chunked_grad = model_chunked.lm_head.weight.grad.clone()
+
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+
+
+_FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+_FUSED_LM_HEAD_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.5.0"),
+            reason="Gemma4 models were introduced in transformers-5.5.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5-VL requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.15.0"),
+            reason="Muse Glimmer was introduced in transformers-5.15.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Qwen3-VL series were introduced in transformers-4.57.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.0"),
+            reason="Muse Spark Open was introduced in transformers-5.20.0",
+        ),
+    ),
+]
+
+
+@require_torch_accelerator
+class TestAddFusedLMHeadLoss:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
+
+    def _setup(self, model_id):
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id, architecture=AutoModelForCausalLM, dtype=torch.float32, device_map=torch_device
+        )
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    def _setup_vlm(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id,
+            architecture=AutoModelForCausalLM,
+            dtype=torch.float32,
+            output_router_logits=True,
+            device_map=torch_device,
+        )
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_VLM_MODEL_IDS,
+            # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
+            pytest.param(
+                "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
+                marks=[
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.22.0"),
+                        reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                    ),
+                ],
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
+        # removes the attribute), so we have to pass it at call time on both paths.
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+            out = chunked_model(
+                input_ids=input_ids,
+                labels=labels,
+                num_items_in_batch=num_items,
+                output_router_logits=True,
+                fused_lm_head=True,
+            )
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    def test_forward_without_fused_lm_head_matches_reference(self):
+        """Without `fused_lm_head=True` the patched forward is the original one: same logits (including per-model
+        post-processing such as `final_logit_softcapping` and `logit_scale`) and same loss."""
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(
+            "trl-internal-testing/tiny-CohereForCausalLM"
+        )
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    @pytest.mark.parametrize(
+        "peft_config_factory",
+        [
+            pytest.param(lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"]), id="lora"),
+            pytest.param(
+                lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+                id="lora+modules_to_save",
+            ),
+            pytest.param(
+                lambda: PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_tuning"
+            ),
+            pytest.param(
+                lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
+            ),
+            pytest.param(
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+                id="prefix_tuning",
+                marks=pytest.mark.xfail(
+                    condition=is_peft_available() and Version(peft.__version__) <= Version("0.17.1"),
+                    reason="Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821",
+                    strict=True,
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_with_peft(self, peft_config_factory):
+        """Patching the inner causal LM (`peft_model.get_base_model()`) must produce a forward whose loss matches
+        the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
+        (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+        ref_out.loss.backward()
+        out.loss.backward()
+        chunked_params = dict(chunked_model.named_parameters())
+        for name, ref_param in ref_model.named_parameters():
+            if not ref_param.requires_grad or ref_param.grad is None:
+                continue
+            torch.testing.assert_close(
+                chunked_params[name].grad,
+                ref_param.grad,
+                atol=1e-5,
+                rtol=1e-5,
+                msg=f"gradient mismatch on {name}",
+            )
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    def test_label_mask_with_prompt_learning_peft(self):
+        """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
+        tokens before delegating into the patched inner forward. The patched output's `label_mask` must reflect the
+        padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
+        token's hidden state."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
+        chunked_model = get_peft_model(base, peft_config)
+        add_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()  # all positions valid, including label[0]
+
+        out = chunked_model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
+        # but the patched forward sees padded labels and counts `label[0]` as a valid target.
+        unpadded = int((labels[..., 1:] != -100).sum())
+        # One extra valid target per sequence (original `label[0]`).
+        assert out.label_mask.sum().item() == unpadded + B
+
+
+class TestComputeFlopsPerToken(TrlTestCase):
+    DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+    MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+
+    def test_seq_scaling_linear(self):
+        # Attention-score FLOPs per token scale linearly with seq_len; everything else
+        # is seq-len-independent. Doubling seq_len should double the seq-dependent delta,
+        # which differences cancel out from. `F(32k) - F(16k) == 2 * (F(16k) - F(8k))`.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        f_8k = compute_flops_per_token(cfg, 8192)
+        f_16k = compute_flops_per_token(cfg, 16384)
+        f_32k = compute_flops_per_token(cfg, 32768)
+        assert f_32k - f_16k == 2 * (f_16k - f_8k)
+
+    def test_tied_vs_untied_lm_head(self):
+        # Tying shares weights, not compute: lm_head is still a 2*V*h matmul.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = True
+        f_tied = compute_flops_per_token(cfg, 16384)
+        cfg.tie_word_embeddings = False
+        f_untied = compute_flops_per_token(cfg, 16384)
+        assert f_tied == f_untied
+
+    def test_vocab_size_scaling(self):
+        # Only the lm_head scales with vocab: 3 * 2 * ΔV * h (fwd + bwd).
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = False
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.vocab_size += 1000
+        f_hi = compute_flops_per_token(cfg, 16384)
+        assert f_hi - f_lo == 3 * 2 * 1000 * cfg.hidden_size
+
+    def test_moe_active_vs_total_experts(self):
+        # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
+        # routed-experts contribution: `num_experts_per_tok × 3 matmuls × 2 × h × moe_intermediate`
+        # per MoE layer, ×3 for fwd+bwd. Holding `num_local_experts` constant pins the
+        # router term so the delta is purely the active-expert math.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_experts_per_tok = 1
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.num_experts_per_tok = 2
+        f_hi = compute_flops_per_token(cfg, 16384)
+        moe_layers = sum(1 for i in range(cfg.num_hidden_layers) if (i + 1) % cfg.decoder_sparse_step == 0)
+        per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+        expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
+        assert f_hi - f_lo == expected_delta
+
+    def test_moe_sparse_layer_placement(self):
+        # transformers puts the sparse block on layer i when (i + 1) % decoder_sparse_step == 0 and i is not in
+        # `mlp_only_layers`. With 4 layers and step 2 that is layers 1 and 3, minus any mlp-only layer.
+        cfg = AutoConfig.from_pretrained(self.MOE_MODEL_ID)
+        cfg.num_hidden_layers = 4
+        cfg.decoder_sparse_step = 2
+        cfg.mlp_only_layers = []
+        h = cfg.hidden_size
+        moe_extra = 2 * 3 * h * (cfg.num_experts_per_tok * cfg.moe_intermediate_size - cfg.intermediate_size)
+        moe_extra += 2 * h * cfg.num_experts
+        f_two_sparse = compute_flops_per_token(cfg, 16384)
+        cfg.mlp_only_layers = [3]
+        f_one_sparse = compute_flops_per_token(cfg, 16384)
+        assert f_two_sparse - f_one_sparse == 3 * moe_extra
+        cfg.decoder_sparse_step = 4  # only layer 3 is sparse, and it is mlp-only
+        f_none_sparse = compute_flops_per_token(cfg, 16384)
+        cfg.mlp_only_layers = []
+        assert compute_flops_per_token(cfg, 16384) - f_none_sparse == 3 * moe_extra
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
+        derived = compute_flops_per_token(cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert compute_flops_per_token(cfg, 16384) == derived
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",  # linear attention, shared experts
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_unsupported_model_type(self, model_id):
+        cfg = AutoConfig.from_pretrained(model_id).get_text_config()
+        assert compute_flops_per_token(cfg, 16384) is None
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
+
+
+class TestComputeMfu(TrlTestCase):
+    def test_perfect_utilization(self):
+        # If aggregate TPS is exactly `peak * world_size / flops_per_token`, MFU is 100%.
+        flops = 100e9
+        peak = 989.5e12
+        world_size = 8
+        tps = peak * world_size / flops
+        assert compute_mfu(flops, tps, world_size, peak_flops_per_device=peak) == pytest.approx(100.0)

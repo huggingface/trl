@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+title: 'TRL: Transformers Reinforcement Learning'
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Leandro
+    family-names: von Werra
+  - given-names: Younes
+    family-names: Belkada
+  - given-names: Lewis
+    family-names: Tunstall
+  - given-names: Edward
+    family-names: Beeching
+  - given-names: Tristan
+    family-names: Thrush
+  - given-names: Nathan
+    family-names: Lambert
+  - given-names: Shengyi
+    family-names: Huang
+  - given-names: Kashif
+    family-names: Rasul
+  - given-names: Quentin
+    family-names: Gallouédec
+repository-code: 'https://github.com/huggingface/trl'
+abstract: >-
+  TRL (Transformers Reinforcement Learning) is an
+  open-source toolkit for aligning transformer models via
+  post-training. It provides practical, scalable
+  implementations of SFT, reward modeling, DPO, and GRPO
+  within the Hugging Face ecosystem.
+keywords:
+  - transformers
+  - reinforcement learning
+  - preference optimization
+  - language model alignment
+  - post-training
+license: Apache-2.0
+version: '1.17'
+date-released: '2020-03-27'

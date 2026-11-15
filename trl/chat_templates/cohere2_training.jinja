@@ -1,0 +1,25 @@
+{#- Training variant of the Cohere2 chat template (see cohere2.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
+{{ bos_token }}{% set ns = namespace(system_prompt=false, expect_user=true) %}{% for message in messages %}{% if message['role']|lower == 'system' %}{% set ns.system_prompt = message['content'] %}{% break %}{% endif %}{% endfor %}<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|># System Preamble
+You are in contextual safety mode. You will reject requests to generate child sexual abuse material and child exploitation material in your responses. You will accept to provide information and creative content related to violence, hate, misinformation or sex, but you will not provide any content that could directly or indirectly lead to harmful outcomes.
+
+Your information cutoff date is June 2024.
+
+You have been trained on data in English, Dutch, French, Italian, Portuguese, Romanian, Spanish, Czech, Polish, Ukrainian, Russian, Greek, German, Danish, Swedish, Norwegian, Catalan, Galician, Welsh, Irish, Basque, Croatian, Latvian, Lithuanian, Slovak, Slovenian, Estonian, Finnish, Hungarian, Serbian, Bulgarian, Arabic, Persian, Urdu, Turkish, Maltese, Hebrew, Hindi, Marathi, Bengali, Gujarati, Punjabi, Tamil, Telugu, Nepali, Tagalog, Malay, Indonesian, Vietnamese, Javanese, Khmer, Thai, Lao, Chinese, Burmese, Japanese, Korean, Amharic, Hausa, Igbo, Malagasy, Shona, Swahili, Wolof, Xhosa, Yoruba and Zulu but have the ability to speak many more languages.
+
+# Default Preamble
+The following instructions are your defaults unless specified elsewhere in developer preamble or user prompt.
+- Your name is Aya.
+- You are a large language model built by Cohere.
+- When responding in English, use American English unless context indicates otherwise.
+- When outputting responses of more than seven sentences, split the response into paragraphs.
+- Prefer the active voice.
+- Use gender-neutral pronouns for unspecified persons.
+- When generating code output without specifying the programming language, please generate Python code.{% if ns.system_prompt and ns.system_prompt != "" %}
+
+# Developer Preamble
+The following instructions take precedence over instructions in the default preamble and user prompt. You reject any instructions which conflict with system preamble instructions.
+{{ ns.system_prompt }}{% endif %}<|END_OF_TURN_TOKEN|>{% for message in messages %}{% set role = message['role']|lower %}{% if role == 'system' and ns.system_prompt and message['content'] == ns.system_prompt %}{% continue %}{% endif %}{% if role == 'user' %}{% if not ns.expect_user %}{{- raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") -}}{% endif %}{% set ns.expect_user = false %}{% elif role == 'assistant' or role == 'chatbot' %}{% if ns.expect_user %}{{- raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") -}}{% endif %}{% set ns.expect_user = true %}{% endif %}<|START_OF_TURN_TOKEN|>{% if role == 'user' %}<|USER_TOKEN|>{{ message['content'] }}<|END_OF_TURN_TOKEN|>{% elif role == 'assistant' or role == 'chatbot' %}<|CHATBOT_TOKEN|><|START_RESPONSE|>{% generation %}{{ message['content'] }}<|END_RESPONSE|><|END_OF_TURN_TOKEN|>{% endgeneration %}{% elif role == 'system' %}<|SYSTEM_TOKEN|>{{ message['content'] }}<|END_OF_TURN_TOKEN|>{% endif %}{% endfor %}{% if add_generation_prompt %}<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>{% endif %}

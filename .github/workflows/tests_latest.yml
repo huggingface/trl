@@ -1,0 +1,76 @@
+name: Tests latest TRL release with dev dependencies
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+
+  workflow_dispatch:
+
+env:
+  TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+permissions: {}
+
+jobs:
+  tests:
+    permissions:
+      contents: read
+    name: Tests latest TRL release with dev dependencies
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: { ref: v1.17-release }
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install -U \
+            ".[dev]" \
+            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
+            "datasets @ git+https://github.com/huggingface/datasets.git" \
+            "transformers @ git+https://github.com/huggingface/transformers.git"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
+
+      - name: Post to Slack
+        if: always()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests latest TRL release with dev dependencies
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

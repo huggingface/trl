@@ -1,0 +1,352 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Shared utilities for the tiny-model generation scripts in this directory.
+# Each sibling script builds a single tiny model and pushes it to the Hub under
+# the `trl-internal-testing` organization.
+
+import argparse
+import os
+import re
+import tempfile
+from pathlib import Path
+
+import torch
+from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
+from huggingface_hub.errors import NotASafetensorsRepoError
+from packaging.version import Version
+from safetensors import safe_open
+from torch import nn
+from transformers import AutoConfig, ProcessorMixin
+from transformers import set_seed as _set_seed
+
+
+ORGANIZATION = "trl-internal-testing"
+
+SEED = 42
+
+MODEL_CARD = """
+---
+library_name: transformers
+tags: [trl]
+---
+
+# Tiny {model_class_name}
+
+This is a minimal model built for unit tests in the [TRL](https://github.com/huggingface/trl) library.
+"""
+
+
+api = HfApi()
+
+
+def _transformers_floor_from_pyproject():
+    """Read the `transformers>=X.Y.Z` floor from the repo's pyproject.toml."""
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text(encoding="utf-8"))
+    if match is None:
+        raise RuntimeError(f"Could not find a `transformers>=` bound in {pyproject}")
+    return match.group(1)
+
+
+def check_transformers_version(expected_version=None):
+    """Raise unless the installed transformers matches `expected_version` exactly.
+
+    If `expected_version` is None, defaults to the `transformers>=` floor from pyproject.toml.
+    """
+    import transformers
+
+    if expected_version is None:
+        expected_version = _transformers_floor_from_pyproject()
+
+    if Version(transformers.__version__) != Version(expected_version):
+        raise RuntimeError(
+            f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
+        )
+
+
+def set_seed(seed=SEED):
+    """Seed the RNGs that model construction draws from.
+
+    Without this every run produces different weights, so re-pushing a tiny model always creates a new
+    `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
+    `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
+    """
+    _set_seed(seed)
+
+
+def smoke_test(model, tokenizer_or_processor=None):
+    """Run a minimal forward pass to sanity-check the tiny model doesn't crash or produce NaNs."""
+    model.eval()
+    device = next(model.parameters()).device
+
+    if isinstance(tokenizer_or_processor, ProcessorMixin):
+        # VLM path: build a dummy (image, text) input via the processor.
+        from PIL import Image
+
+        processor = tokenizer_or_processor
+        red = Image.new("RGB", (24, 24), color="red")
+        blue = Image.new("RGB", (24, 24), color="blue")
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": red}, {"type": "text", "text": "What is this?"}],
+                }
+            ],
+            [{"role": "user", "content": [{"type": "text", "text": "Is it blue?"}, {"type": "image", "image": blue}]}],
+        ]
+        inputs = processor.apply_chat_template(
+            conversation=messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        ).to(device)
+    else:
+        inputs = {"input_ids": torch.tensor([[1, 2, 3, 4]], device=device)}
+
+    with torch.no_grad():
+        out = model(**inputs)
+
+    if "logits" in out:
+        output_tensor = out["logits"]
+    elif "last_hidden_state" in out:
+        output_tensor = out["last_hidden_state"]
+    else:
+        raise RuntimeError(f"[smoke_test] {model.__class__.__name__}: no logits or last_hidden_state on output")
+    if torch.isnan(output_tensor).any():
+        raise RuntimeError(f"[smoke_test] {model.__class__.__name__}: NaN in forward output")
+    print(f"[smoke_test] {model.__class__.__name__}: OK (output shape {tuple(output_tensor.shape)})")
+
+
+def _flatten(d, prefix=""):
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}" if prefix else k
+        if isinstance(v, dict):
+            out.update(_flatten(v, f"{key}."))
+        else:
+            out[key] = v
+    return out
+
+
+_DIFF_IGNORE = {"_name_or_path", "transformers_version", "architectures", "model_type", "torch_dtype", "dtype"}
+
+
+_TORCH_TO_SAFETENSORS_DTYPE = {
+    torch.float32: "F32",
+    torch.float16: "F16",
+    torch.bfloat16: "BF16",
+    torch.float64: "F64",
+    torch.float8_e4m3fn: "F8_E4M3",
+    torch.float8_e5m2: "F8_E5M2",
+    torch.int8: "I8",
+    torch.int16: "I16",
+    torch.int32: "I32",
+    torch.int64: "I64",
+    torch.uint8: "U8",
+    torch.bool: "BOOL",
+}
+
+
+def check_dtype_pattern(reference_id, model):
+    """Flag tensors whose dtype diverges from the reference checkpoint.
+
+    Reads the reference safetensors header via the Hub API (no weight download) and compares it with the checkpoint
+    that `model` saves, whose names follow the reference layout (in memory, transformers may rename or fuse tensors).
+    Useful to catch cases like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is
+    bf16.
+
+    `model` can also be the state dict that gets saved, when the script writes the checkpoint itself (quantized weights).
+    """
+    try:
+        metadata = api.get_safetensors_metadata(reference_id)
+    except NotASafetensorsRepoError:
+        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+        return
+    ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
+
+    if isinstance(model, nn.Module):
+        tiny_dtypes = {}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+            for path in Path(tmp_dir).glob("*.safetensors"):
+                with safe_open(path, "pt") as f:
+                    tiny_dtypes.update({name: f.get_slice(name).get_dtype() for name in f.keys()})
+    else:
+        tiny_dtypes = {name: _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype) for name, tensor in model.items()}
+
+    unmatched = [name for name in tiny_dtypes if name not in ref_dtypes]
+    if unmatched:
+        print(f"[dtype_check] {reference_id}: {len(unmatched)} tensors have no counterpart in the reference:")
+        for name in unmatched:
+            print(f"  {name}")
+
+    mismatches = [
+        (name, ref_dtypes[name], dtype)
+        for name, dtype in tiny_dtypes.items()
+        if name in ref_dtypes and ref_dtypes[name] != dtype
+    ]
+    if not mismatches:
+        print(f"[dtype_check] {reference_id}: all matched tensors have the reference dtype")
+        return
+
+    print(f"[dtype_check] {reference_id}: {len(mismatches)} tensors differ from reference:")
+    for name, ref, tiny in mismatches:
+        print(f"  {name}: reference={ref}, tiny={tiny}")
+
+
+def _format_diff_value(value, width):
+    """Render a config value for the diff table, tagging lists with their length and marking truncation."""
+    text = f"[{len(value)} items] {value}" if isinstance(value, list) else str(value)
+    if width is None or len(text) <= width:
+        return text
+    return text[: width - 1] + "\u2026"
+
+
+def print_config_diff(reference_id, model, full=None):
+    """Print the flat, recursive diff between the reference Hub config and the tiny-model config.
+
+    Values are truncated to keep the table aligned; pass `--full-diff` (or `full=True`) to print them in full.
+    """
+    if full is None:
+        full = _parse_args().full_diff
+    width = None if full else 34
+    reference_config = AutoConfig.from_pretrained(reference_id)
+    ref_flat = _flatten(reference_config.to_dict())
+    tiny_flat = _flatten(model.config.to_dict())
+
+    keys = sorted(set(ref_flat) | set(tiny_flat))
+    rows = []
+    for k in keys:
+        if any(k == ig or k.endswith(f".{ig}") for ig in _DIFF_IGNORE):
+            continue
+        rv, tv = ref_flat.get(k, "<missing>"), tiny_flat.get(k, "<missing>")
+        if rv != tv:
+            rows.append((k, rv, tv))
+
+    print(f"[config_diff] {reference_id} vs tiny ({len(rows)} differences)")
+    for k, r, t in rows:
+        print(f"  {k:48s} {_format_diff_value(r, width):34s} → {_format_diff_value(t, width)}")
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--create-pr",
+        action="store_true",
+        help="If the repo already exists, open a PR instead of skipping.",
+    )
+    parser.add_argument(
+        "--revision",
+        help="Push to this existing PR of the repo (e.g. refs/pr/3) instead of skipping.",
+    )
+    parser.add_argument(
+        "--full-diff",
+        action="store_true",
+        help="Print untruncated values in the config diff.",
+    )
+    args, _ = parser.parse_known_args()
+    return args
+
+
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model.save_pretrained(tmpdir)
+        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr, revision)
+
+
+def push_dir_to_hub(
+    save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None
+):
+    """Push the model files saved in `save_dir`, with the tokenizer, generation config and model card, in one commit."""
+    if create_pr is None:
+        create_pr = _parse_args().create_pr
+    if revision is None:
+        revision = _parse_args().revision
+
+    model_class_name = model.__class__.__name__
+    content = MODEL_CARD.format(model_class_name=model_class_name)
+    model_card = ModelCard(content)
+    if prefix is not None:
+        model_class_name = f"{prefix}-{model_class_name}"
+    repo_id = f"{ORGANIZATION}/{model_class_name}"
+    if suffix is not None:
+        repo_id += f"-{suffix}"
+
+    exists = api.repo_exists(repo_id)
+    if exists and not create_pr and revision is None:
+        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR, or --revision to update one)")
+        return
+
+    if not exists:
+        api.create_repo(repo_id, exist_ok=True)
+
+    # Upload all artifacts in a single commit, so --create-pr opens one PR.
+    if tokenizer is not None:
+        tokenizer.save_pretrained(save_dir)
+    if generation_config is not None:
+        generation_config.save_pretrained(save_dir)
+    model_card.save(os.path.join(save_dir, "README.md"))
+
+    operations = [
+        CommitOperationAdd(
+            path_in_repo=os.path.relpath(os.path.join(root, name), save_dir),
+            path_or_fileobj=os.path.join(root, name),
+        )
+        for root, _, files in os.walk(save_dir)
+        for name in files
+    ]
+    commit_info = api.create_commit(
+        repo_id=repo_id,
+        operations=operations,
+        commit_message=f"Upload {model.__class__.__name__}",
+        create_pr=exists and create_pr,
+        revision=revision,
+    )
+    if commit_info.pr_url:
+        print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
+
+
+def init_weights_tiny_model(model):
+    """
+    Initialize tiny test models to avoid NaNs from uninitialized weights.
+
+    Uses safe defaults:
+      - Linear/Conv1d: Xavier uniform (weights), zero (biases)
+      - Embedding: Normal(0, 0.02)
+      - LayerNorm: Ones (weights), zero (biases)
+    """
+    for module in model.modules():
+        if isinstance(module, nn.Linear):
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            nn.init.xavier_uniform_(module.weight)
+
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Conv1d):
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            nn.init.xavier_uniform_(module.weight)

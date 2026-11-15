@@ -1,0 +1,48 @@
+# Publishing is triggered by the release tag, not by a change to VERSION. A tag push is a deliberate act, while a
+# VERSION change is a side effect of an ordinary PR: v1.12.0 was published to PyPI because a post-release bump set
+# VERSION to "1.12.0" instead of "1.12.0.dev0". The job refuses to upload unless VERSION agrees with the tag.
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Check VERSION matches the tag
+        run: |
+          version=$(cat VERSION)
+          echo "VERSION is $version, tag is $GITHUB_REF_NAME"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION ($version) is not a release version. Expected {major}.{minor}.{patch}, see RELEASE.md."
+            exit 1
+          fi
+          if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::VERSION ($version) does not match the tag ($GITHUB_REF_NAME). Tag the release commit, expected tag v$version."
+            exit 1
+          fi
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish

@@ -1,0 +1,3603 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import random
+import textwrap
+import warnings
+from collections import defaultdict, deque
+from collections.abc import Callable
+from functools import partial
+from itertools import takewhile
+from typing import Any, Optional
+
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import torch.nn.functional as F
+import transformers
+from accelerate.utils import (
+    DistributedType,
+    broadcast_object_list,
+    gather_object,
+)
+from datasets import Dataset, IterableDataset
+from packaging.version import Version
+from torch.utils.data import DataLoader
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer, TrainerCallback
+from transformers.data.data_collator import DataCollator
+from transformers.feature_extraction_utils import FeatureExtractionMixin
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.image_processing_utils import BaseImageProcessor
+from transformers.integrations.integration_utils import is_wandb_available
+from transformers.modeling_utils import PreTrainedModel
+from transformers.processing_utils import ProcessorMixin
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.trainer_utils import EvalPrediction, seed_worker
+from transformers.utils import (
+    is_datasets_available,
+    is_peft_available,
+    is_rich_available,
+)
+
+from ...data_utils import (
+    is_conversational,
+    maybe_convert_to_chatml,
+    pack_dataset,
+    prepare_multimodal_messages,
+)
+from ...extras.profiling import profiling_decorator
+from ...generation.vllm_generation import VLLMGeneration
+from ...import_utils import is_vllm_available
+from ...models import prepare_deepspeed
+from ...models.utils import unwrap_model_for_generation
+from ...trainer.sft_trainer import SFTTrainer
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    get_config_model_id,
+    global_then_local_main_first,
+    identity,
+    pad,
+    split_tensor_dict,
+)
+from ..utils import (
+    DataCollatorForChatML,
+    DataCollatorForVisionLanguageChatML,
+    empty_cache,
+    encode_with_byte_offsets,
+    is_byte_level_tokenizer,
+    pad_byte_offsets,
+    piece_byte_len,
+)
+from .gold_config import GOLDConfig
+
+
+if is_peft_available():
+    from peft import PeftConfig
+
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+
+if is_wandb_available():
+    import wandb
+
+
+def print_prompt_completions_sample_uld(
+    prompts: list[str],
+    completions: list[str],
+    step: int,
+    num_samples: int = None,
+) -> None:
+    """
+    Print out a sample of model completions to the console.
+
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
+    during training. It requires the `rich` library to be installed.
+
+    Args:
+        prompts (`list[str]`):
+            List of prompts.
+        completions (`list[str]`):
+            List of completions corresponding to the prompts.
+        step (`int`):
+            Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
+
+    Example:
+    ```python
+    >>> from trl.experimental.gold.gold_trainer import print_prompt_completions_sample_uld
+
+    >>> prompts = ["The sky is", "The sun is"]
+    >>> completions = [" blue.", " in the sky."]
+    >>> print_prompt_completions_sample_uld(prompts, completions, 42)
+    ╭─────────── Step 42 ───────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │ │
+    │ ├────────────┼──────────────┤ │
+    │ │ The sun is │  in the sky. │ │
+    │ └────────────┴──────────────┘ │
+    ╰───────────────────────────────╯
+    ```
+    """
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_prompt_completions_sample_uld` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True)
+
+    # Add columns
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+
+    for i in range(len(prompts)):
+        table.add_row(Text(prompts[i]), Text(completions[i]))
+        table.add_section()  # Adds a separator between rows
+
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)
+
+
+def build_teacher_inputs_from_texts(
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_texts: list[str],
+    completion_texts: list[str],
+    use_extended_uld: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
+
+    Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
+    UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
+    tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``
+    when extended ULD is enabled. Positional ULD returns zero offsets because it does not consume them.
+    """
+
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
+    if use_extended_uld:
+        # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+        # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+        completion_encs = encode_with_byte_offsets(
+            tokenizer.backend_tokenizer, completion_texts, add_special_tokens=False
+        )
+    else:
+        completion_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+        completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
+
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    offsets_list: list[list[tuple[int, int]]] = []
+
+    for prompt_ids, (enc_ids, enc_offs), completion_text in zip(
+        prompt_token_ids, completion_encs, completion_texts, strict=True
+    ):
+        # Remove trailing EOS from prompt so completions can extend cleanly
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+
+        completion_ids = list(enc_ids)
+        completion_offs = list(enc_offs)
+        content_len = len(completion_text.encode("utf-8"))
+
+        sequence = list(prompt_ids) + completion_ids
+        offsets = [(0, 0)] * len(prompt_ids) + completion_offs
+        if eos_token_id is not None:
+            sequence.append(eos_token_id)
+            offsets.append((content_len, content_len) if use_extended_uld else (0, 0))
+
+        seq_tensor = torch.tensor(sequence, dtype=torch.long)
+        sequences.append(seq_tensor)
+        attention_masks.append(torch.ones_like(seq_tensor))
+        offsets_list.append(offsets)
+
+        labels = seq_tensor.clone()
+        labels[: len(prompt_ids)] = -100
+        labels_list.append(labels)
+
+    teacher_input_ids = pad(
+        sequences,
+        padding_side="right",
+        padding_value=pad_token_id if pad_token_id is not None else 0,
+    )
+    teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
+    teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
+
+    target_len = teacher_input_ids.size(1)
+    teacher_byte_offsets = torch.stack(
+        [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
+        dim=0,
+    )
+
+    return (
+        teacher_input_ids,
+        teacher_labels,
+        teacher_attention_mask,
+        teacher_byte_offsets,
+    )
+
+
+def build_teacher_inputs_from_completion_ids(
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_texts: list[str],
+    completion_ids: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tokenize teacher prompts and append the student's completion token IDs unchanged."""
+    pad_token_id = tokenizer.pad_token_id
+    eos_token_id = tokenizer.eos_token_id
+    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=False)["input_ids"]
+
+    sequences: list[torch.Tensor] = []
+    attention_masks: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
+    for prompt_ids, row_completion_ids in zip(prompt_token_ids, completion_ids, strict=True):
+        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+            prompt_ids = prompt_ids[:-1]
+        sequence = torch.tensor(prompt_ids + row_completion_ids.tolist(), dtype=torch.long)
+        labels = sequence.clone()
+        labels[: len(prompt_ids)] = -100
+        sequences.append(sequence)
+        attention_masks.append(torch.ones_like(sequence))
+        labels_list.append(labels)
+
+    return (
+        pad(sequences, padding_side="right", padding_value=pad_token_id if pad_token_id is not None else 0),
+        pad(labels_list, padding_side="right", padding_value=-100),
+        pad(attention_masks, padding_side="right", padding_value=0).bool(),
+    )
+
+
+class ULDLoss(nn.Module):
+    """
+    Universal Logit Distillation Loss.
+    """
+
+    def __init__(
+        self,
+        config: GOLDConfig,
+        student_tokenizer=None,
+        teacher_tokenizer=None,
+        device=None,
+    ):
+        super().__init__()
+        self.device = device
+        self.crossentropy_weight = config.uld_crossentropy_weight
+        self.distillation_weight = config.uld_distillation_weight
+        self.student_temperature = config.uld_student_temperature
+        self.teacher_temperature = config.uld_teacher_temperature
+        self.skip_student_eos = config.uld_skip_student_eos
+        self.skip_teacher_eos = config.uld_skip_teacher_eos
+        self.use_extended_uld = config.use_extended_uld
+        self.token_merge_strategy = config.uld_token_merge_strategy
+        self.ignore_index = -100
+
+        # Add tokenizers for enhanced alignment
+        self.student_tokenizer = student_tokenizer
+        self.teacher_tokenizer = teacher_tokenizer
+
+        # Hybrid ULD configuration
+        self.use_hybrid_loss = getattr(config, "uld_use_hybrid_loss", False)
+        self.hybrid_matched_weight = getattr(config, "uld_hybrid_matched_weight", None)
+        self.hybrid_unmatched_weight = getattr(config, "uld_hybrid_unmatched_weight", None)
+        self.beta = getattr(config, "beta", 1.0)  # For JSD loss in hybrid matched tokens
+
+        # Initialize vocabulary mapping for hybrid loss
+        self._vocab_mapping = None
+        self._teacher_matched_ids = None
+        self._student_matched_ids = None
+        if self.use_hybrid_loss and student_tokenizer is not None and teacher_tokenizer is not None:
+            self._initialize_vocabulary_mapping()
+
+    def __call__(
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
+    ):
+        """
+        Compute ULD loss with GKD trainer interface.
+
+        Args:
+            student_logits: Student model logits [batch_size, seq_len, vocab_size]
+            teacher_logits: Teacher model logits [batch_size, seq_len, vocab_size]
+            student_labels: Student target labels [batch_size, seq_len]
+            teacher_labels: Teacher target labels [batch_size, seq_len]
+            student_input_ids: Student input token IDs [batch_size, seq_len]
+            teacher_input_ids: Teacher input token IDs [batch_size, seq_len]
+            student_byte_offsets: Per-token UTF-8 byte offsets ``[batch, seq, 2]``
+                from the data collator (relative to the rendered chat-template message). Required.
+            teacher_byte_offsets: Per-sample list of completion-relative byte
+                offsets (one list per batch item) from ``build_teacher_inputs_from_texts``. Required.
+
+        Returns:
+            Total loss (cross-entropy + distillation)
+        """
+        # Compute cross-entropy loss for student
+        if self.crossentropy_weight > 0:
+            shift_logits = student_logits[..., :-1, :].contiguous()
+            shift_labels = student_labels[..., 1:].contiguous()
+            loss_fct = nn.CrossEntropyLoss(ignore_index=self.ignore_index)
+            crossentropy_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            crossentropy_loss = self.crossentropy_weight * crossentropy_loss
+        else:
+            crossentropy_loss = 0.0
+
+        # Compute distillation loss using ULD approximation
+        distillation_loss = self._compute_distillation_loss(
+            student_logits,
+            teacher_logits,
+            student_labels,
+            teacher_labels,
+            student_input_ids,
+            teacher_input_ids,
+            student_byte_offsets=student_byte_offsets,
+            teacher_byte_offsets=teacher_byte_offsets,
+        )
+
+        return crossentropy_loss + distillation_loss
+
+    def _initialize_vocabulary_mapping(self):
+        """Initialize vocabulary mapping for hybrid ULD loss."""
+        # Computing vocabulary mapping for hybrid ULD
+
+        student_vocab = self.student_tokenizer.get_vocab()
+        teacher_vocab = self.teacher_tokenizer.get_vocab()
+
+        # Create reverse mapping for student
+        student_token_to_id = dict(student_vocab.items())
+
+        vocab_mapping = {}
+        teacher_matched_ids = set()
+        student_matched_ids = set()
+
+        for token_str, teacher_id in teacher_vocab.items():
+            if token_str in student_token_to_id:
+                student_id = student_token_to_id[token_str]
+                vocab_mapping[teacher_id] = student_id
+                teacher_matched_ids.add(teacher_id)
+                student_matched_ids.add(student_id)
+
+        self._vocab_mapping = vocab_mapping
+        self._teacher_matched_ids = teacher_matched_ids
+        self._student_matched_ids = student_matched_ids
+
+        max_matched_teacher_id = max(self._vocab_mapping.keys())
+        self.mapping_tensor = torch.full((max_matched_teacher_id + 1,), -1, dtype=torch.long)  # -1 for unmapped ids
+        for k, v in self._vocab_mapping.items():
+            self.mapping_tensor[k] = v
+        if self.device is not None:
+            self.mapping_tensor = self.mapping_tensor.to(self.device)
+
+    def _compute_distillation_loss(
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_input_ids,
+        teacher_input_ids,
+        student_byte_offsets=None,
+        teacher_byte_offsets=None,
+    ):
+        """
+        Compute the Universal Logit Distillation loss with token mapping.
+
+        This version uses actual input_ids for accurate token mapping and multiplies probabilities for split tokens.
+        Both student_input_ids and teacher_input_ids are required for optimal alignment.
+        """
+        # Get answer regions (same as original)
+        student_answer_index, student_answer_size = self._get_start_and_size_answers(student_labels)
+        teacher_answer_index, teacher_answer_size = self._get_start_and_size_answers(teacher_labels)
+
+        if self.skip_student_eos:
+            student_answer_size = [size - 1 for size in student_answer_size]
+        if self.skip_teacher_eos:
+            teacher_answer_size = [size - 1 for size in teacher_answer_size]
+
+        # Handle edge case where all answer sizes are 0
+        if (
+            not student_answer_size
+            or not teacher_answer_size
+            or max(max(student_answer_size), max(teacher_answer_size)) <= 0
+        ):
+            return torch.zeros(1, device=student_logits.device, requires_grad=True) * student_logits.sum() * 1e-8
+
+        batch_size = student_logits.size(0)
+        distillation_losses = []
+
+        for i in range(batch_size):
+            # Get answer regions for this batch item
+            student_start = student_answer_index[i]
+            student_size = student_answer_size[i]
+            teacher_start = teacher_answer_index[i]
+            teacher_size = teacher_answer_size[i]
+
+            if student_size <= 0 or teacher_size <= 0:
+                loss_i = student_logits[i].sum() * 0.0
+                distillation_losses.append(loss_i)
+                continue
+
+            # The "bayesian" shift has no predictor logit for an answer span starting at index 0 (front-truncation can
+            # drop the whole prompt). Skip that unscorable leading span on both sides to keep them on a shared span.
+            if self.token_merge_strategy == "bayesian" and (student_start == 0 or teacher_start == 0):
+                if self.use_extended_uld:
+                    if student_byte_offsets is None or teacher_byte_offsets is None:
+                        raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+                    s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                    t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                    student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                    if not student_groups or not teacher_groups:
+                        distillation_losses.append(student_logits[i].sum() * 0.0)
+                        continue
+                    # Drop the first aligned group pair (advance by the tokens it covered).
+                    student_drop, teacher_drop = len(student_groups[0]), len(teacher_groups[0])
+                else:
+                    # Drop the first positional target from both sides.
+                    student_drop = teacher_drop = 1
+
+                student_start, student_size = (
+                    student_start + student_drop,
+                    student_size - student_drop,
+                )
+                teacher_start, teacher_size = (
+                    teacher_start + teacher_drop,
+                    teacher_size - teacher_drop,
+                )
+                if student_size <= 0 or teacher_size <= 0:
+                    distillation_losses.append(student_logits[i].sum() * 0.0)
+                    continue
+
+            # Extract answer logits. "bayesian" starts one position earlier so probs[k] predicts token_ids[k].
+            if self.token_merge_strategy == "bayesian":
+                student_answer_logits = student_logits[i, student_start - 1 : student_start + student_size - 1]
+                teacher_answer_logits = teacher_logits[i, teacher_start - 1 : teacher_start + teacher_size - 1]
+            else:
+                student_answer_logits = student_logits[i, student_start : student_start + student_size]
+                teacher_answer_logits = teacher_logits[i, teacher_start : teacher_start + teacher_size]
+
+            # Convert to probabilities
+            student_probs = F.softmax(student_answer_logits / self.student_temperature, dim=-1)
+            teacher_probs = F.softmax(teacher_answer_logits / self.teacher_temperature, dim=-1)
+
+            # Pass actual input_ids so split-token groups can multiply conditional probabilities.
+            student_token_ids = student_input_ids[i, student_start : student_start + student_size].tolist()
+            teacher_token_ids = teacher_input_ids[i, teacher_start : teacher_start + teacher_size].tolist()
+
+            if self.use_extended_uld:
+                if student_byte_offsets is None or teacher_byte_offsets is None:
+                    raise ValueError("Byte offsets are required when `use_extended_uld=True`.")
+
+                # Both sides are completion-relative, so plain slicing gives a shared byte coordinate system.
+                s_answer = student_byte_offsets[i, student_start : student_start + student_size].tolist()
+                t_answer = teacher_byte_offsets[i, teacher_start : teacher_start + teacher_size].tolist()
+                student_groups, teacher_groups = self._align_by_byte_offsets(s_answer, t_answer)
+                # Drop degenerate pairs where either side is empty — e.g. teacher's trailing zero-width EOS at
+                # ``(content_len, content_len)`` paired with an empty student group merges to a zero distribution
+                # and inflates the loss (only reachable when ``skip_teacher_eos=False``).
+                paired = [(sg, tg) for sg, tg in zip(student_groups, teacher_groups, strict=False) if sg and tg]
+                student_groups = [sg for sg, _ in paired]
+                teacher_groups = [tg for _, tg in paired]
+                student_aligned = self._merge_probabilities_with_alignment_groups(
+                    student_probs, student_groups, student_token_ids
+                )
+                teacher_aligned = self._merge_probabilities_with_alignment_groups(
+                    teacher_probs, teacher_groups, teacher_token_ids
+                )
+            else:
+                min_length = min(len(student_token_ids), len(teacher_token_ids))
+                student_aligned = student_probs[:min_length, :]
+                teacher_aligned = teacher_probs[:min_length, :]
+
+            # Apply ULD loss computation
+            if self.use_hybrid_loss and self._vocab_mapping is not None:
+                # Use hybrid approach: direct comparison for matched tokens, sorting for unmatched
+                aligned_loss = self._compute_hybrid_uld_loss(student_aligned, teacher_aligned)
+            else:
+                # Original approach: sort all probabilities
+                student_sorted = student_aligned.sort(dim=-1, descending=True).values
+                teacher_sorted = teacher_aligned.sort(dim=-1, descending=True).values
+
+                # Pad vocabularies to same size
+                student_vocab_size = student_sorted.size(-1)
+                teacher_vocab_size = teacher_sorted.size(-1)
+                max_vocab_size = max(student_vocab_size, teacher_vocab_size)
+
+                if student_vocab_size < max_vocab_size:
+                    student_sorted = F.pad(student_sorted, (0, max_vocab_size - student_vocab_size))
+                if teacher_vocab_size < max_vocab_size:
+                    teacher_sorted = F.pad(teacher_sorted, (0, max_vocab_size - teacher_vocab_size))
+
+                # Compute L1 distance (ULD approach)
+                aligned_loss = F.l1_loss(student_sorted, teacher_sorted, reduction="sum")
+                aligned_loss /= student_aligned.size(0)  # Normalize by sequence length
+            distillation_losses.append(aligned_loss)
+
+        distillation_loss = torch.stack(distillation_losses).mean()
+        return self.distillation_weight * distillation_loss
+
+    @staticmethod
+    def _align_by_byte_offsets(s_offsets, t_offsets):
+        """
+        Walk both byte-offset arrays, advancing the side whose current token ends earlier. A group closes when both
+        sides reach the same byte boundary — the points where the two tokenizers agree on a split.
+        """
+        s_groups, t_groups = [], []
+        s_start = t_start = s = t = 0
+        n_s, n_t = len(s_offsets), len(t_offsets)
+        while s < n_s and t < n_t:
+            s_end, t_end = s_offsets[s][1], t_offsets[t][1]
+            if s_end < t_end:
+                s += 1
+            elif s_end > t_end:
+                t += 1
+            else:
+                s += 1
+                t += 1
+                s_groups.append(list(range(s_start, s)))
+                t_groups.append(list(range(t_start, t)))
+                s_start, t_start = s, t
+        if s < n_s or t < n_t:
+            s_groups.append(list(range(s_start, n_s)))
+            t_groups.append(list(range(t_start, n_t)))
+        return s_groups, t_groups
+
+    def _merge_probabilities_with_alignment_groups(self, probs, alignment_groups, token_ids=None):
+        """
+        Merge probabilities based on alignment groups, using either the "observed" or "bayesian" strategy
+        (`self.token_merge_strategy`).
+
+        For a group merging tokens at positions [i, ..., i+k]:
+        - "observed": multiply the marginal distribution at the FIRST position by the scalar conditional probabilities
+          of the actual later tokens.
+        - "bayesian": multiply the full distribution at the LAST position (conditioned on the actual prefix tokens) by
+          the scalar probabilities of the actual earlier tokens, following the chain rule.
+
+        Both produce an unnormalized distribution that preserves correct relative probabilities.
+
+        Args:
+            probs: Probability tensor [seq_len, vocab_size]
+            alignment_groups: List of alignment groups (each group is a list of positions to merge)
+            token_ids: Actual token IDs that were generated [seq_len]. REQUIRED when any group has
+                      len(group) > 1. If None when multi-token groups exist, raises ValueError.
+
+        Returns:
+            Merged probability tensor [num_groups, vocab_size]
+
+        Raises:
+            ValueError: If token_ids is None when merging multi-token groups
+        """
+        if not alignment_groups:
+            return probs
+
+        # Create aligned tensor
+        vocab_size = probs.size(-1)
+        target_len = len(alignment_groups)
+        aligned_probs = torch.zeros(target_len, vocab_size, device=probs.device, dtype=probs.dtype)
+        eps = 1e-8
+
+        # Process each alignment group
+        for group_idx, group in enumerate(alignment_groups):
+            # Handle probability merging
+            if len(group) > 1:
+                # Multiple tokens map to this group - merge by multiplying in the scalar probabilities of the tokens
+                if token_ids is None:
+                    raise ValueError(
+                        "token_ids must be provided when merging multi-token groups. "
+                        "They are needed to extract the scalar probabilities of the actually generated tokens."
+                    )
+
+                if self.token_merge_strategy == "bayesian":
+                    base_probs = probs[group[-1]]  # last position's full distribution
+                    scalar_positions = group[:-1]
+                else:
+                    base_probs = probs[group[0]]  # first position's marginal distribution
+                    scalar_positions = group[1:]
+
+                # Multiply base_probs by the scalar probabilities of the actual tokens at scalar_positions
+                conditional_prob_product = 1.0
+                for idx in scalar_positions:
+                    actual_token_id = token_ids[idx]
+                    token_prob = probs[idx, actual_token_id].clamp_min(eps)
+                    conditional_prob_product *= token_prob
+
+                merged_probs = base_probs * conditional_prob_product
+                aligned_probs[group_idx] = merged_probs
+
+            elif len(group) == 1:
+                aligned_probs[group_idx] = probs[group[0]]
+            else:
+                # No tokens map to this group
+                aligned_probs[group_idx] = torch.zeros_like(probs[0])
+
+        return aligned_probs
+
+    def _compute_hybrid_uld_loss(self, student_aligned, teacher_aligned):
+        """
+        Compute hybrid ULD loss on aligned probability distributions. This method:
+        1. Directly compares probabilities for tokens with matching vocabulary entries
+        2. Uses sorting approach only for tokens with different vocabulary entries
+
+        Args:
+            student_aligned: Aligned student probabilities [seq_len, student_vocab_size]
+            teacher_aligned: Aligned teacher probabilities [seq_len, teacher_vocab_size]
+        Returns:
+            Combined hybrid loss
+        """
+        device = student_aligned.device
+        # seq_len = student_aligned.size(0)  # Unused variable
+        student_vocab_size = student_aligned.size(-1)
+        teacher_vocab_size = teacher_aligned.size(-1)
+
+        # Convert sets to sorted tensors for indexing
+        if self._teacher_matched_ids:
+            teacher_matched_indices = torch.tensor(sorted(self._teacher_matched_ids), dtype=torch.long, device=device)
+            student_matched_indices = self.mapping_tensor[teacher_matched_indices]
+        else:
+            teacher_matched_indices = torch.tensor([], dtype=torch.long, device=device)
+            student_matched_indices = torch.tensor([], dtype=torch.long, device=device)
+
+        # Create masks for unmatched tokens
+        teacher_matched_mask = torch.zeros(teacher_vocab_size, dtype=torch.bool, device=device)
+        student_matched_mask = torch.zeros(student_vocab_size, dtype=torch.bool, device=device)
+
+        if len(teacher_matched_indices) > 0:
+            teacher_matched_mask[teacher_matched_indices] = True
+            student_matched_mask[student_matched_indices] = True
+
+        # 1. JSD loss for matched vocabulary tokens (direct semantic correspondence)
+        matched_loss = torch.tensor(0.0, device=device)
+        matched_token_count = 0
+        if len(teacher_matched_indices) > 0:
+            # Extract probabilities for matched tokens
+            teacher_matched_probs = teacher_aligned[:, teacher_matched_indices]  # [seq_len, num_matched]
+            student_matched_probs = student_aligned[:, student_matched_indices]  # [seq_len, num_matched]
+            matched_token_count = teacher_matched_probs.size(-1)
+
+            # Use JSD loss for semantically aligned tokens
+            # Convert probabilities back to logits for JSD computation
+
+            # Apply generalized JSD loss to matched tokens
+            matched_loss = self._compute_jsd_loss_for_matched_tokens(student_matched_probs, teacher_matched_probs)
+
+        # 2. Sorted comparison loss for unmatched vocabulary tokens
+        teacher_unmatched_mask = ~teacher_matched_mask
+        student_unmatched_mask = ~student_matched_mask
+
+        teacher_unmatched_probs = teacher_aligned[:, teacher_unmatched_mask]  # [seq_len, num_teacher_unmatched]
+        student_unmatched_probs = student_aligned[:, student_unmatched_mask]  # [seq_len, num_student_unmatched]
+
+        unmatched_loss = torch.tensor(0.0, device=device)
+        if teacher_unmatched_probs.size(-1) > 0 and student_unmatched_probs.size(-1) > 0:
+            # Sort unmatched probabilities
+            teacher_unmatched_sorted = teacher_unmatched_probs.sort(dim=-1, descending=True).values
+            student_unmatched_sorted = student_unmatched_probs.sort(dim=-1, descending=True).values
+
+            # Pad to same size if needed
+            teacher_unmatched_size = teacher_unmatched_sorted.size(-1)
+            student_unmatched_size = student_unmatched_sorted.size(-1)
+            max_unmatched_size = max(teacher_unmatched_size, student_unmatched_size)
+
+            if teacher_unmatched_size < max_unmatched_size:
+                teacher_unmatched_sorted = F.pad(
+                    teacher_unmatched_sorted,
+                    (0, max_unmatched_size - teacher_unmatched_size),
+                )
+            if student_unmatched_size < max_unmatched_size:
+                student_unmatched_sorted = F.pad(
+                    student_unmatched_sorted,
+                    (0, max_unmatched_size - student_unmatched_size),
+                )
+
+            # L1 loss on sorted unmatched tokens
+            unmatched_loss = F.l1_loss(student_unmatched_sorted, teacher_unmatched_sorted, reduction="sum")
+            unmatched_loss /= student_aligned.size(0)  # Normalize by sequence length
+
+        # 3. Combine losses with weights
+        if self.hybrid_matched_weight is None:
+            # Use adaptive weighting based on vocabulary overlap
+            hybrid_matched_weight = matched_token_count / max(1, teacher_vocab_size)
+            hybrid_unmatched_weight = 1.0 - hybrid_matched_weight
+        else:
+            # Use fixed weights provided in config
+            hybrid_matched_weight = self.hybrid_matched_weight
+            hybrid_unmatched_weight = self.hybrid_unmatched_weight
+
+        total_loss = hybrid_matched_weight * matched_loss + hybrid_unmatched_weight * unmatched_loss
+
+        # Store matched/unmatched components for logging
+        self.last_matched_loss = matched_loss
+        self.last_unmatched_loss = unmatched_loss
+
+        return total_loss
+
+    def _compute_jsd_loss_for_matched_tokens(self, student_logits, teacher_logits):
+        """
+        Compute JSD loss for matched vocabulary tokens.
+
+        Args:
+            student_logits: Student logits for matched tokens [seq_len, num_matched]
+            teacher_logits: Teacher logits for matched tokens [seq_len, num_matched]
+        Returns:
+            JSD loss for matched tokens
+        """
+        # Reshape to [batch_size * seq_len, vocab_size] format expected by generalized_jsd_loss
+        num_matched = student_logits.shape[1]
+
+        student_logits_reshaped = student_logits.view(-1, num_matched)
+        teacher_logits_reshaped = teacher_logits.view(-1, num_matched)
+
+        # Use the GOLD generalized JSD loss implementation that accepts probability inputs
+        jsd_loss = GOLDTrainer.generalized_jsd_loss(
+            student_logits_reshaped,
+            teacher_logits_reshaped,
+            labels=None,  # No masking needed for matched tokens
+            beta=self.beta,  # Standard JSD beta
+            temperature=1.0,  # Already applied in main computation
+            reduction="batchmean",
+            logits_are_probs=True,
+        )
+
+        return jsd_loss
+
+    def _get_start_and_size_answers(self, answer_tensors):
+        answers_index = []
+        answers_size = []
+
+        for answer in answer_tensors:
+            answer_mask = answer.ne(self.ignore_index)
+            if not answer_mask.any():
+                answers_index.append(0)
+                answers_size.append(0)
+                continue
+
+            valid_indices = answer_mask.nonzero(as_tuple=True)[0]
+            answers_index.append(int(valid_indices[0].item()))
+            answers_size.append(int(answer_mask.sum().item()))
+        return answers_index, answers_size
+
+
+# ---------------------------------------------------------------------------
+# X-Token cross-tokenizer KD (https://huggingface.co/papers/2605.21699)
+# ---------------------------------------------------------------------------
+
+# Per-process lazy caches keyed by (path, device, vocab_sizes).
+_SPARSE_PROJ_CACHE: dict = {}
+_EXACT_MAP_CACHE: dict = {}
+
+
+class _Fp32SparseMM(torch.autograd.Function):
+    """FP32 sparse-dense matmul that ignores surrounding BF16 autocast.
+
+    PyTorch has no BF16 sparse-mm kernel. ``custom_fwd``/``custom_bwd`` force FP32 inputs on the forward and disable
+    autocast in the backward, so the projection matmul stays in FP32 even inside ``autocast(bf16)``. The sparse matrix
+    is frozen, so its gradient slot returns ``None``.
+    """
+
+    @staticmethod
+    @torch.amp.custom_fwd(device_type="cuda", cast_inputs=torch.float32)
+    def forward(ctx, sparse_M, dense):
+        ctx.sparse_M = sparse_M
+        return torch.sparse.mm(sparse_M.t(), dense)
+
+    @staticmethod
+    @torch.amp.custom_bwd(device_type="cuda")
+    def backward(ctx, grad_out):
+        return None, torch.sparse.mm(ctx.sparse_M, grad_out)
+
+
+def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_vocab_size):
+    """Return a sparse-COO projection matrix W on ``device`` (per-process cached).
+
+    Accepts two on-disk formats from the NeMo-RL projection tools:
+    - Dense top-k: ``dict["indices"]`` / ``dict["likelihoods"]`` tensors.
+    - Sparse multi-token: ``dict[(s_id, t_id)] -> count``.
+
+    Both are normalised to a coalesced float32 sparse COO tensor of shape ``(V_s, V_t)``. See Algorithm 2 in
+    https://huggingface.co/papers/2605.21699.
+    """
+    key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
+    if key in _SPARSE_PROJ_CACHE:
+        return _SPARSE_PROJ_CACHE[key]
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Projection matrix not found: {path}")
+    data = torch.load(path, map_location="cpu", weights_only=True)
+
+    normalize_rows = False
+    if isinstance(data, dict) and "indices" in data and "likelihoods" in data:
+        top_idx = data["indices"].long()
+        likelihoods = data["likelihoods"].float()
+        if top_idx.shape != likelihoods.shape:
+            raise ValueError(f"indices/likelihoods shape mismatch in {path}: {top_idx.shape} vs {likelihoods.shape}")
+        v_s, top_k = top_idx.shape
+        row = torch.arange(v_s).unsqueeze(1).expand(-1, top_k).reshape(-1)
+        col = top_idx.reshape(-1)
+        vals = likelihoods.reshape(-1)
+        indices = torch.stack([row, col], dim=0)
+    elif isinstance(data, dict) and data and all(isinstance(k, tuple) and len(k) == 2 for k in data):
+        pairs = list(data.keys())
+        row = torch.tensor([k[0] for k in pairs], dtype=torch.long)
+        col = torch.tensor([k[1] for k in pairs], dtype=torch.long)
+        indices = torch.stack([row, col], dim=0)
+        vals = torch.tensor(list(data.values()), dtype=torch.float32)
+        normalize_rows = True
+    else:
+        raise ValueError(
+            f"Unrecognised projection matrix format at {path}. Expected dict with "
+            "'indices'/'likelihoods' tensors or dict[(s_id, t_id)] -> count."
+        )
+
+    # Drop sentinels and entries outside the model vocabularies.
+    keep = (
+        (indices[0] >= 0) & (indices[0] < student_vocab_size) & (indices[1] >= 0) & (indices[1] < teacher_vocab_size)
+    )
+    indices, vals = indices[:, keep], vals[keep]
+
+    if normalize_rows and indices.numel() > 0:
+        row_sums = torch.zeros(student_vocab_size, dtype=vals.dtype)
+        row_sums.scatter_add_(0, indices[0], vals)
+        vals = vals / row_sums[indices[0]].clamp_min(torch.finfo(vals.dtype).eps)
+
+    sparse = torch.sparse_coo_tensor(
+        indices, vals, (student_vocab_size, teacher_vocab_size), device=device, dtype=torch.float32
+    ).coalesce()
+    _SPARSE_PROJ_CACHE[key] = sparse
+    return sparse
+
+
+def _load_exact_token_map(path, device, *, student_vocab_size, teacher_vocab_size):
+    """Build and cache the common/uncommon vocab partition for H-KL.
+
+    A student token joins the common set when its top-1 projection weight is >= 0.6 (relaxed threshold, hardcoded to
+    match the reference implementation). Collisions on the same teacher token keep the student with the highest weight.
+    See https://huggingface.co/papers/2605.21699 Section 3.2.
+    """
+    key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
+    if key in _EXACT_MAP_CACHE:
+        return _EXACT_MAP_CACHE[key]
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Projection matrix not found: {path}")
+    data = torch.load(path, map_location="cpu", weights_only=True)
+    if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
+        raise ValueError(f"H-KL requires the dense top-k projection format ('indices'/'likelihoods'). Got: {path}")
+
+    top_indices = data["indices"].long().to(device)
+    top_likelihoods = data["likelihoods"].float().to(device)
+    if top_indices.shape != top_likelihoods.shape:
+        raise ValueError(
+            f"indices/likelihoods shape mismatch in {path}: {top_indices.shape} vs {top_likelihoods.shape}"
+        )
+    v_s = int(student_vocab_size)
+    v_t = int(teacher_vocab_size)
+
+    sorted_vals, sorted_pos = torch.sort(top_likelihoods, dim=-1, descending=True)
+    file_v_s = min(top_indices.shape[0], v_s)
+    has_map = sorted_vals[:file_v_s, 0] >= 0.6
+
+    s_candidates = torch.where(has_map)[0]
+    empty = torch.empty(0, dtype=torch.long, device=device)
+    if s_candidates.numel() == 0:
+        result = {
+            "common_student": empty,
+            "common_teacher": empty,
+            "uncommon_student": torch.arange(v_s, device=device),
+            "uncommon_teacher": torch.arange(v_t, device=device),
+        }
+        _EXACT_MAP_CACHE[key] = result
+        return result
+
+    t_candidates = top_indices[s_candidates, sorted_pos[s_candidates, 0]]
+    prob_candidates = sorted_vals[s_candidates, 0]
+
+    in_bounds = (t_candidates >= 0) & (t_candidates < v_t)
+    s_vec = s_candidates[in_bounds]
+    t_vec = t_candidates[in_bounds]
+    prob_vec = prob_candidates[in_bounds]
+
+    # Per teacher token keep the student with the highest projection weight.
+    max_prob_per_t = torch.full((v_t,), float("-inf"), device=device, dtype=prob_vec.dtype)
+    max_prob_per_t.scatter_reduce_(0, t_vec, prob_vec, reduce="amax", include_self=True)
+    eligible = prob_vec >= max_prob_per_t[t_vec]
+
+    sentinel = v_s
+    eligible_s = torch.where(eligible, s_vec, s_vec.new_full(s_vec.shape, sentinel))
+    min_s_per_t = torch.full((v_t,), sentinel, device=device, dtype=s_vec.dtype)
+    min_s_per_t.scatter_reduce_(0, t_vec, eligible_s, reduce="amin", include_self=True)
+    winner_mask = eligible & (s_vec == min_s_per_t[t_vec])
+
+    common_student = s_vec[winner_mask]
+    common_teacher = t_vec[winner_mask]
+    sort_perm = torch.argsort(common_student)
+    common_student = common_student[sort_perm]
+    common_teacher = common_teacher[sort_perm]
+
+    common_s_mask = torch.zeros(v_s, dtype=torch.bool, device=device)
+    common_s_mask[common_student] = True
+    common_t_mask = torch.zeros(v_t, dtype=torch.bool, device=device)
+    common_t_mask[common_teacher] = True
+
+    result = {
+        "common_student": common_student,
+        "common_teacher": common_teacher,
+        "uncommon_student": (~common_s_mask).nonzero(as_tuple=True)[0],
+        "uncommon_teacher": (~common_t_mask).nonzero(as_tuple=True)[0],
+    }
+    _EXACT_MAP_CACHE[key] = result
+    return result
+
+
+class XTokenLoss(nn.Module):
+    """Cross-tokenizer knowledge-distillation loss with projection-matrix alignment.
+
+    Implements two variants from https://huggingface.co/papers/2605.21699:
+
+    - ``"p_kl"`` (Projection KL, paper Eq. 4): projects the full student distribution to teacher vocab space via a
+      sparse matrix W and computes forward KL, recovering signal for tokens in the uncommon set.
+    - ``"h_kl"`` (Hybrid KL, paper Eq. 3 and 5): GOLD hybrid structure with the common set built via top-1 mapping
+      under W (threshold ≥ 0.6) rather than strict string equality.
+
+    Both paths apply T² gradient scaling (Hinton 2015) and optionally a stop-gradient dynamic CE/KD balancing factor
+    (paper Eq. 7).
+
+    Token-span alignment reuses TRL's ``ULDLoss._align_by_byte_offsets``.
+    """
+
+    def __init__(
+        self,
+        config,
+        student_vocab_size,
+        teacher_vocab_size,
+        student_eos_token_id=None,
+        teacher_eos_token_id=None,
+    ):
+        super().__init__()
+        self.loss_type = config.xtoken_loss_type
+        self.projection_path = config.xtoken_projection_matrix_path
+        self.temperature = config.xtoken_temperature
+        self.dynamic_scaling = config.xtoken_dynamic_scaling
+        self.uncommon_topk = config.xtoken_uncommon_topk
+        self.vocab_topk = config.xtoken_vocab_topk
+        self.kl_weight = config.xtoken_kl_weight
+        self.ce_scale = config.xtoken_ce_scale
+        self.skip_student_eos = config.uld_skip_student_eos
+        self.skip_teacher_eos = config.uld_skip_teacher_eos
+        self.student_vocab_size = student_vocab_size
+        self.teacher_vocab_size = teacher_vocab_size
+        self.student_eos_token_id = student_eos_token_id
+        self.teacher_eos_token_id = teacher_eos_token_id
+        self.ignore_index = -100
+
+    def _proj_matrix(self, device):
+        return _load_sparse_projection_matrix(
+            self.projection_path,
+            device,
+            student_vocab_size=self.student_vocab_size,
+            teacher_vocab_size=self.teacher_vocab_size,
+        )
+
+    def _exact_map(self, device):
+        return _load_exact_token_map(
+            self.projection_path,
+            device,
+            student_vocab_size=self.student_vocab_size,
+            teacher_vocab_size=self.teacher_vocab_size,
+        )
+
+    def forward(
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_byte_offsets,
+        teacher_byte_offsets,
+        loss_counts=None,
+    ):
+        teacher_logits = teacher_logits.detach()
+        device = student_logits.device
+        T = self.temperature
+        batch_size = student_logits.size(0)
+
+        if teacher_logits.shape[-1] > self.teacher_vocab_size:
+            teacher_logits = teacher_logits[..., : self.teacher_vocab_size]
+        if student_logits.shape[-1] > self.student_vocab_size:
+            student_logits = student_logits[..., : self.student_vocab_size]
+
+        alignment = self._get_alignment(student_labels, teacher_labels, student_byte_offsets, teacher_byte_offsets)
+
+        top_idx = projection = None
+        if self.loss_type == "p_kl" and any(paired for *_, paired in alignment):
+            vocab = teacher_logits.shape[-1]
+            topk = min(self.vocab_topk, vocab) if self.vocab_topk > 0 else vocab
+            top_idx = teacher_logits.amax(dim=(0, 1)).topk(topk).indices.sort().values
+            projection = self._proj_matrix(device)
+            if top_idx.numel() < projection.size(1):
+                # Restrict the sparse projection before matmul to avoid a full teacher-vocabulary output.
+                indices = projection.indices()
+                columns = torch.searchsorted(top_idx, indices[1])
+                keep = (columns < top_idx.numel()) & (top_idx[columns.clamp_max(top_idx.numel() - 1)] == indices[1])
+                projection = torch.sparse_coo_tensor(
+                    torch.stack([indices[0, keep], columns[keep]]),
+                    projection.values()[keep],
+                    (self.student_vocab_size, top_idx.numel()),
+                    device=device,
+                ).coalesce()
+
+        kd_terms = []
+        ce_terms = []
+        acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
+
+        for i, (s0, ss, t0, ts, paired) in enumerate(alignment):
+            # CE covers every completion label, EOS included; only the KD span skips EOS.
+            ce_mask = student_labels[i, 1:] != self.ignore_index
+            ce_logits_i = student_logits[i, :-1][ce_mask]
+            ce_labels_i = student_labels[i, 1:][ce_mask]
+            ce_terms.append(F.cross_entropy(ce_logits_i.float(), ce_labels_i, reduction="sum"))
+            with torch.no_grad():
+                acc_num += int((ce_logits_i.argmax(dim=-1) == ce_labels_i).sum().item())
+                acc_den += int(ce_mask.sum().item())
+
+            if ss <= 0 or ts <= 0 or not paired:
+                kd_terms.append(student_logits[i].sum() * 0.0)
+                continue
+
+            # Alignment offsets describe the labels, one position after their prediction logits.
+            s_logits_i = student_logits[i, s0 - 1 : s0 + ss - 1]
+            t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
+            valid_pairs_total += len(paired)
+            if self.loss_type == "p_kl":
+                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, T, top_idx, projection)
+                proj_acc_num += p_num
+                proj_acc_den += p_den
+            else:
+                kd_i = self._compute_h_kl(s_logits_i, t_logits_i, paired, device, T)
+            kd_terms.append(kd_i * len(paired))
+
+        kd = torch.stack(kd_terms).sum() / max(valid_pairs_total, 1)
+        ce = torch.stack(ce_terms).sum() / max(acc_den, 1)
+
+        self.last_kl_loss = kd.detach()
+        self.last_ce_loss = ce.detach()
+        self.last_accuracy_num = acc_num
+        self.last_accuracy_den = acc_den
+        self.last_num_valid_pairs = float(valid_pairs_total) / batch_size
+        self.last_proj_accuracy_num = proj_acc_num
+        self.last_proj_accuracy_den = proj_acc_den
+
+        if loss_counts is not None:
+            ce_count, kd_count = loss_counts.clamp_min(1)
+            kd = kd * valid_pairs_total / kd_count
+            ce = ce * acc_den / ce_count
+
+        if self.dynamic_scaling:
+            # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
+            kd_abs = kd.detach().abs()
+            scale = torch.where(kd_abs > 0, ce.detach().abs() / kd_abs, torch.ones_like(kd_abs))
+            return scale * kd + ce
+        return self.kl_weight * kd + self.ce_scale * ce
+
+    def _get_alignment(self, student_labels, teacher_labels, student_offsets, teacher_offsets):
+        s_starts, s_sizes = self._answer_spans(
+            student_labels, skip_eos=self.skip_student_eos, eos_token_id=self.student_eos_token_id
+        )
+        t_starts, t_sizes = self._answer_spans(
+            teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
+        )
+        alignment = []
+        for i, (s0, ss, t0, ts) in enumerate(zip(s_starts, s_sizes, t_starts, t_sizes, strict=True)):
+            paired = []
+            if ss > 0 and ts > 0:
+                s_groups, t_groups = ULDLoss._align_by_byte_offsets(
+                    student_offsets[i, s0 : s0 + ss].tolist(), teacher_offsets[i, t0 : t0 + ts].tolist()
+                )
+                paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=True) if sg and tg]
+            alignment.append((s0, ss, t0, ts, paired))
+        return alignment
+
+    @staticmethod
+    def _answer_spans(labels, *, skip_eos, eos_token_id):
+        starts, sizes = [], []
+        for row in labels:
+            mask = row.ne(-100)
+            mask[0] = False
+            if not mask.any():
+                starts.append(0)
+                sizes.append(0)
+                continue
+            starts.append(int(mask.nonzero(as_tuple=True)[0][0].item()))
+            sz = int(mask.sum().item())
+            last_idx = int(mask.nonzero(as_tuple=True)[0][-1].item())
+            sizes.append(sz - 1 if skip_eos and row[last_idx].item() == eos_token_id else sz)
+        return starts, sizes
+
+    @staticmethod
+    def _chunk_average(values, groups):
+        return torch.stack([values[group].mean(dim=0) for group in groups])
+
+    def _compute_p_kl(self, s_logits, t_logits, paired, T, top_idx, projection):
+        """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
+
+        Implements Eq. (4) from https://huggingface.co/papers/2605.21699.
+        """
+        eps = 1e-10
+        s_groups = [p[0] for p in paired]
+        t_groups = [p[1] for p in paired]
+
+        s_probs = self._chunk_average(F.softmax(s_logits.float() / T, dim=-1), s_groups)
+
+        s_proj_topk = _Fp32SparseMM.apply(projection, s_probs.t()).t()
+        s_proj_topk = s_proj_topk / (s_proj_topk.sum(dim=-1, keepdim=True) + eps)
+        s_log_proj = (s_proj_topk + eps).log()
+
+        # Average of log-softmaxes, not renormalized, as in the reference implementation
+        t_log = F.log_softmax(t_logits[:, top_idx].float() / T, dim=-1)
+        t_log_topk = self._chunk_average(t_log, t_groups)
+
+        with torch.no_grad():
+            proj_top1 = s_proj_topk.argmax(dim=-1)
+            tgt_top1 = t_log_topk.argmax(dim=-1)
+            proj_acc_n = int((proj_top1 == tgt_top1).sum().item())
+            proj_acc_d = int(proj_top1.shape[0])
+
+        per_chunk_kl = F.kl_div(s_log_proj, t_log_topk, reduction="none", log_target=True).sum(dim=-1)
+        return per_chunk_kl.mean() * (T * T), proj_acc_n, proj_acc_d
+
+    def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
+        """H-KL: common-set forward KL + uncommon sorted-L1, T² scaling.
+
+        Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3) and Eq. (5) from
+        https://huggingface.co/papers/2605.21699.
+        """
+        s_groups = [p[0] for p in paired]
+        t_groups = [p[1] for p in paired]
+
+        em = self._exact_map(device)
+        common_s, common_t = em["common_student"], em["common_teacher"]
+        uncommon_s, uncommon_t = em["uncommon_student"], em["uncommon_teacher"]
+
+        s_log = F.log_softmax(s_logits.float() / T, dim=-1)
+        t_log = F.log_softmax(t_logits.float() / T, dim=-1)
+        s_chunks = self._chunk_average(s_log, s_groups)
+        t_chunks = self._chunk_average(t_log, t_groups)
+
+        if common_s.numel() > 0:
+            # Full-vocab log-probs sliced to the common set, not renormalized, as in the reference implementation
+            s_common = s_chunks[:, common_s]
+            t_common = t_chunks[:, common_t]
+            kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
+            kl_common = kl_per_chunk.mean()
+        else:
+            kl_common = s_chunks.new_zeros(())
+
+        if uncommon_s.numel() > 0 and uncommon_t.numel() > 0:
+            s_unc = s_chunks[:, uncommon_s].exp()
+            t_unc = t_chunks[:, uncommon_t].exp()
+            s_unc_sorted = s_unc.sort(dim=-1, descending=True).values
+            t_unc_sorted = t_unc.sort(dim=-1, descending=True).values
+            if self.uncommon_topk > 0:
+                k = min(self.uncommon_topk, s_unc_sorted.shape[-1], t_unc_sorted.shape[-1])
+                s_unc_sorted = s_unc_sorted[:, :k]
+                t_unc_sorted = t_unc_sorted[:, :k]
+            cap = min(s_unc_sorted.shape[-1], t_unc_sorted.shape[-1])
+            l1_uncommon = F.l1_loss(s_unc_sorted[:, :cap], t_unc_sorted[:, :cap], reduction="none").sum(dim=-1).mean()
+        else:
+            l1_uncommon = s_chunks.new_zeros(())
+
+        return (kl_common + l1_uncommon) * (T * T)
+
+
+class GOLDTrainer(SFTTrainer):
+    xtoken_loss_fn = None
+
+    _tag_names = ["trl", "gold"]
+    _name = "GOLD"
+    _paper = {
+        "title": "Unlocking On-Policy Distillation for Any Model Family",
+        # docstyle-ignore
+        "citation": textwrap.dedent(
+            """\
+            @misc{patino2025unlocking,
+                title        = {{Unlocking On-Policy Distillation for Any Model Family}},
+                author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
+                year         = 2025,
+                url          = {https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation},
+            }"""
+        ),
+    }
+
+    def __init__(
+        self,
+        model: PreTrainedModel | nn.Module | str | None = None,
+        teacher_model: PreTrainedModel | nn.Module | str = None,
+        args: GOLDConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | None = None,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        processing_class: (
+            PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin | None
+        ) = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
+        preprocess_logits_for_metrics: (Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None) = None,
+        peft_config: Optional["PeftConfig"] = None,
+    ):
+        self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
+        self.model_revision = (args.model_init_kwargs or {}).get("revision") if isinstance(model, str) else None
+        teacher_revision = (
+            (args.teacher_model_init_kwargs or {}).get("revision", args.teacher_model_revision)
+            if isinstance(teacher_model, str)
+            else None
+        )
+        dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
+        if processing_class is None:
+            model_id = model if isinstance(model, str) else get_config_model_id(model.config)
+            processing_class = AutoProcessor.from_pretrained(
+                model_id, revision=self.model_revision, trust_remote_code=args.trust_remote_code
+            )
+            # simplified logic from SFTTrainer
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+            if self._tokenizer.pad_token is None:
+                self._tokenizer.pad_token = self._tokenizer.eos_token
+        else:
+            self._tokenizer = processing_class
+            self._is_vlm = False
+
+        self.pad_token_id = self._tokenizer.pad_token_id
+        self.use_privileged_context = args.use_privileged_context
+        self.teacher_prompt_template = args.teacher_prompt_template or "{prompt}\n\n{privileged_context}"
+        self.privileged_context_column = args.privileged_context_column
+
+        if self.use_privileged_context and self._is_vlm:
+            raise ValueError("`use_privileged_context=True` is currently supported only for text models.")
+
+        # VLM distillation: only VLM-to-VLM is supported. Both student and teacher must be
+        # VLMs so that both receive images and multimodal inputs.
+        self._teacher_processor = None
+        self._is_cross_architecture_vlm = False
+        if self._is_vlm:
+            if isinstance(teacher_model, str):
+                # Teacher not yet instantiated -- validate it's a VLM
+                teacher_proc = AutoProcessor.from_pretrained(
+                    teacher_model, revision=teacher_revision, trust_remote_code=args.trust_remote_code
+                )
+                if not isinstance(teacher_proc, ProcessorMixin):
+                    raise ValueError(
+                        "VLM distillation requires both student and teacher to be vision-language models. "
+                        "The student has a `ProcessorMixin` but the teacher does not."
+                    )
+                teacher_model_type = AutoConfig.from_pretrained(
+                    teacher_model, trust_remote_code=args.trust_remote_code
+                ).model_type
+            else:
+                # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
+                if "vision_config" not in teacher_model.config.sub_configs:
+                    raise ValueError(
+                        "VLM distillation requires both student and teacher to be vision-language models. "
+                        "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
+                        "(missing `vision_config`)."
+                    )
+                teacher_model_type = teacher_model.config.model_type
+
+            # Check for cross-architecture VLM distillation
+            student_model_type = (
+                AutoConfig.from_pretrained(model, trust_remote_code=args.trust_remote_code).model_type
+                if isinstance(model, str)
+                else model.config.model_type
+            )
+            is_cross_architecture = student_model_type and teacher_model_type != student_model_type
+            self._is_cross_architecture_vlm = is_cross_architecture
+            if is_cross_architecture:
+                warnings.warn(
+                    f"Cross-architecture VLM distillation detected: student is '{student_model_type}', "
+                    f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
+                    "model's processor, which may increase memory usage and computation time."
+                )
+            if is_cross_architecture or args.use_uld_loss or args.xtoken_loss_type != "none":
+                self._teacher_processor = (
+                    teacher_proc
+                    if isinstance(teacher_model, str)
+                    else AutoProcessor.from_pretrained(
+                        teacher_model.config._name_or_path,
+                        revision=teacher_revision,
+                        trust_remote_code=args.trust_remote_code,
+                    )
+                )
+        if self._is_cross_architecture_vlm and not (args.use_uld_loss or args.xtoken_loss_type != "none"):
+            raise ValueError(
+                "Cross-architecture VLM distillation (student and teacher have different `model_type`) is not "
+                "supported with the standard JSD loss because the models require different image token formats "
+                "and tokenizers. Enable ULD or X-Token loss for cross-tokenizer alignment."
+            )
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+        if self._is_vlm and args.max_length is not None and args.truncation_mode == "keep_end":
+            raise ValueError(
+                "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
+                "inside the prompt portion of the sequence; depending on the example, keep_end may silently "
+                "drop them, causing pixel_values to be forwarded to the model with no corresponding visual "
+                "tokens in input_ids. Use truncation_mode='keep_start' (the default) or set max_length=None."
+            )
+
+        # Respect a user-provided data_collator for text; otherwise, pick the right collator based on modality.
+        # For VLMs, always use identity collator to preserve raw PIL images in the dataloader.
+        # Raw images are needed for: (1) vLLM generation, (2) cross-architecture teacher processing.
+        # A separate _vlm_collator is stored for on-the-fly collation inside _fill_buffer.
+        if self._is_vision_dataset and data_collator is not None:
+            raise ValueError(
+                "Passing a custom data collator is not supported for VLM training. GOLD manages its own collation "
+                "to preserve raw images for generation and teacher processing; leave `data_collator=None`."
+            )
+        self._vlm_collator = None
+        if data_collator is None:
+            if self._is_vision_dataset:
+                self._vlm_collator = DataCollatorForVisionLanguageChatML(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                )
+                data_collator = identity
+            else:
+                data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
+
+        teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
+        if not isinstance(teacher_model, str) and args.teacher_model_init_kwargs is not None:
+            raise ValueError(
+                "You passed teacher_model_init_kwargs to the GOLDConfig, but your teacher_model is already instantiated."
+            )
+        dtype = teacher_model_init_kwargs.get("dtype")
+        teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
+
+        _needs_teacher_tok = args.use_uld_loss or args.xtoken_loss_type != "none"
+        if _needs_teacher_tok and args.teacher_tokenizer_name_or_path is None:
+            if isinstance(teacher_model, str):
+                args.teacher_tokenizer_name_or_path = teacher_model
+            elif teacher_model.config._name_or_path:
+                args.teacher_tokenizer_name_or_path = teacher_model.config._name_or_path
+            else:
+                raise ValueError(
+                    "`teacher_tokenizer_name_or_path` must be set when using ULD or X-Token loss with a pre-instantiated teacher model."
+                )
+
+        # The teacher revision pins a commit in the teacher model's repo, so it only applies to a tokenizer served from
+        # that same repo. ULD's cross-tokenizer setup points `teacher_tokenizer_name_or_path` at a different repo, where
+        # that commit does not exist.
+        teacher_tokenizer_revision = teacher_revision if args.teacher_tokenizer_name_or_path == teacher_model else None
+
+        if isinstance(teacher_model, str):
+            init_kwargs = dict(teacher_model_init_kwargs)
+            if args.teacher_model_revision is not None:
+                init_kwargs.setdefault("revision", args.teacher_model_revision)
+            init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                init_kwargs["device_map"] = None
+            teacher_model = create_model_from_path(teacher_model, **init_kwargs)
+        self.use_uld_loss = args.use_uld_loss
+        self.teacher_tokenizer = None
+        if _needs_teacher_tok and self._teacher_processor is not None:
+            self.teacher_tokenizer = self._teacher_processor.tokenizer
+            if self.teacher_tokenizer.pad_token is None:
+                self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
+        elif _needs_teacher_tok and args.teacher_tokenizer_name_or_path is not None:
+            self.teacher_tokenizer = AutoTokenizer.from_pretrained(
+                args.teacher_tokenizer_name_or_path,
+                revision=teacher_tokenizer_revision,
+                trust_remote_code=args.trust_remote_code,
+            )
+            if self.teacher_tokenizer.pad_token is None:
+                self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
+
+        # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
+        self.xtoken_loss_fn = None
+
+        super().__init__(
+            model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processing_class,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            peft_config=peft_config,
+        )
+
+        if args.disable_dropout:
+            disable_dropout_in_model(self.model)
+        # X-Token KD needs the original teacher vocab; only resize for same-tokenizer JSD.
+        if not args.use_uld_loss and args.xtoken_loss_type == "none":
+            teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
+
+        # Capture teacher vocab size before the model is wrapped by DeepSpeed/FSDP.
+        # Only needed when X-Token is active; avoids requiring teacher_model.config otherwise.
+        _teacher_vocab_size = (
+            min(teacher_model.config.get_text_config().vocab_size, len(self.teacher_tokenizer))
+            if args.xtoken_loss_type != "none"
+            else None
+        )
+
+        if self.is_deepspeed_enabled:
+            self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+        else:
+            self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
+
+        self.lmbda = args.lmbda
+        self.beta = args.beta
+        self.temperature = args.temperature
+        self.top_p = args.top_p
+        self.seq_kd = args.seq_kd
+        self.num_generations = args.num_generations
+
+        # Track per-step loss statistics for on/off-policy batches (used in logging)
+        self._on_policy_loss_total = 0.0
+        self._off_policy_loss_total = 0.0
+        self._on_policy_step_equiv = 0.0
+        self._off_policy_step_equiv = 0.0
+
+        # Buffering for rollouts across gradient accumulation steps
+        self._buffered_inputs = None
+        self._buffered_on_policy = None
+        self._buffered_text_logs = None
+        self._step = 0
+
+        # Hybrid ULD matched/unmatched accumulators (logged every step when ULD hybrid is used)
+        self._matched_sum = 0.0
+        self._unmatched_sum = 0.0
+        self._matched_step_eq = 0.0
+        self._unmatched_step_eq = 0.0
+
+        self._xtoken_kl_sum = 0.0
+        self._xtoken_ce_sum = 0.0
+        self._xtoken_pair_sum = 0.0
+        self._xtoken_steps = 0.0
+        self._xtoken_accuracy_num = 0.0
+        self._xtoken_accuracy_den = 0.0
+        self._xtoken_projection_num = 0.0
+        self._xtoken_projection_den = 0.0
+
+        self.uld_loss_fn = None
+        if self.use_uld_loss:
+            self.uld_loss_fn = ULDLoss(
+                config=args,
+                student_tokenizer=self._tokenizer,
+                teacher_tokenizer=self.teacher_tokenizer,
+                device=self.accelerator.device,
+            )
+
+        self.xtoken_loss_fn = None
+        if args.xtoken_loss_type != "none":
+            self.xtoken_loss_fn = XTokenLoss(
+                config=args,
+                student_vocab_size=min(self.model.config.get_text_config().vocab_size, len(self._tokenizer)),
+                teacher_vocab_size=_teacher_vocab_size,
+                student_eos_token_id=self._tokenizer.eos_token_id,
+                teacher_eos_token_id=self.teacher_tokenizer.eos_token_id,
+            )
+            self.model_accepts_loss_kwargs = True
+
+        generation_kwargs = {
+            "max_new_tokens": args.max_completion_length,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "top_k": args.top_k,
+            "pad_token_id": self.pad_token_id,
+        }
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features
+            generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and self.model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                generation_kwargs["suppress_tokens"].append(self.model.config.vision_start_token_id)
+        self.generation_config = GenerationConfig(**generation_kwargs)
+        # Keep training-specific generation kwargs to overwrite model's original generation config
+        self.generation_kwargs = generation_kwargs
+        if (
+            hasattr(self.model.generation_config, "eos_token_id")
+            and self.model.generation_config.eos_token_id is not None
+        ):
+            self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+        self.log_completions = args.log_completions
+        self.log_completion_steps = args.log_completions_steps
+        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.num_completions_to_print = args.num_completions_to_print
+        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
+        # final optimization step.
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        self._textual_logs = {
+            "prompt": deque(maxlen=maxlen),
+            "completion": deque(maxlen=maxlen),
+            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+            "advantages": deque(maxlen=maxlen),
+        }
+
+        self.use_vllm = args.use_vllm
+        if self.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and use_vllm is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+            self.vllm_generation = VLLMGeneration(
+                model=self.model,
+                accelerator=self.accelerator,
+                processing_class=self.processing_class,
+                mode=args.vllm_mode,
+                structured_outputs_regex=args.vllm_structured_outputs_regex,
+                server_base_url=args.vllm_server_base_url,
+                server_host=args.vllm_server_host,
+                server_port=args.vllm_server_port,
+                group_port=args.vllm_group_port,
+                server_timeout=args.vllm_server_timeout,
+                tensor_parallel_size=args.vllm_tensor_parallel_size,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_length=args.vllm_max_model_length or args.max_length,
+                max_num_seqs=args.per_device_train_batch_size * args.gradient_accumulation_steps,
+                enable_sleep_mode=args.vllm_enable_sleep_mode,
+                model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
+                repetition_penalty=getattr(args, "repetition_penalty", 1.0),
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=getattr(args, "min_p", 0.0),
+                max_completion_length=args.max_completion_length,
+                logprobs=None,
+            )
+            self.vllm_sync_frequency = args.vllm_sync_frequency
+            self._last_vllm_sync_step = -self.vllm_sync_frequency
+
+    def _set_signature_columns_if_needed(self):
+        super()._set_signature_columns_if_needed()
+        required_columns = [
+            "prompt",
+            "completion",
+            "prompts",
+            "prompt_attention_mask",
+            "messages",
+            "chat_template_kwargs",
+            "tools",
+            "original_prompt_text",
+            "original_completion_text",
+            "teacher_prompt_text",
+            "byte_offsets",
+            "completion_mask",
+            "images",
+            "image",
+            "pixel_values",
+            "image_grid_thw",
+            "image_position_ids",
+            "pixel_attention_mask",
+            "image_sizes",
+            "spatial_shapes",
+            "token_type_ids",
+            "mm_token_type_ids",
+        ]
+        if self._signature_columns is None:
+            self._signature_columns = required_columns
+        else:
+            for column in required_columns:
+                if column not in self._signature_columns:
+                    self._signature_columns.append(column)
+
+    def _get_train_sampler(self, dataset=None):
+        if dataset is None:
+            dataset = self.train_dataset
+        return RepeatSampler(
+            data_source=dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=self.args.generation_batch_size * self.accelerator.num_processes,
+            repeat_count=self.args.gradient_accumulation_steps,
+            shuffle=True,
+            seed=self.args.seed,
+        )
+
+    def get_train_dataloader(self):
+        """
+        Override Trainer.get_train_dataloader to load one generation batch per optimizer window.
+
+        The dataloader yields local batches of size `per_device_train_batch_size * gradient_accumulation_steps`. The
+        `RepeatSampler` (with `repeat_count=gradient_accumulation_steps`) ensures each generation batch is sampled
+        `gradient_accumulation_steps` times so Trainer's loop iterates the correct number of times. Only the first
+        batch in each window triggers `_fill_buffer`; the rest are ignored by `_prepare_inputs`.
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker,
+                num_workers=self.args.dataloader_num_workers,
+                rank=self.args.process_index,
+            )
+            if self.args.dataloader_num_workers > 0:
+                dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        if self.xtoken_loss_fn is not None and batch_samples:
+            # GOLD repeats each generation batch; count its buffered slices once.
+            self._fill_buffer(batch_samples[0], len(batch_samples))
+            self._xtoken_buffer_step = self._step
+            counts = torch.zeros(2, device=device, dtype=torch.long)
+            for inputs in self._buffered_inputs:
+                if self._vlm_collator is not None:
+                    pending = inputs
+                    inputs = self._vlm_collator([dict(example) for example in pending["_gold_vlm_lazy_examples"]])
+                    if self._teacher_processor is not None:
+                        inputs["_raw_images"] = pending["_gold_vlm_raw_images"]
+                        inputs["_raw_prompts"] = pending["_gold_vlm_raw_prompts"]
+                _, teacher_labels, _, teacher_offsets, _ = self._build_cross_tokenizer_teacher_inputs(inputs)
+                alignment = self.xtoken_loss_fn._get_alignment(
+                    inputs["labels"], teacher_labels, inputs["byte_offsets"], teacher_offsets
+                )
+                counts += counts.new_tensor(
+                    [int((inputs["labels"][:, 1:] != -100).sum()), sum(len(p) for *_, p in alignment)]
+                )
+            self._xtoken_loss_counts = self.accelerator.reduce(counts, reduction="sum")
+            num_items_in_batch = self._xtoken_loss_counts[0].clamp_min(1)
+        return batch_samples, num_items_in_batch
+
+    @profiling_decorator
+    def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
+        if not self.model.training:
+            # Evaluation is off-policy (no generation): the student never samples, both models are forwarded over
+            # the dataset's ground-truth prompt+completion and the distillation loss is taken over the completion.
+            # For text the collated tensor dict is consumed directly. For VLMs the identity collator yields raw
+            # dicts (to preserve PIL images for the train-time on-policy path), so collate them here -- mirroring
+            # the off-policy slice construction in _fill_buffer -- including the raw images/prompts the cross-arch
+            # / ULD teacher processor needs.
+            if self._vlm_collator is not None:
+                pending_slice = {"_gold_vlm_lazy_examples": list(generation_batch)}
+                if self._teacher_processor is not None:
+                    raw_images, raw_prompts = self._extract_images_and_prompts(list(generation_batch))
+                    pending_slice["_gold_vlm_raw_images"] = raw_images
+                    pending_slice["_gold_vlm_raw_prompts"] = raw_prompts
+                return self._materialize_vlm_slice(pending_slice)
+            return generation_batch
+
+        buffer_steps = self.args.gradient_accumulation_steps
+        if self.xtoken_loss_fn is not None:
+            slice_idx = self._step - self._xtoken_buffer_step
+        else:
+            if self._step % buffer_steps == 0 or self._buffered_inputs is None:
+                self._fill_buffer(generation_batch, buffer_steps)
+            slice_idx = self._step % buffer_steps
+        inputs = self._buffered_inputs[slice_idx]
+        if isinstance(inputs, dict):
+            if "_gold_vlm_on_policy_raw_examples" in inputs:
+                inputs, text_logs = self._generate_on_policy_vlm_slice(inputs)
+                self._buffered_inputs[slice_idx] = inputs
+                self._buffered_text_logs[slice_idx] = text_logs
+            elif "_gold_vlm_lazy_examples" in inputs:
+                inputs = self._materialize_vlm_slice(inputs)
+                self._buffered_inputs[slice_idx] = inputs
+        self._step += 1
+        return inputs
+
+    def _generate_on_policy_vlm_slice(
+        self, pending_slice: dict[str, Any]
+    ) -> tuple[dict[str, torch.Tensor | Any], tuple[list[str], list[str]]]:
+        """Generate and collate one non-vLLM on-policy VLM slice immediately before it is consumed."""
+        raw_examples = pending_slice["_gold_vlm_on_policy_raw_examples"]
+        generation_examples = []
+        for example in raw_examples:
+            generation_example = dict(example)
+            completion = generation_example.get("completion")
+            generation_example["completion"] = (
+                [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
+                if isinstance(completion, list)
+                else ""
+            )
+            generation_examples.append(generation_example)
+        collated = self._vlm_collator(generation_examples)
+        collated = {
+            k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in collated.items()
+        }
+
+        with unwrap_model_for_generation(
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
+        ) as unwrapped_model:
+            (
+                new_input_ids,
+                new_attention_mask,
+                new_labels,
+                prompt_texts,
+                completion_texts,
+            ) = self.generate_on_policy_outputs(
+                unwrapped_model,
+                collated,
+                self.generation_config,
+            )
+
+        updated_slice = dict(collated)
+        updated_slice["input_ids"] = new_input_ids
+        updated_slice["attention_mask"] = new_attention_mask
+        updated_slice["labels"] = new_labels
+        # Rebuild sequence-length-dependent keys to match new input_ids shape
+        new_seq_len = new_input_ids.shape[1]
+        prompt_seq_len = collated["prompts"].shape[1]
+        for k in self._SEQUENCE_KEYS:
+            if k in updated_slice:
+                sequence_dtype = updated_slice[k].dtype
+                prompt_part = self._get_prompt_sequence_key(collated, k)
+                comp_part = torch.zeros(
+                    new_input_ids.shape[0],
+                    new_seq_len - prompt_seq_len,
+                    dtype=sequence_dtype,
+                    device=new_input_ids.device,
+                )
+                updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
+        if "original_prompt_text" not in updated_slice:
+            updated_slice["original_prompt_text"] = prompt_texts
+        # Keep special tokens (e.g. EOS) so the teacher inputs are built from text covering the same generated
+        # content as the supervised `labels != -100` tokens. The alignment itself remains byte-offset based.
+        updated_slice["original_completion_text"] = completion_texts
+        self._maybe_add_completion_byte_offsets(updated_slice)
+        if self._teacher_processor is not None:
+            updated_slice["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
+            updated_slice["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
+
+        return updated_slice, (prompt_texts, completion_texts)
+
+    def _materialize_vlm_slice(self, pending_slice: dict[str, Any]) -> dict[str, torch.Tensor | Any]:
+        """Collate one pending VLM slice immediately before it is consumed."""
+        slice_inputs = self._vlm_collator([dict(example) for example in pending_slice["_gold_vlm_lazy_examples"]])
+        slice_inputs = {
+            k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in slice_inputs.items()
+        }
+
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
+            slice_inputs = self._ensure_original_text_fields(slice_inputs)
+            if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
+                raise ValueError(
+                    "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                    "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
+                    "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
+                )
+
+        if self._teacher_processor is not None:
+            slice_inputs["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
+            slice_inputs["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
+
+        return slice_inputs
+
+    @staticmethod
+    def _build_sequence_batch(
+        new_input_ids: torch.Tensor,
+        prompt_lengths: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build attention mask and labels from full sequences and prompt lengths."""
+        prompt_lengths = prompt_lengths.to(device=new_input_ids.device, dtype=torch.long)
+        positions = torch.arange(new_input_ids.shape[1], device=new_input_ids.device).unsqueeze(0)
+        completion_mask = positions >= prompt_lengths.unsqueeze(1)
+
+        new_attention_mask = attention_mask.to(device=new_input_ids.device, dtype=new_input_ids.dtype)
+
+        new_labels = torch.full_like(new_input_ids, -100)
+        new_labels[completion_mask & new_attention_mask.bool()] = new_input_ids[
+            completion_mask & new_attention_mask.bool()
+        ]
+
+        return new_attention_mask, new_labels
+
+    def _extract_images_and_prompts(self, examples: list[dict]) -> tuple[list | None, list]:
+        """
+        Extract per-example images and build prompts with multimodal messages, mirroring GRPOTrainer.
+
+        Returns `(images, prompts)` where `images` is a per-example list (entries may be `None`), or `None` when the
+        batch carries no images, and `prompts` are the prepared multimodal messages.
+        """
+        if "images" in examples[0]:
+            images = [example.get("images") for example in examples]
+        elif "image" in examples[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in examples]
+        else:
+            images = None
+        if images is not None and all(img_list is None or img_list == [] for img_list in images):
+            images = None
+
+        prompts = [example["prompt"] for example in examples]
+        if images is not None:
+            prompts = [
+                prepare_multimodal_messages(prompt, images=img_list)
+                for prompt, img_list in zip(prompts, images, strict=True)
+            ]
+        return images, prompts
+
+    def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
+        """Decode completion text from labels when raw text is absent."""
+        labels = slice_inputs.get("labels")
+        if labels is None or not isinstance(labels, torch.Tensor):
+            return None
+
+        labels_cpu = labels.detach().cpu()
+        decoded_completion_tokens: list[list[int]] = []
+        for row in labels_cpu:
+            token_ids = row[row != -100].tolist()
+            decoded_completion_tokens.append(token_ids)
+
+        return self.processing_class.batch_decode(
+            decoded_completion_tokens,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+
+    def _ensure_original_text_fields(
+        self, slice_inputs: dict[str, torch.Tensor | Any]
+    ) -> dict[str, torch.Tensor | Any]:
+        """Populate original prompt/completion text fields when missing."""
+        if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
+            return slice_inputs
+
+        prompts = slice_inputs.get("prompts")
+        if prompts is None or not isinstance(prompts, torch.Tensor):
+            return slice_inputs
+
+        prompt_texts = self.processing_class.batch_decode(
+            prompts,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        completion_texts = self._decode_completion_texts_from_labels(slice_inputs)
+        if completion_texts is None:
+            return slice_inputs
+
+        updated_slice = dict(slice_inputs)
+        updated_slice["original_prompt_text"] = prompt_texts
+        updated_slice["original_completion_text"] = completion_texts
+        return updated_slice
+
+    @staticmethod
+    def _get_prompt_sequence_key(inputs: dict[str, torch.Tensor | Any], key: str) -> torch.Tensor:
+        """Align a sequence-length-dependent key with the left-padded prompt tensor."""
+        values = inputs[key]
+        prompts = inputs["prompts"]
+        prompt_attention_mask = inputs.get("prompt_attention_mask")
+
+        if prompt_attention_mask is None:
+            return values[:, : prompts.shape[1]]
+
+        prompt_values = values.new_zeros(prompts.shape)
+        for i, mask in enumerate(prompt_attention_mask.bool()):
+            prompt_length = int(mask.sum().item())
+            if prompt_length:
+                prompt_values[i, mask] = values[i, :prompt_length]
+        return prompt_values
+
+    _SEQUENCE_KEYS = ("token_type_ids", "mm_token_type_ids")
+    _MODEL_INPUT_RESERVED_KEYS = frozenset(
+        (
+            "input_ids",
+            "attention_mask",
+            "labels",
+            "prompts",
+            "prompt_attention_mask",
+            "completion_mask",
+            "assistant_masks",
+            "original_prompt_text",
+            "original_completion_text",
+            "teacher_prompt_text",
+            "byte_offsets",
+        )
+    )
+
+    def _get_model_forward_kwargs(
+        self, inputs: dict[str, torch.Tensor | Any], exclude: tuple[str, ...] = ()
+    ) -> dict[str, torch.Tensor]:
+        reserved_keys = self._MODEL_INPUT_RESERVED_KEYS | set(exclude)
+        return {
+            k: v
+            for k, v in inputs.items()
+            if k not in reserved_keys and not k.startswith("_") and isinstance(v, torch.Tensor)
+        }
+
+    def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
+        """Attach completion-relative byte offsets to on-policy ULD batches.
+
+        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
+        """
+        if not (
+            self.use_uld_loss
+            and self.teacher_tokenizer is not None
+            and self.uld_loss_fn is not None
+            and self.uld_loss_fn.use_extended_uld
+        ):
+            return
+
+        new_input_ids = updated_slice["input_ids"]
+        new_labels = updated_slice["labels"]
+        seq_len = new_input_ids.shape[1]
+
+        # convert_ids_to_tokens is a tokenizer method; VLM processors expose it via `.tokenizer`.
+        tokenizer = self._tokenizer
+        byte_level = is_byte_level_tokenizer(tokenizer.backend_tokenizer)
+
+        rows: list[list[tuple[int, int]]] = []
+        for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
+            offs: list[tuple[int, int]] = [(0, 0)] * seq_len
+            cumulative = 0
+            for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
+                if label == -100:
+                    continue
+                nb = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0], byte_level)
+                offs[pos] = (cumulative, cumulative + nb)
+                cumulative += nb
+            rows.append(offs)
+        updated_slice["byte_offsets"] = torch.tensor(rows, dtype=torch.long, device=new_input_ids.device)
+
+    @profiling_decorator
+    def _fill_buffer(
+        self,
+        generation_batch: dict[str, torch.Tensor | Any] | list[dict],
+        buffer_steps: int,
+    ):
+        # The batch is split into `buffer_steps` equal chunks via floor division (here and in
+        # `split_tensor_dict` below). A batch size that is not divisible by `buffer_steps` would
+        # silently drop examples or produce empty chunks, so fail fast instead.
+        batch_len = (
+            len(generation_batch)
+            if isinstance(generation_batch, list)
+            else next(t for t in generation_batch.values() if t is not None).shape[0]
+        )
+        if batch_len % buffer_steps != 0:
+            raise ValueError(
+                "The generation batch size must be divisible by gradient_accumulation_steps. Set "
+                "dataloader_drop_last=True or adjust per_device_train_batch_size / gradient_accumulation_steps."
+            )
+
+        if self._vlm_collator is not None:
+            # Identity collator path: generation_batch is list[dict] with raw PIL images.
+            # Split into chunks via list slicing, then collate on-the-fly per slice.
+            chunk_size = len(generation_batch) // buffer_steps
+            raw_slices = [generation_batch[i * chunk_size : (i + 1) * chunk_size] for i in range(buffer_steps)]
+            slices = None  # not used in this path
+        else:
+            raw_slices = None  # not used in this path
+            slices = split_tensor_dict(generation_batch, buffer_steps)
+
+        if self.accelerator.is_main_process:
+            on_policy_flags = [random.random() <= self.lmbda for _ in range(buffer_steps)]
+        else:
+            on_policy_flags = [False] * buffer_steps
+
+        on_policy_flags = broadcast_object_list(on_policy_flags, from_process=0)
+        on_policy_indices = [i for i, flag in enumerate(on_policy_flags) if flag]
+
+        self._buffered_inputs = [None] * buffer_steps
+        self._buffered_on_policy = on_policy_flags
+        self._buffered_text_logs = [None] * buffer_steps
+
+        for i, flag in enumerate(on_policy_flags):
+            if not flag:
+                if self._vlm_collator is not None:
+                    # Extract raw images and prompts BEFORE collation, since the collator
+                    # mutates examples in place (pops "image", overwrites "prompt").
+                    slice_inputs = {"_gold_vlm_lazy_examples": raw_slices[i]}
+                    if self._teacher_processor is not None:
+                        raw_images, raw_prompts = self._extract_images_and_prompts(raw_slices[i])
+                        slice_inputs["_gold_vlm_raw_images"] = raw_images
+                        slice_inputs["_gold_vlm_raw_prompts"] = raw_prompts
+                    self._buffered_inputs[i] = slice_inputs
+                    continue
+
+                slice_inputs = slices[i]
+
+                _needs_text = (
+                    self.use_uld_loss or self.xtoken_loss_fn is not None
+                ) and self.teacher_tokenizer is not None
+                if _needs_text and (
+                    "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
+                        "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
+                        "teacher tokenizer has source text to align against."
+                    )
+                if (
+                    self.use_uld_loss
+                    and self.teacher_tokenizer is not None
+                    and self.uld_loss_fn.use_extended_uld
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
+                        "`use_extended_uld=False`."
+                    )
+                if (
+                    self.xtoken_loss_fn is not None
+                    and self.teacher_tokenizer is not None
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. X-Token loss requires byte offsets for "
+                        "token-span alignment. Use the default DataCollatorForChatML."
+                    )
+
+                self._buffered_inputs[i] = slice_inputs
+
+        if on_policy_indices:
+            if self._vlm_collator is not None:
+                self._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
+            else:
+                self._generate_on_policy_for_slices(slices, on_policy_indices)
+
+    @profiling_decorator
+    def _generate_on_policy_for_slices(
+        self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]
+    ):
+        prompt_ids_list = []
+        local_slice_indices = []
+        # Budget the prompt to max_length - max_new_tokens before generation, keeping the END of the
+        # prompt (the generation marker), so the student generates from and trains on the same context
+        # and prompt + completion fit in max_length.
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+            for prompt_idx, prompt in enumerate(slice_inputs["prompts"]):
+                if prompt_attention_mask is not None:
+                    prompt = prompt[prompt_attention_mask[prompt_idx].bool()]
+                prompt_ids = prompt.tolist()
+                if prompt_max_length is not None and len(prompt_ids) > prompt_max_length:
+                    prompt_ids = prompt_ids[-prompt_max_length:]
+                prompt_ids_list.append(prompt_ids)
+                local_slice_indices.append(slice_idx)
+
+        prompts_text = self.processing_class.batch_decode(
+            prompt_ids_list,
+            skip_special_tokens=False,
+        )
+
+        if not self.use_vllm:
+            self._generate_non_vllm_for_slices(slices, on_policy_indices)
+            return
+
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
+
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
+            prompts=prompt_ids_list,
+            images=None,
+            num_generations=self.num_generations,
+        )
+
+        self._process_completions_to_buffer(
+            slices,
+            on_policy_indices,
+            local_slice_indices,
+            completion_ids,
+            prompt_ids_list,
+            prompts_text,
+            self.generation_config.max_new_tokens,
+        )
+
+    def _generate_non_vllm_for_slices(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
+        """Fallback generation without vLLM (uses model.generate per slice)."""
+        with unwrap_model_for_generation(
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
+        ) as unwrapped_model:
+            max_completion_length = self.generation_config.max_new_tokens
+            prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+            pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+            for slice_idx in on_policy_indices:
+                slice_inputs = slices[slice_idx]
+                if prompt_max_length is not None:
+                    # Budget per real token (keep-end), mirroring the vLLM path so both keep the same tokens.
+                    # Trigger on the real-token count, not the padded width, and rebuild only when a row
+                    # overflows, so no pad columns are carried into the budgeted prompt.
+                    prompts = slice_inputs["prompts"]
+                    prompt_attention_mask = slice_inputs.get("prompt_attention_mask")
+                    budgeted_rows = []
+                    needs_budget = False
+                    for row_idx, prompt in enumerate(prompts):
+                        real_ids = (
+                            prompt[prompt_attention_mask[row_idx].bool()]
+                            if prompt_attention_mask is not None
+                            else prompt
+                        )
+                        if real_ids.shape[0] > prompt_max_length:
+                            real_ids = real_ids[-prompt_max_length:]
+                            needs_budget = True
+                        budgeted_rows.append(real_ids)
+                    if needs_budget:
+                        slice_inputs = dict(slice_inputs)
+                        slice_inputs["prompts"] = pad(budgeted_rows, padding_side="left", padding_value=pad_token_id)
+                        slice_inputs["prompt_attention_mask"] = pad(
+                            [torch.ones(row.shape[0], dtype=torch.long, device=row.device) for row in budgeted_rows],
+                            padding_side="left",
+                            padding_value=0,
+                        )
+                result = self.generate_on_policy_outputs(
+                    unwrapped_model,
+                    slice_inputs,
+                    self.generation_config,
+                )
+                (
+                    new_input_ids,
+                    new_attention_mask,
+                    new_labels,
+                    prompt_texts,
+                    completion_texts,
+                ) = result
+
+                updated_slice = dict(slice_inputs)
+                updated_slice["input_ids"] = new_input_ids
+                updated_slice["attention_mask"] = new_attention_mask
+                updated_slice["labels"] = new_labels
+                updated_slice["original_prompt_text"] = prompt_texts
+                updated_slice["original_completion_text"] = completion_texts
+                self._maybe_add_completion_byte_offsets(updated_slice)
+
+                self._buffered_inputs[slice_idx] = updated_slice
+                self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
+
+    def _generate_on_policy_vlm_raw(self, raw_slices: list[list[dict]], on_policy_indices: list[int]):
+        """On-policy generation from raw VLM examples, preserving PIL images for vLLM."""
+        all_prompt_ids = []
+        all_images = []
+        all_prompts = []
+        all_raw_examples = []
+        local_slice_indices = []
+        slice_raw_data = {}
+        max_completion_length = self.generation_config.max_new_tokens
+        prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
+
+        for slice_idx in on_policy_indices:
+            raw_examples = raw_slices[slice_idx]
+
+            images, prompts = self._extract_images_and_prompts(raw_examples)
+
+            prompts = [
+                [
+                    (
+                        {**msg, "content": [{"type": "text", "text": msg["content"]}]}
+                        if isinstance(msg.get("content"), str)
+                        else msg
+                    )
+                    for msg in prompt
+                ]
+                for prompt in prompts
+            ]
+
+            if not self.use_vllm:
+                slice_raw_data[slice_idx] = (raw_examples, images, prompts, None)
+                continue
+
+            # TODO: add self.tools support
+            # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
+            # batched unpadded input (transformers#44514).
+            # Fixed in transformers 5.4.0 (transformers#44563).
+            needs_padding_workaround = Version("5.3.0") <= Version(transformers.__version__) < Version("5.4.0")
+            tokenized = self.processing_class.apply_chat_template(
+                conversation=prompts,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                **({"padding": True} if needs_padding_workaround else {}),
+            )
+            if needs_padding_workaround:
+                # Unpad input_ids: remove padding tokens using attention_mask to get per-sequence lists
+                prompt_ids_list = [
+                    [tok for tok, m in zip(ids, mask, strict=True) if m]
+                    for ids, mask in zip(tokenized["input_ids"], tokenized["attention_mask"], strict=True)
+                ]
+            else:
+                prompt_ids_list = tokenized["input_ids"]
+            if prompt_max_length is not None:
+                # Do not truncate VLM prompts: a token-level slice can cut through the expanded image-token block,
+                # desyncing input_ids from the image features (garbage generations), and the buffered training
+                # examples are rebuilt from the untruncated rows, so the completion would be sampled under a
+                # different prompt than the one used for the loss. Fail fast instead.
+                for prompt_ids in prompt_ids_list:
+                    if len(prompt_ids) > prompt_max_length:
+                        raise ValueError(
+                            f"A tokenized VLM prompt has {len(prompt_ids)} tokens (including expanded image "
+                            f"tokens), exceeding the prompt budget of max_length - max_completion_length = "
+                            f"{self.args.max_length} - {max_completion_length} = {prompt_max_length}. Increase `max_length` or set it to `None`."
+                        )
+
+            slice_raw_data[slice_idx] = (raw_examples, images, prompts, prompt_ids_list)
+
+            for i, example in enumerate(raw_examples):
+                all_prompt_ids.append(prompt_ids_list[i])
+                all_images.append(images[i] if images is not None else None)
+                all_prompts.append(prompts[i])
+                all_raw_examples.append(example)
+                local_slice_indices.append(slice_idx)
+
+        if not self.use_vllm:
+            for slice_idx in on_policy_indices:
+                raw_examples, images, prompts, _ = slice_raw_data[slice_idx]
+                has_images = images is not None and any(img is not None for img in images)
+                pending_slice = {"_gold_vlm_on_policy_raw_examples": raw_examples}
+                if self._teacher_processor is not None:
+                    pending_slice["_gold_vlm_raw_images"] = images if has_images else None
+                    pending_slice["_gold_vlm_raw_prompts"] = prompts
+                self._buffered_inputs[slice_idx] = pending_slice
+            return
+
+        all_prompts_text = self.processing_class.batch_decode(all_prompt_ids, skip_special_tokens=True)
+        if (
+            self.state.global_step != self._last_vllm_sync_step
+            and self.state.global_step >= self._last_vllm_sync_step + self.vllm_sync_frequency
+        ):
+            self.vllm_generation.sync_weights()
+            self._last_vllm_sync_step = self.state.global_step
+
+        if any(img is not None for img in all_images):
+            generate_images = all_images
+        else:
+            generate_images = None
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
+            prompts=all_prompt_ids,
+            images=generate_images,
+            num_generations=self.num_generations,
+        )
+
+        all_completion_texts = []
+        for comp_ids in completion_ids:
+            if len(comp_ids) > max_completion_length:
+                comp_ids = comp_ids[:max_completion_length]
+            all_completion_texts.append(
+                self.processing_class.decode(
+                    comp_ids,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+
+        # Redistribute completions to slices. The RepeatSampler has already duplicated examples
+        # `num_generations` times, so completions align 1:1 with the sampled input entries.
+        slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_raw = {idx: [] for idx in on_policy_indices}
+        slice_images = {idx: [] for idx in on_policy_indices}
+        slice_prompts = {idx: [] for idx in on_policy_indices}
+        slice_prompts_text = {idx: [] for idx in on_policy_indices}
+
+        for i, slice_idx in enumerate(local_slice_indices):
+            slice_completions[slice_idx].append(all_completion_texts[i])
+            slice_raw[slice_idx].append(all_raw_examples[i])
+            slice_images[slice_idx].append(all_images[i])
+            slice_prompts[slice_idx].append(all_prompts[i])
+            slice_prompts_text[slice_idx].append(all_prompts_text[i])
+
+        for slice_idx in on_policy_indices:
+            completion_texts = slice_completions[slice_idx]
+            raw_for_slice = slice_raw[slice_idx]
+            images_for_slice = slice_images[slice_idx]
+            prompts_for_slice = slice_prompts[slice_idx]
+
+            # Build synthetic examples: original prompt + generated completion
+            synthetic_examples = []
+            for i, example in enumerate(raw_for_slice):
+                synthetic = dict(example)
+                # Wrap as content blocks so VLM chat templates (e.g. SmolVLM) that index
+                # `message.content[0]` can render the synthetic assistant turn.
+                synthetic["completion"] = [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": completion_texts[i]}],
+                    }
+                ]
+                synthetic_examples.append(synthetic)
+
+            has_images = any(img is not None for img in images_for_slice)
+            pending_slice = {
+                "_gold_vlm_lazy_examples": synthetic_examples,
+            }
+            if self._teacher_processor is not None:
+                pending_slice["_gold_vlm_raw_images"] = images_for_slice if has_images else None
+                pending_slice["_gold_vlm_raw_prompts"] = prompts_for_slice
+            self._buffered_inputs[slice_idx] = pending_slice
+            self._buffered_text_logs[slice_idx] = (
+                slice_prompts_text[slice_idx],
+                completion_texts,
+            )
+
+    def _process_completions_to_buffer(
+        self,
+        slices: list[dict[str, torch.Tensor | Any]],
+        on_policy_indices: list[int],
+        local_slice_indices: list[int],
+        completion_ids: list,
+        prompt_ids_list: list[list[int]],
+        prompts_text: list[str],
+        max_completion_length: int,
+    ):
+        """
+        Process vLLM completions and update buffered inputs for on-policy slices.
+        """
+        device = self.accelerator.device
+        pad_token_id = self.processing_class.pad_token_id if self.processing_class.pad_token_id is not None else 0
+
+        slice_completions = {idx: [] for idx in on_policy_indices}
+        slice_prompt_ids = {idx: [] for idx in on_policy_indices}
+        slice_prompts = {idx: [] for idx in on_policy_indices}
+
+        for i, slice_idx in enumerate(local_slice_indices):
+            slice_completions[slice_idx].append(completion_ids[i])
+            slice_prompt_ids[slice_idx].append(prompt_ids_list[i])
+            slice_prompts[slice_idx].append(prompts_text[i])
+
+        for slice_idx in on_policy_indices:
+            slice_inputs = slices[slice_idx]
+            completion_ids_for_slice = slice_completions[slice_idx]
+            prompt_ids_for_slice = slice_prompt_ids[slice_idx]
+            prompt_txts = slice_prompts[slice_idx]
+
+            # Prompts are already budgeted to max_length - max_new_tokens before generation by the
+            # callers, so no truncation happens here; just build tensors and left-pad.
+            prompt_tensors = []
+            prompt_attention_masks = []
+            for prompt_ids in prompt_ids_for_slice:
+                prompt_tensor = torch.tensor(prompt_ids, device=device, dtype=torch.long)
+                prompt_tensors.append(prompt_tensor)
+                prompt_attention_masks.append(torch.ones(len(prompt_ids), device=device, dtype=torch.long))
+
+            prompt_ids = pad(prompt_tensors, padding_side="left", padding_value=pad_token_id)
+            prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
+
+            # Decode the prompt (already budgeted by the callers) so the teacher conditions on the same
+            # context the student saw. `clean_up_tokenization_spaces=False` matches the completion decode
+            # below so byte counts stay aligned.
+            prompt_txts_with_special = self.processing_class.batch_decode(
+                [ids.tolist() for ids in prompt_tensors],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+            completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
+            completion_ids_for_text: list[list[int]] = []
+            padded_completion_ids_list = []
+            completion_attention_masks = []
+            for completion_tensor in completion_ids_tensors:
+                if len(completion_tensor) > max_completion_length:
+                    truncated_completion_tensor = completion_tensor[:max_completion_length]
+                    padded_completion_ids_list.append(truncated_completion_tensor)
+                    completion_ids_for_text.append(truncated_completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(
+                            len(truncated_completion_tensor),
+                            device=device,
+                            dtype=torch.long,
+                        )
+                    )
+                elif len(completion_tensor) < max_completion_length:
+                    padding_needed = max_completion_length - len(completion_tensor)
+                    padded_tensor = torch.cat(
+                        [
+                            completion_tensor,
+                            torch.full(
+                                (padding_needed,),
+                                pad_token_id,
+                                device=device,
+                                dtype=completion_tensor.dtype,
+                            ),
+                        ]
+                    )
+                    padded_completion_ids_list.append(padded_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.cat(
+                            [
+                                torch.ones(
+                                    len(completion_tensor),
+                                    device=device,
+                                    dtype=torch.long,
+                                ),
+                                torch.zeros(padding_needed, device=device, dtype=torch.long),
+                            ]
+                        )
+                    )
+                else:
+                    padded_completion_ids_list.append(completion_tensor)
+                    completion_ids_for_text.append(completion_tensor.tolist())
+                    completion_attention_masks.append(
+                        torch.ones(len(completion_tensor), device=device, dtype=torch.long)
+                    )
+
+            completion_ids_padded = torch.stack(padded_completion_ids_list)
+            completion_attention_mask = torch.stack(completion_attention_masks)
+
+            new_input_ids = torch.cat([prompt_ids, completion_ids_padded], dim=1)
+            new_attention_mask = torch.cat([prompt_attention_mask, completion_attention_mask], dim=1)
+            prompt_lengths = torch.full((prompt_ids.shape[0],), prompt_ids.shape[1], device=device)
+            new_attention_mask, new_labels = self._build_sequence_batch(
+                new_input_ids,
+                prompt_lengths,
+                attention_mask=new_attention_mask,
+            )
+
+            completion_texts = self.processing_class.batch_decode(
+                completion_ids_for_text,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+            updated_slice = dict(slice_inputs)
+            updated_slice["input_ids"] = new_input_ids
+            updated_slice["attention_mask"] = new_attention_mask
+            updated_slice["labels"] = new_labels
+            # Update prompts to match the new padding width so prompt_length stays consistent
+            updated_slice["prompts"] = prompt_ids
+            updated_slice["prompt_attention_mask"] = prompt_attention_mask
+            updated_slice["original_prompt_text"] = prompt_txts_with_special
+            updated_slice["original_completion_text"] = completion_texts
+            self._maybe_add_completion_byte_offsets(updated_slice)
+
+            self._buffered_inputs[slice_idx] = updated_slice
+            self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
+
+    def _prepare_dataset(
+        self,
+        dataset: Dataset | IterableDataset,
+        processing_class: (PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin),
+        args,
+        packing: bool,
+        formatting_func: Callable[[dict], str] | None,
+        dataset_name: str,
+    ) -> Dataset | IterableDataset:
+        """Preserve original text fields when the teacher needs separately constructed inputs."""
+        # For VLM datasets, skip dataset preparation entirely — the VLM collator handles tokenization
+        # and image processing on the fly, similar to how SFTTrainer skips prep for vision datasets.
+        if self._is_vision_dataset:
+            return dataset
+
+        column_names = list(next(iter(dataset)).keys())
+        is_processed = "input_ids" in column_names
+
+        # xtoken_loss_fn is set after super().__init__() returns, so check args instead.
+        _cross_tok = (self.use_uld_loss or args.xtoken_loss_type != "none") and self.teacher_tokenizer is not None
+        if packing and _cross_tok:
+            raise ValueError(
+                "Packing is not supported with cross-tokenizer KD (ULD or X-Token) because byte-offset alignment is "
+                "defined per prompt/completion example."
+            )
+        if packing and self.use_privileged_context:
+            raise ValueError(
+                "Packing is not supported with privileged context because teacher prompts are constructed per "
+                "prompt/completion example."
+            )
+
+        if not is_processed or _cross_tok or self.use_privileged_context:
+            return self._prepare_dataset_with_original_text(
+                dataset, processing_class, args, packing, formatting_func, dataset_name
+            )
+
+        return super()._prepare_dataset(dataset, processing_class, args, packing, formatting_func, dataset_name)
+
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        """Extract text from a ChatML message content value."""
+        if isinstance(content, list):
+            return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+        return str(content)
+
+    @staticmethod
+    def _render_prompt_and_completion(
+        processing_class: PreTrainedTokenizerBase,
+        prompt: list[dict[str, Any]],
+        completion: list[dict[str, Any]],
+        chat_template_kwargs: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Render a conversation and split it into prompt and completion text."""
+        prompt_text = processing_class.apply_chat_template(
+            prompt, add_generation_prompt=True, tokenize=False, **chat_template_kwargs
+        )
+        full_text = processing_class.apply_chat_template(prompt + completion, tokenize=False, **chat_template_kwargs)
+        # The generation prompt is not always a prefix of the full render (e.g. templates that open a `<think>` block
+        # in the generation prompt but strip it from rendered assistant turns), so split at the common prefix.
+        prompt_text = "".join(
+            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
+        )
+        return prompt_text, full_text[len(prompt_text) :]
+
+    @staticmethod
+    def _build_privileged_teacher_prompt(
+        prompt: str | list[dict[str, Any]],
+        privileged_context: Any,
+        teacher_prompt_template: str,
+        privileged_context_column: str,
+    ) -> str | list[dict[str, Any]]:
+        """Build the teacher prompt by enriching the final user turn with privileged context."""
+        if privileged_context is None:
+            raise ValueError(f"`{privileged_context_column}` must not be None when `use_privileged_context=True`.")
+
+        privileged_context = str(privileged_context)
+        if isinstance(prompt, list):
+            messages = [dict(message) for message in prompt]
+            if not messages:
+                raise ValueError(
+                    "Privileged-context teacher prompt construction expects the conversation to end with a user turn, "
+                    "but the prompt is empty."
+                )
+            last_message = messages[-1]
+            if last_message.get("role") != "user":
+                raise ValueError(
+                    "Privileged-context teacher prompt construction expects the conversation to end with a user turn, "
+                    f"but the last message has role '{last_message.get('role')}'."
+                )
+            teacher_content = teacher_prompt_template.format(
+                prompt=GOLDTrainer._extract_text_content(last_message.get("content", "")),
+                privileged_context=privileged_context,
+            )
+            messages[-1] = {**last_message, "content": teacher_content}
+            return messages
+
+        return teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_context)
+
+    def _prepare_dataset_with_original_text(
+        self,
+        dataset: Dataset | IterableDataset,
+        processing_class: (PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin),
+        args,
+        packing: bool,
+        formatting_func: Callable[[dict], str] | None,
+        dataset_name: str,
+    ) -> Dataset | IterableDataset:
+        """
+        Prepare dataset while preserving original text for separately constructed teacher inputs.
+        """
+        # Build the kwargs for the `map` function
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        with global_then_local_main_first():
+            # Apply the formatting function if any
+            if formatting_func is not None:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
+
+                def _func(example):
+                    return {"text": formatting_func(example)}
+
+                dataset = dataset.map(_func, batched=False, **map_kwargs)
+
+            # Convert the dataset to ChatML if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+            column_names = next(iter(dataset)).keys()
+            dataset = dataset.map(
+                maybe_convert_to_chatml,
+                remove_columns=("conversations" if "conversations" in column_names else None),
+                **map_kwargs,
+            )
+
+            # Tokenize the dataset while preserving original text
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
+
+            def tokenize_with_original_text(
+                example,
+                processing_class,
+                dataset_text_field,
+                max_length,
+                use_privileged_context,
+                teacher_prompt_template,
+                privileged_context_column,
+                use_extended_uld,
+            ):
+                """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
+                text.
+                """
+                result = {}
+                teacher_prompt_text = None
+
+                if "prompt" in example and "completion" in example:  # prompt-completion case
+                    if is_conversational(example):
+                        prompt_text, completion_text = GOLDTrainer._render_prompt_and_completion(
+                            processing_class,
+                            example["prompt"],
+                            example["completion"],
+                            example.get("chat_template_kwargs", {}),
+                        )
+                    else:
+                        prompt_text = example["prompt"]
+                        completion_text = example["completion"]
+                    full_text = prompt_text + completion_text
+                    result["original_prompt_text"] = prompt_text
+                    result["original_completion_text"] = completion_text
+                elif is_conversational(example) or "messages" in example:
+                    messages = example["messages"]
+                    assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                    if assistant_indices:
+                        completion_idx = assistant_indices[-1]
+                        prompt_messages = messages[:completion_idx]
+                        full_messages = messages[: completion_idx + 1]
+                        if prompt_messages:
+                            prompt_text, completion_text = GOLDTrainer._render_prompt_and_completion(
+                                processing_class,
+                                prompt_messages,
+                                [messages[completion_idx]],
+                                example.get("chat_template_kwargs", {}),
+                            )
+                        else:
+                            prompt_text = ""
+                            completion_text = processing_class.apply_chat_template(
+                                full_messages,
+                                add_generation_prompt=False,
+                                tokenize=False,
+                                **example.get("chat_template_kwargs", {}),
+                            )
+                        full_text = prompt_text + completion_text
+                        result["original_prompt_text"] = prompt_text
+                        result["original_completion_text"] = completion_text
+                    else:
+                        full_text = processing_class.apply_chat_template(
+                            messages,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
+                        )
+                        prompt_text = ""
+                        result["original_prompt_text"] = ""
+                        result["original_completion_text"] = full_text
+                else:
+                    text = example.get(dataset_text_field, example.get("text", ""))
+                    prompt_text = ""
+                    completion_text = text
+                    full_text = text
+                    result["original_prompt_text"] = ""
+                    result["original_completion_text"] = text
+
+                if use_privileged_context:
+                    if privileged_context_column not in example:
+                        raise ValueError(
+                            f"Dataset is missing the `{privileged_context_column}` column required when "
+                            "`use_privileged_context=True`."
+                        )
+                    privileged_context = example[privileged_context_column]
+                    if "prompt" in example:
+                        teacher_prompt = example["prompt"]
+                        teacher_completion = example["completion"]
+                    elif is_conversational(example):
+                        messages = example["messages"]
+                        assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
+                        if not assistant_indices:
+                            raise ValueError(
+                                "Privileged-context distillation requires a prompt/completion dataset or messages "
+                                "ending with an assistant completion."
+                            )
+                        teacher_prompt = messages[: assistant_indices[-1]]
+                        teacher_completion = [messages[assistant_indices[-1]]]
+                    else:
+                        raise ValueError(
+                            "Privileged-context distillation requires a prompt/completion dataset or conversational "
+                            "messages with an assistant completion."
+                        )
+                    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
+                        teacher_prompt,
+                        privileged_context,
+                        teacher_prompt_template,
+                        privileged_context_column,
+                    )
+                    if isinstance(teacher_prompt, list):
+                        # Render the teacher exactly like the student, so the prompts differ only by the privileged context.
+                        teacher_prompt_text, _ = GOLDTrainer._render_prompt_and_completion(
+                            processing_class,
+                            teacher_prompt,
+                            teacher_completion,
+                            example.get("chat_template_kwargs", {}),
+                        )
+                    else:
+                        teacher_prompt_text = teacher_prompt
+
+                if use_extended_uld:
+                    # Single backend call: ids and char-derived byte offsets from the same encoding,
+                    # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                    backend = processing_class.backend_tokenizer
+                    [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                    prompt_byte_len = len(prompt_text.encode("utf-8"))
+                    # A token straddling the boundary is pulled into the completion here: extended ULD
+                    # re-splits it against the teacher's own byte offsets via `_align_by_byte_offsets`.
+                    completion_start = next(
+                        (idx for idx, (_, e) in enumerate(full_offs) if e > prompt_byte_len),
+                        len(input_ids),
+                    )
+                    # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                    # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                    byte_offsets = [(0, 0)] * completion_start + [
+                        (max(0, s - prompt_byte_len), e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                    ]
+                else:
+                    # Works with slow tokenizers too (e.g. SentencePiece): no `backend_tokenizer` needed.
+                    encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
+                    input_ids = encoding["input_ids"]
+                    # Same boundary rule as extended ULD: a leading space at the seam is normally attached to
+                    # the following (completion) token by the tokenizer, so matching on `start` instead would
+                    # drop that token's content from the completion entirely.
+                    completion_start = next(
+                        (idx for idx, (_, end) in enumerate(encoding["offset_mapping"]) if end > len(prompt_text)),
+                        len(input_ids),
+                    )
+                    byte_offsets = [(0, 0)] * len(input_ids)
+
+                append_eos = (
+                    not is_conversational(example)
+                    and processing_class.eos_token_id is not None
+                    and (not input_ids or input_ids[-1] != processing_class.eos_token_id)
+                )
+                if append_eos:
+                    input_ids.append(processing_class.eos_token_id)
+                    if use_extended_uld:
+                        completion_byte_len = len(completion_text.encode("utf-8"))
+                        byte_offsets.append((completion_byte_len, completion_byte_len))
+                    else:
+                        byte_offsets.append((0, 0))
+
+                # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
+                # boundary so it survives truncation without re-tokenizing the prompt.
+                if max_length is not None and len(input_ids) > max_length:
+                    drop = len(input_ids) - max_length
+                    input_ids = input_ids[drop:]
+                    byte_offsets = byte_offsets[drop:]
+                    completion_start = max(0, completion_start - drop)
+                    # If truncation ate into the completion, rebase the kept completion offsets so they're
+                    # relative to the new (truncated) `original_completion_text` the teacher will re-encode.
+                    if completion_start < len(byte_offsets):
+                        base = byte_offsets[completion_start][0]
+                        if base > 0:
+                            byte_offsets = byte_offsets[:completion_start] + [
+                                (s - base, e - base) for s, e in byte_offsets[completion_start:]
+                            ]
+                    # Resync the strings the teacher will re-encode with the ids the student kept.
+                    decode = partial(
+                        processing_class.decode,
+                        skip_special_tokens=False,
+                        clean_up_tokenization_spaces=False,
+                    )
+                    result["original_prompt_text"] = decode(input_ids[:completion_start])
+                    completion_ids = input_ids[completion_start:]
+                    if append_eos:
+                        completion_ids = completion_ids[:-1]
+                    result["original_completion_text"] = decode(completion_ids)
+
+                result["input_ids"] = input_ids
+                result["attention_mask"] = [1] * len(input_ids)
+                result["byte_offsets"] = byte_offsets
+                result["completion_mask"] = [0] * completion_start + [1] * (len(input_ids) - completion_start)
+                if teacher_prompt_text is not None:
+                    result["teacher_prompt_text"] = teacher_prompt_text
+                return result
+
+            dataset = dataset.map(
+                tokenize_with_original_text,
+                fn_kwargs={
+                    "processing_class": processing_class,
+                    "dataset_text_field": args.dataset_text_field,
+                    "max_length": args.max_length,
+                    "use_extended_uld": args.use_extended_uld or args.xtoken_loss_type != "none",
+                    "use_privileged_context": self.use_privileged_context,
+                    "teacher_prompt_template": self.teacher_prompt_template,
+                    "privileged_context_column": self.privileged_context_column,
+                },
+                **map_kwargs,
+            )
+
+            # Pack if requested. Truncation already happened in `tokenize_with_original_text`, keeping
+            # the completion end — so the generic front-truncating `truncate_dataset` is intentionally
+            # not applied here (it would drop the completion).
+            if packing:
+                if args.max_length is None:
+                    raise ValueError("When packing is enabled, `max_length` can't be `None`.")
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Packing {dataset_name} dataset"
+
+                columns_to_keep = [
+                    "input_ids",
+                    "original_prompt_text",
+                    "original_completion_text",
+                ]
+                existing_columns = set(dataset.column_names)
+                columns_to_select = [col for col in columns_to_keep if col in existing_columns]
+
+                dataset = dataset.select_columns(columns_to_select)
+                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
+
+        return dataset
+
+    @staticmethod
+    def generalized_jsd_loss(
+        student_logits,
+        teacher_logits,
+        labels=None,
+        beta=0.5,
+        temperature=1.0,
+        reduction="batchmean",
+        logits_are_probs=False,
+        num_items_in_batch=None,
+    ):
+        """
+        Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
+        of https://huggingface.co/papers/2306.13649 for the definition.
+
+        Args:
+            student_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            teacher_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            labels:
+                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
+                loss
+            beta:
+                Interpolation coefficient between 0 and 1 (default: 0.5)
+            temperature:
+                Softmax temperature (default: 1.0)
+            reduction:
+                Specifies the reduction to apply to the output (default: 'batchmean')
+
+        Returns:
+            loss: Scalar tensor with the generalized JSD loss
+        """
+
+        if logits_are_probs:
+            student_log_probs = torch.log(student_logits.clamp_min(1e-8))
+            teacher_log_probs = torch.log(teacher_logits.clamp_min(1e-8))
+        else:
+            # Apply temperature scaling to logits before computing probabilities
+            student_logits = student_logits / temperature
+            teacher_logits = teacher_logits / temperature
+            # Compute log probabilities for student and probabilities for teacher
+            student_log_probs = F.log_softmax(student_logits, dim=-1)
+            teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+
+        if beta == 0:
+            jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        elif beta == 1:
+            jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+        else:
+            # Compute the log of the mixture distribution
+            # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
+            beta = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
+            mixture_log_probs = torch.logsumexp(
+                torch.stack(
+                    [
+                        student_log_probs + torch.log1p(-beta),
+                        teacher_log_probs + torch.log(beta),
+                    ]
+                ),
+                dim=0,
+            )
+
+            # Compute KL divergences using F.kl_div
+            # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
+            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+
+            # Compute the Generalized Jensen-Shannon Divergence
+            jsd = beta * kl_teacher + (1 - beta) * kl_student
+
+        # Masking
+        if labels is not None:
+            mask = labels != -100
+            jsd = jsd[mask]
+
+        # Apply reduction
+        if num_items_in_batch is not None:
+            # Normalize by the global number of valid tokens for gradient-accumulation-correct loss (see issue #4719).
+            jsd_sum = jsd.sum()
+            if isinstance(num_items_in_batch, torch.Tensor):
+                num_items_in_batch = num_items_in_batch.to(jsd_sum.device)
+            return jsd_sum / num_items_in_batch
+        if reduction == "batchmean":
+            # clamp_min(1) avoids 0/0 -> nan when a sample has no unmasked positions
+            # (e.g. completion fully truncated). jsd[mask] is empty -> jsd.sum() == 0,
+            # so 0/1 == 0 with a valid grad path.
+            denom = mask.sum().clamp_min(1) if labels is not None else max(jsd.size(0), 1)
+            return jsd.sum() / denom
+        elif reduction == "sum":
+            return jsd.sum()
+        elif reduction == "mean":
+            return jsd.mean()
+        else:
+            return jsd
+
+    def _build_teacher_vlm_inputs(
+        self, completion_texts: list[str], raw_images: list, raw_prompts: list
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Build image-aware teacher inputs for cross-architecture VLM ULD distillation.
+
+        The teacher prompt is rendered through the teacher's own processor so image placeholders and pixel tensors
+        match the teacher model, while completion tokens carry byte offsets relative to the original
+        ``completion_texts`` — the same coordinate system the student uses — so cross-tokenizer byte-offset alignment
+        stays valid. Mirrors ``build_teacher_inputs_from_texts`` but injects the teacher's multimodal prompt and
+        returns the teacher's forward kwargs (``pixel_values``, ...).
+
+        Returns ``(input_ids, labels, attention_mask, byte_offsets, forward_kwargs)``.
+        """
+        pad_token_id = self.teacher_tokenizer.pad_token_id
+        eos_token_id = self.teacher_tokenizer.eos_token_id
+
+        teacher_prompt_texts = self._teacher_processor.apply_chat_template(
+            raw_prompts, tokenize=False, add_generation_prompt=True
+        )
+        teacher_prompt_processed = self._teacher_processor(
+            images=raw_images,
+            text=teacher_prompt_texts,
+            padding=True,
+            return_tensors="pt",
+        )
+        use_byte_offsets = self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld
+        if use_byte_offsets:
+            # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+            # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+            backend = self.teacher_tokenizer.backend_tokenizer
+            completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        else:
+            completion_ids = self.teacher_tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+            completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
+
+        sequences: list[torch.Tensor] = []
+        attention_masks: list[torch.Tensor] = []
+        labels_list: list[torch.Tensor] = []
+        offsets_list: list[list[tuple[int, int]]] = []
+        sequence_kwargs = defaultdict(list)
+
+        for row, ((enc_ids, enc_offs), completion_text) in enumerate(
+            zip(completion_encs, completion_texts, strict=True)
+        ):
+            prompt_mask = teacher_prompt_processed["attention_mask"][row].bool()
+            prompt_ids = teacher_prompt_processed["input_ids"][row][prompt_mask].tolist()
+            # Remove trailing EOS from prompt so completions can extend cleanly
+            if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
+                prompt_ids = prompt_ids[:-1]
+
+            completion_ids = list(enc_ids)
+            completion_offs = list(enc_offs)
+            content_len = len(completion_text.encode("utf-8"))
+
+            sequence = list(prompt_ids) + completion_ids
+            offsets = [(0, 0)] * len(prompt_ids) + completion_offs
+            if eos_token_id is not None:
+                sequence.append(eos_token_id)
+                offsets.append((content_len, content_len) if use_byte_offsets else (0, 0))
+
+            seq_tensor = torch.tensor(sequence, dtype=torch.long)
+            sequences.append(seq_tensor)
+            attention_masks.append(torch.ones_like(seq_tensor))
+            offsets_list.append(offsets)
+
+            labels = seq_tensor.clone()
+            labels[: len(prompt_ids)] = -100
+            labels_list.append(labels)
+
+            # Sequence-aligned multimodal keys (e.g. token_type_ids for Gemma): keep the prompt values
+            # and zero-fill the completion span.
+            for key in self._SEQUENCE_KEYS:
+                if key in teacher_prompt_processed:
+                    prompt_values = teacher_prompt_processed[key][row][prompt_mask][: len(prompt_ids)]
+                    completion_values = torch.zeros(len(sequence) - len(prompt_ids), dtype=prompt_values.dtype)
+                    sequence_kwargs[key].append(torch.cat((prompt_values, completion_values)))
+
+        teacher_input_ids = pad(
+            sequences,
+            padding_side="right",
+            padding_value=pad_token_id if pad_token_id is not None else 0,
+        )
+        teacher_attention_mask = pad(attention_masks, padding_side="right", padding_value=0).bool()
+        teacher_labels = pad(labels_list, padding_side="right", padding_value=-100)
+
+        target_len = teacher_input_ids.size(1)
+        teacher_byte_offsets = torch.stack(
+            [pad_byte_offsets(offs, target_len, padding_side="right") for offs in offsets_list],
+            dim=0,
+        )
+
+        # Multimodal forward kwargs from the teacher processor (pixel_values, image_grid_thw, ...).
+        forward_kwargs = {
+            k: v.to(self.accelerator.device)
+            for k, v in self._get_model_forward_kwargs(teacher_prompt_processed, exclude=self._SEQUENCE_KEYS).items()
+        }
+        for key, values in sequence_kwargs.items():
+            forward_kwargs[key] = pad(values, padding_side="right", padding_value=0).to(self.accelerator.device)
+
+        return (
+            teacher_input_ids,
+            teacher_labels,
+            teacher_attention_mask,
+            teacher_byte_offsets,
+            forward_kwargs,
+        )
+
+    def _build_cross_tokenizer_teacher_inputs(self, inputs):
+        if self._teacher_processor is not None:
+            # VLM teacher: render the prompt through the teacher's own processor so image
+            # placeholders and pixel tensors match the teacher model.
+            if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                raise ValueError(
+                    "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
+                    "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
+                    "or ensure your custom collator preserves these fields."
+                )
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_teacher_vlm_inputs(
+                inputs["original_completion_text"], inputs["_raw_images"], inputs["_raw_prompts"]
+            )
+        else:
+            teacher_forward_kwargs = {}
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
+                inputs["original_prompt_text"],
+                inputs["original_completion_text"],
+                use_extended_uld=self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld,
+            )
+
+        return (
+            teacher_input_ids,
+            teacher_labels,
+            teacher_attention_mask,
+            teacher_completion_byte_offsets,
+            teacher_forward_kwargs,
+        )
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # Extract multimodal fields (pixel_values, image_grid_thw, ...) for student forward passes.
+        # Standard JSD reuses these for the teacher (same-family VLM); cross-tokenizer ULD rebuilds
+        # teacher inputs separately below.
+        student_forward_kwargs = self._get_model_forward_kwargs(inputs)
+        _cross_tok = (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None
+        if self.use_privileged_context:
+            if "teacher_prompt_text" not in inputs:
+                raise ValueError(
+                    "Privileged-context distillation requires `teacher_prompt_text` in the batch. Use the default "
+                    "data collator or preserve this field in a custom collator."
+                )
+
+            student_completion_ids = [
+                row_input_ids[row_labels != -100]
+                for row_input_ids, row_labels in zip(inputs["input_ids"], inputs["labels"], strict=True)
+            ]
+            teacher_input_ids, teacher_labels, teacher_attention_mask = build_teacher_inputs_from_completion_ids(
+                self._tokenizer,
+                inputs["teacher_prompt_text"],
+                student_completion_ids,
+            )
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
+
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                use_cache=False,
+                **student_forward_kwargs,
+            )
+
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
+                    input_ids=teacher_input_ids,
+                    attention_mask=teacher_attention_mask,
+                    use_cache=False,
+                )
+
+            student_completion_mask = inputs["labels"][:, 1:] != -100
+            teacher_completion_mask = teacher_labels[:, 1:] != -100
+
+            loss = self.generalized_jsd_loss(
+                student_logits=outputs_student.logits[:, :-1, :][student_completion_mask],
+                teacher_logits=outputs_teacher.logits[:, :-1, :][teacher_completion_mask],
+                beta=self.beta,
+                temperature=self.temperature,
+                num_items_in_batch=num_items_in_batch,
+            )
+        elif _cross_tok:
+            # Both DataCollatorForChatML and the on-policy generation path attach these
+            # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_cross_tokenizer_teacher_inputs(inputs)
+
+            teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
+            teacher_labels = teacher_labels.to(self.accelerator.device)
+            teacher_attention_mask = teacher_attention_mask.to(self.accelerator.device)
+
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                use_cache=False,
+                **student_forward_kwargs,
+            )
+
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
+                    input_ids=teacher_input_ids,
+                    attention_mask=teacher_attention_mask,
+                    use_cache=False,
+                    **teacher_forward_kwargs,
+                )
+        else:
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                **student_forward_kwargs,
+            )
+
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    **student_forward_kwargs,
+                )
+
+            # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+            # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+            # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+            # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
+            # padded to the full-sequence width independently of `prompts`.
+            shifted_student_logits = outputs_student.logits[:, :-1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+                temperature=self.temperature,
+                num_items_in_batch=num_items_in_batch,
+            )
+
+        if self.use_uld_loss and self.teacher_tokenizer is not None:
+            student_labels = inputs["labels"]
+
+            student_byte_offsets = inputs.get("byte_offsets")
+            if self.uld_loss_fn.use_extended_uld and student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when `use_extended_uld=True`.")
+
+            loss = self.uld_loss_fn(
+                student_logits=outputs_student.logits,
+                teacher_logits=outputs_teacher.logits,
+                student_labels=student_labels,
+                teacher_labels=teacher_labels,
+                student_input_ids=inputs["input_ids"],
+                teacher_input_ids=teacher_input_ids,
+                student_byte_offsets=student_byte_offsets,
+                teacher_byte_offsets=teacher_completion_byte_offsets,
+            )
+
+            if hasattr(self.uld_loss_fn, "last_matched_loss") and hasattr(self.uld_loss_fn, "last_unmatched_loss"):
+                ga = max(1, int(self.args.gradient_accumulation_steps))
+                step_eq = 1.0 / ga
+                matched_val = (
+                    self.uld_loss_fn.last_matched_loss.item()
+                    if self.uld_loss_fn.last_matched_loss is not None
+                    else 0.0
+                )
+                unmatched_val = (
+                    self.uld_loss_fn.last_unmatched_loss.item()
+                    if self.uld_loss_fn.last_unmatched_loss is not None
+                    else 0.0
+                )
+
+                self._matched_sum += matched_val
+                self._unmatched_sum += unmatched_val
+                self._matched_step_eq += step_eq
+                self._unmatched_step_eq += step_eq
+
+        if self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None:
+            xtoken_student_byte_offsets = inputs.get("byte_offsets")
+            if xtoken_student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when using X-Token loss.")
+
+            loss = self.xtoken_loss_fn(
+                student_logits=outputs_student.logits,
+                teacher_logits=outputs_teacher.logits,
+                student_labels=inputs["labels"],
+                teacher_labels=teacher_labels,
+                student_byte_offsets=xtoken_student_byte_offsets,
+                teacher_byte_offsets=teacher_completion_byte_offsets,
+                loss_counts=self._xtoken_loss_counts if num_items_in_batch is not None else None,
+            )
+
+            if num_items_in_batch is not None:
+                loss = loss * self.accelerator.num_processes
+
+            mode = "train" if self.model.training else "eval"
+            if mode == "train":
+                self._xtoken_kl_sum += self.xtoken_loss_fn.last_kl_loss.item()
+                self._xtoken_ce_sum += self.xtoken_loss_fn.last_ce_loss.item()
+                self._xtoken_pair_sum += self.xtoken_loss_fn.last_num_valid_pairs
+                self._xtoken_steps += 1.0
+                self._xtoken_accuracy_num += self.xtoken_loss_fn.last_accuracy_num
+                self._xtoken_accuracy_den += self.xtoken_loss_fn.last_accuracy_den
+                self._xtoken_projection_num += self.xtoken_loss_fn.last_proj_accuracy_num
+                self._xtoken_projection_den += self.xtoken_loss_fn.last_proj_accuracy_den
+            else:
+                dev = self.accelerator.device
+                self._metrics[mode]["xtoken/kl_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
+                )
+                self._metrics[mode]["xtoken/ce_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
+                )
+                acc_num = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_num), device=dev)
+                ).sum()
+                acc_den = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
+                ).sum()
+                self._metrics[mode]["xtoken/accuracy"].append((acc_num / acc_den).item() if acc_den > 0 else 0.0)
+                self._metrics[mode]["xtoken/num_valid_pairs"].append(
+                    self.accelerator.gather(torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev))
+                    .mean()
+                    .item()
+                )
+                if self.xtoken_loss_fn.loss_type == "p_kl":
+                    proj_num = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_num), device=dev)
+                    ).sum()
+                    proj_den = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_den), device=dev)
+                    ).sum()
+                    self._metrics[mode]["xtoken/proj_accuracy"].append(
+                        (proj_num / proj_den).item() if proj_den > 0 else 0.0
+                    )
+
+        empty_cache()
+
+        return (loss, outputs_student) if return_outputs else loss
+
+    def generate_on_policy_outputs(self, model, inputs, generation_config):
+        # Generate output with respect to the prompt only
+        # Drop sequence-aligned multimodal keys (token_type_ids, mm_token_type_ids): generate recomputes them from
+        # `input_ids` as it extends the sequence, and some models (e.g. Qwen3-VL) reject them as unknown
+        # `generate` kwargs.
+        generate_kwargs = self._get_model_forward_kwargs(inputs, exclude=self._SEQUENCE_KEYS)
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            attention_mask=inputs["prompt_attention_mask"],
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+            **generate_kwargs,
+        )
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
+
+        batch_size = generated_tokens.size(0)
+        device = generated_tokens.device
+
+        prompt_mask = inputs["prompt_attention_mask"]
+
+        # model.generate() returns full sequences (prompt + completion), so completions start
+        # after the full padded prompt width.
+        prompt_length = inputs["prompts"].shape[1]
+        prompt_lengths = torch.full((batch_size,), prompt_length, dtype=torch.long, device=device)
+        completion_ids = generated_tokens[:, prompt_length:]
+
+        # Mask everything after the first EOS token. eos_token_id can be a list of stop tokens (Llama 3),
+        # so match with torch.isin; with no eos id nothing stops early, so keep the whole completion.
+        if generation_config.eos_token_id is None:
+            completion_mask = torch.ones_like(completion_ids)
+        else:
+            is_eos = torch.isin(completion_ids, torch.tensor(generation_config.eos_token_id, device=device))
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Pad ids can appear inside real prompt text, so use the prompt mask instead of matching ids
+        new_attention_mask = torch.ones_like(generated_tokens)
+        new_attention_mask[:, prompt_length:] = completion_mask
+        new_attention_mask[:, :prompt_length] = prompt_mask
+
+        new_input_ids = generated_tokens
+        new_attention_mask, new_labels = self._build_sequence_batch(
+            new_input_ids, prompt_lengths, attention_mask=new_attention_mask
+        )
+
+        prompt_texts = []
+        completion_texts = []
+        for idx in range(batch_size):
+            length = int(prompt_lengths[idx].item())
+            prompt_tokens = inputs["prompts"][idx]
+            prompt_tokens = prompt_tokens[prompt_mask[idx].bool()]
+            prompt_texts.append(
+                self.processing_class.decode(
+                    prompt_tokens.tolist(),
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+            completion_tokens = new_input_ids[idx, length:]
+            completion_tokens = completion_tokens[new_labels[idx, length:] != -100]
+            completion_texts.append(
+                self.processing_class.decode(
+                    completion_tokens.tolist(),
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+
+        return (
+            new_input_ids,
+            new_attention_mask,
+            new_labels,
+            prompt_texts,
+            completion_texts,
+        )
+
+    # During eval, Trainer calls prediction_step. The inherited SFT prediction_step indexes the raw inputs before
+    # collation, which breaks the VLM identity-collator path (inputs is a list of raw examples). We override it to
+    # collate via _prepare_inputs and force compute_loss, evaluating the off-policy distillation loss over the
+    # ground-truth completion (no generation).
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
+
+    @profiling_decorator
+    def training_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        num_items_in_batch: int | None = None,
+    ) -> torch.Tensor:
+        """
+        Perform a training step for the General Online Logit Distillation (GOLD) model.
+
+        This method implements the on-policy learning approach described in the GOLD blog post. With probability
+        `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
+        the offline original inputs.
+        """
+        buffer_steps = self.args.gradient_accumulation_steps
+
+        loss = super().training_step(model, inputs, num_items_in_batch)
+
+        slice_idx = (self._step - 1) % buffer_steps
+
+        on_policy = False
+        if self._buffered_on_policy is not None and slice_idx < len(self._buffered_on_policy):
+            on_policy = self._buffered_on_policy[slice_idx]
+
+        if on_policy and self._buffered_text_logs is not None and self._buffered_text_logs[slice_idx] is not None:
+            prompt_texts, completion_texts = self._buffered_text_logs[slice_idx]
+            self._textual_logs["prompt"].extend(gather_object(prompt_texts))
+            self._textual_logs["completion"].extend(gather_object(completion_texts))
+
+        loss_scalar = float(loss.detach())
+        step_equiv = 1.0 / self.args.gradient_accumulation_steps
+
+        if on_policy:
+            self._on_policy_loss_total += loss_scalar
+            self._on_policy_step_equiv += step_equiv
+        else:
+            self._off_policy_loss_total += loss_scalar
+            self._off_policy_step_equiv += step_equiv
+        return loss
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+
+        if mode == "train":
+            device = self.accelerator.device if hasattr(self.accelerator, "device") else torch.device("cpu")
+            vec = torch.tensor(
+                [
+                    self._on_policy_loss_total,
+                    self._off_policy_loss_total,
+                    self._on_policy_step_equiv,
+                    self._off_policy_step_equiv,
+                    self._matched_sum,
+                    self._unmatched_sum,
+                    self._matched_step_eq,
+                    self._unmatched_step_eq,
+                    self._xtoken_kl_sum,
+                    self._xtoken_ce_sum,
+                    self._xtoken_pair_sum,
+                    self._xtoken_steps,
+                    self._xtoken_accuracy_num,
+                    self._xtoken_accuracy_den,
+                    self._xtoken_projection_num,
+                    self._xtoken_projection_den,
+                ],
+                dtype=torch.float32,
+                device=device,
+            )
+
+            if (
+                getattr(self.accelerator, "distributed_type", DistributedType.NO) != DistributedType.NO
+                and dist.is_available()
+                and dist.is_initialized()
+            ):
+                dist.all_reduce(vec, op=dist.ReduceOp.SUM)
+
+            (
+                on_sum,
+                off_sum,
+                on_eq,
+                off_eq,
+                matched_sum,
+                unmatched_sum,
+                matched_eq,
+                unmatched_eq,
+                xtoken_kl_sum,
+                xtoken_ce_sum,
+                xtoken_pair_sum,
+                xtoken_steps,
+                xtoken_accuracy_num,
+                xtoken_accuracy_den,
+                xtoken_projection_num,
+                xtoken_projection_den,
+            ) = vec.tolist()
+
+            if on_eq > 0:
+                logs["on_policy_loss"] = round(on_sum / on_eq, 4)
+            if off_eq > 0:
+                logs["off_policy_loss"] = round(off_sum / off_eq, 4)
+
+            if matched_eq > 0:
+                logs["matched_loss"] = round(matched_sum / matched_eq, 4)
+            if unmatched_eq > 0:
+                logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
+
+            if xtoken_steps > 0:
+                logs["xtoken/kl_loss"] = xtoken_kl_sum / xtoken_steps
+                logs["xtoken/ce_loss"] = xtoken_ce_sum / xtoken_steps
+                logs["xtoken/num_valid_pairs"] = xtoken_pair_sum / xtoken_steps
+                logs["xtoken/accuracy"] = xtoken_accuracy_num / max(xtoken_accuracy_den, 1.0)
+                if xtoken_projection_den > 0:
+                    logs["xtoken/proj_accuracy"] = xtoken_projection_num / xtoken_projection_den
+
+            self._on_policy_loss_total = self._off_policy_loss_total = 0.0
+            self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
+            self._matched_sum = self._unmatched_sum = 0.0
+            self._matched_step_eq = self._unmatched_step_eq = 0.0
+            self._xtoken_kl_sum = self._xtoken_ce_sum = self._xtoken_pair_sum = self._xtoken_steps = 0.0
+            self._xtoken_accuracy_num = self._xtoken_accuracy_den = 0.0
+            self._xtoken_projection_num = self._xtoken_projection_den = 0.0
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs.update(metrics)
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
+
+        if (
+            self.accelerator.is_main_process
+            and self.log_completions
+            and ((self.state.global_step % self.log_completion_steps) == 0)
+        ):
+            if is_rich_available():
+                print_prompt_completions_sample_uld(
+                    self._textual_logs["prompt"],
+                    self._textual_logs["completion"],
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
+
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                import pandas as pd
+
+                table = {
+                    "step": [self.state.global_step] * len(self._textual_logs["prompt"]),
+                    "prompt": self._textual_logs["prompt"],
+                    "completion": self._textual_logs["completion"],
+                }
+                df = pd.DataFrame(table)
+                if self.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                if self.num_completions_to_print and len(df) > 0:
+                    df = df.sample(n=self.num_completions_to_print, random_state=42)
+                wandb.log({"completions": wandb.Table(dataframe=df)})
