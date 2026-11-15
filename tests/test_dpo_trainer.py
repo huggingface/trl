@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+from unittest import mock
 
 import pytest
 import torch
@@ -582,6 +583,58 @@ class TestDPOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
+
+    def test_train_discopop_no_nan_loss_on_large_negative_margin(self):
+        # Contradictory preferences on long completions can produce a large negative margin. With the
+        # previous formula, exp(-logits) overflowed while sigmoid(logits / discopop_tau) underflowed to 0,
+        # so their product was inf * 0 = NaN and poisoned the loss and the gradients
+        # (https://github.com/huggingface/trl/issues/8375).
+        dataset = Dataset.from_list(
+            [
+                {
+                    "prompt": [{"role": "user", "content": "Name an animal."}],
+                    "chosen": [{"role": "assistant", "content": " cat" * 500}],
+                    "rejected": [{"role": "assistant", "content": " dog" * 500}],
+                },
+                {
+                    "prompt": [{"role": "user", "content": "Name an animal."}],
+                    "chosen": [{"role": "assistant", "content": " dog" * 500}],
+                    "rejected": [{"role": "assistant", "content": " cat" * 500}],
+                },
+            ]
+        )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="discopop",
+            beta=1.0,
+            use_cpu=True,
+            max_steps=2,
+            max_length=1024,
+            learning_rate=0.1,  # high lr on purpose: it drives the margin into the overflow region in 2 steps
+            lr_scheduler_type="constant",
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        losses = []
+        original_compute_loss = type(trainer).compute_loss
+
+        def capturing_compute_loss(trainer_self, *args, **kwargs):
+            output = original_compute_loss(trainer_self, *args, **kwargs)
+            loss = output["loss"] if isinstance(output, dict) else output
+            losses.append(loss.detach())
+            return output
+
+        with mock.patch.object(type(trainer), "compute_loss", capturing_compute_loss):
+            trainer.train()
+
+        assert len(losses) > 0
+        # A nonfinite loss would poison the gradients through backpropagation.
+        assert all(torch.isfinite(loss).all().item() for loss in losses)
 
     def test_train_multi_loss_types(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
