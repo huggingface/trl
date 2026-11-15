@@ -75,6 +75,12 @@ def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:
     return (storage_ptr, actual_tensor.dtype)
 
 
+def _is_dense(tensor: torch.Tensor) -> bool:
+    """Whether `tensor` covers its memory without gaps or overlaps in some dimension order, e.g. a transposed tensor."""
+    order = sorted(range(tensor.dim()), key=tensor.stride, reverse=True)
+    return tensor.permute(order).is_contiguous()
+
+
 class OffloadActivations(saved_tensors_hooks):
     """
     Context manager under which activation tensors created in the forward pass will be offloaded.
@@ -254,16 +260,12 @@ class OffloadActivations(saved_tensors_hooks):
             # If so, copy the underlying storage directly instead of materializing the broadcast
             has_broadcast = 0 in activation.stride()
 
-            # No broadcast - use normal contiguous copy
-            # .contiguous() can be a no-op for contiguous views with
-            # non-zero storage_offset. Force a clone for those views
-            # so later as_strided reconstruction stays in bounds.
+            # No broadcast - copy views with a storage offset or gaps into their own storage, so the later as_strided
+            # reconstruction stays in bounds. `clone()` keeps the strides of a dense tensor, e.g. a transposed one:
+            # backward kernels such as SDPA's memory-efficient attention depend on the layout of what they saved.
             # Done on the compute stream, before `wait_stream` below, so that wait also covers this clone.
-            if not has_broadcast and (not activation.is_contiguous() or activation.storage_offset() != 0):
-                if activation.storage_offset() != 0:
-                    activation = activation.clone(memory_format=torch.contiguous_format)
-                else:
-                    activation = activation.contiguous()
+            if not has_broadcast and (activation.storage_offset() != 0 or not _is_dense(activation)):
+                activation = activation.clone()
 
             if self.use_streams:
                 # First, sync back and dereference previously offloaded tensors
