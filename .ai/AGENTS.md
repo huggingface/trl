@@ -69,7 +69,7 @@ Tests exercise real objects: a tiny model from `trl-internal-testing`, a real to
 
 Test behavior through the public API (the trainer, its config, public functions) rather than private methods: a test that calls a private method usually has to build the object around it by hand, and it breaks on any refactor of the internals. Call a private function directly only when its behavior cannot be reached deterministically otherwise, such as a pure helper.
 
-Tests of online trainers (GRPO, RLOO, …) pass a reward function such as `str_length_reward`, not a reward model, unless the test is about reward models.
+Tests default to what most users run. They train on a conversational dataset rather than a standard one, unless the test is about dataset formats, and tests of online trainers (GRPO, RLOO, …) pass a reward function such as `str_length_reward`, not a reward model, unless the test is about reward models.
 
 There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
 

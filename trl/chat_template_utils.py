@@ -753,6 +753,8 @@ muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_t
 
 muse_spark_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark.jinja").read_text(encoding="utf-8")
 
+muse_spark_v2_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v2.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
@@ -800,8 +802,10 @@ qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_tex
 
 qwen3_coder_next_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_next.jinja").read_text(encoding="utf-8")
 
-# Also matches SmolVLM2, which ships a byte-identical chat template.
+# Also matches SmolVLM2-2.2B-Instruct before 2026-11-11 and SmolVLM2-500M-Video-Instruct before 2026-11-13.
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
+
+smolvlm_v2_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_v2.jinja").read_text(encoding="utf-8")
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -1277,6 +1281,8 @@ qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja"
 
 smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
 
+smolvlm_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_v2_training.jinja").read_text(encoding="utf-8")
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -1421,6 +1427,10 @@ def get_training_chat_template(
     if chat_template == muse_spark_chat_template:
         return muse_spark_training_chat_template
 
+    # The Hub revision adopted `muse_spark_training.jinja` as is (#8273)
+    if chat_template == muse_spark_v2_chat_template:
+        return muse_spark_training_chat_template
+
     if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
@@ -1483,6 +1493,9 @@ def get_training_chat_template(
 
     if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
+
+    if chat_template == smolvlm_v2_chat_template:
+        return smolvlm_v2_training_chat_template
 
     # Otherwise, check if patching is needed. Prefix-preservation only matters when the template actually supports
     # tools (the check itself renders a tool message), so skip it otherwise.

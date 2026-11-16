@@ -690,6 +690,22 @@ class TestMultiTeacherRouting:
         # The routed id rides along on the sample so the collator can tag every token with it (MOPD metrics).
         assert [sample.teacher_id for sample in samples] == ["code", "math"]
 
+    def test_only_the_student_request_is_salted_by_model_version(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        loop = _scoring_loop(tokenizer, ONE_TEACHER)
+        loop._model_version_value.value = 3
+        requests = []
+
+        async def fake_post(base_url, path, payload, timeout):
+            requests.append(payload)
+            if "prompt_logprobs" in payload:
+                return {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
+            return {"choices": [{"token_ids": [7]}]}
+
+        loop._post = fake_post
+        asyncio.run(loop._generate_and_score_one(0, {"prompt": [{"role": "user", "content": "hi"}]}))
+        assert [payload.get("cache_salt") for payload in requests] == ["v3", None]
+
     def test_scores_only_the_completion_region(self):
         (sample,), ((_, payload),) = self._run(ONE_TEACHER, None)
         n_prompt = len(sample.input_ids) - int(sample.completion_mask.sum())

@@ -56,6 +56,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    muse_spark_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
@@ -64,6 +65,7 @@ from trl.chat_template_utils import (
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
+    smolvlm_v2_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -995,6 +997,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
+            pytest.param(
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+                id="smolvlm_v2",
+            ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
@@ -1470,8 +1476,24 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+            id="smolvlm_v2",
+            marks=require_vision,
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
             id="muse_spark",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", muse_spark_v2_chat_template),
+            id="muse_spark_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -1797,6 +1819,9 @@ class TestGetTrainingChatTemplate:
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
         if prompt.rstrip().endswith("</think>"):
             assistant = {"role": "assistant", "content": "It is blue."}
+        # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
+        elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
+            assistant = {"role": "assistant", "content": "<think>\nRayleigh scattering.\n</think>\n\nIt is blue."}
         else:
             assistant = {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
         messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
