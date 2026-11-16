@@ -4101,7 +4101,7 @@ class TestGRPOTrainer(TrlTestCase):
         # extra reward source (weight 1) after the trainer-owned reward functions.
         class DummyEnvironment:
             def reset(self, **kwargs):
-                self._solved = False
+                pass
 
             def guess(self, word: str) -> str:
                 """
@@ -4116,7 +4116,7 @@ class TestGRPOTrainer(TrlTestCase):
                 return "nope"
 
             def get_reward(self) -> float:
-                return 1.0 if self._solved else 0.0
+                return 1.0
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -4133,15 +4133,30 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory=DummyEnvironment,
         )
 
-        # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
-        # a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "DummyEnvironment"]
-        assert trainer.reward_weights.tolist() == [0.5, 1.0]
-        assert len(trainer.reward_funcs) == 2
-        # `get_reward` is not exposed as a tool; `guess` is.
-        tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "guess" in tool_names
-        assert "get_reward" not in tool_names
+        prompts = []
+
+        def fake_generate(input_ids, **kwargs):
+            prompts.append(trainer.processing_class.decode(input_ids[0]))
+            # "I won't increment<|im_end|>"
+            completion_ids = torch.tensor(
+                [[40, 2765, 944, 16252, 151645]] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # The env-owned reward is logged under the env class name next to the trainer-owned reward func, with a fixed
+        # weight of 1
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/DummyEnvironment/mean"}
+        assert logged["rewards/DummyEnvironment/mean"] == 1.0
+        assert logged["reward"] == pytest.approx(0.5 * logged["rewards/str_length_reward/mean"] + 1.0)
+        # The tools in the prompt are the environment's public methods: `guess`, not `reset` or `get_reward`
+        assert '"name": "guess"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
