@@ -1485,7 +1485,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1517,7 +1517,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1543,7 +1543,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        Version(transformers.__version__) >= Version("5.18.0"),
         reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
     )
     @require_vision
