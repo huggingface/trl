@@ -68,7 +68,13 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    def test_distillation_multi_teacher(self):
+    @pytest.mark.parametrize("config", ["ddp", "fsdp2", "zero2"])
+    def test_distillation_multi_teacher(self, config, lazy_shared_datadir):
+        config_kwargs = {}
+        if config == "fsdp2":
+            config_kwargs = {"fsdp": True, "fsdp_config": str(lazy_shared_datadir / "fsdp2.json")}
+        elif config == "zero2":
+            config_kwargs = {"deepspeed": str(lazy_shared_datadir / "zero2.json")}
         run_command(
             [
                 "torchrun",
@@ -78,13 +84,13 @@ class TestDistributed(TrlTestCase):
                 "pytest",
                 "tests/test_distillation_trainer.py",
                 "-k",
-                "test_two_teachers_log_per_teacher_metrics",
+                "test_distributed_teacher_routing",
                 "-x",
                 "-q",
                 "-p",
                 "no:cacheprovider",
             ],
-            os.environ.copy(),
+            {**os.environ, "TRL_TEST_DISTILLATION_CONFIG": json.dumps(config_kwargs)},
         )
 
     @pytest.mark.parametrize(

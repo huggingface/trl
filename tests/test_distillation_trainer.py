@@ -1980,6 +1980,58 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             assert "teacher/a/jsd" in entry, sorted(entry)
             assert "teacher/b/jsd" in entry, sorted(entry)
 
+    @pytest.mark.skipif("TRL_TEST_DISTILLATION_CONFIG" not in os.environ, reason="launched by tests/distributed")
+    def test_distributed_teacher_routing(self, teachers):
+        # Each generation batch gives rank 0 [a, b, a, b] and rank 1 [a, a, a, a]. Their microbatches therefore
+        # issue different numbers of teacher-group forwards. With identical teacher weights, this must reproduce
+        # the single-ID loss and student update, including across accumulation steps and FSDP2 head gathers.
+        def run(teacher_ids, teacher_model):
+            training_args = DistillationConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=2,
+                max_completion_length=4,
+                max_steps=2,
+                logging_steps=1,
+                shuffle_dataset=False,
+                optim="sgd",
+                bf16=False,  # Compare the accumulated updates in float32, without bf16 rounding hiding differences.
+                save_strategy="no",
+                report_to="none",
+                **json.loads(os.environ["TRL_TEST_DISTILLATION_CONFIG"]),
+            )
+            trainer = DistillationTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self._routed_dataset(teacher_ids),
+                teacher_model=teacher_model,
+            )
+            set_seed(42)
+            trainer.train()
+
+            assert trainer.accelerator.num_processes == 2
+            assert trainer.state.global_step == 2
+            step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
+            assert all(torch.isfinite(torch.tensor(entry["loss"])) for entry in step_logs)
+            assert any(entry["grad_norm"] > 0 for entry in step_logs)
+            parameters = {
+                name: parameter.cpu().clone()
+                for name, parameter in trainer.accelerator.get_state_dict(trainer.model_wrapped).items()
+            }
+            return self._losses(trainer), parameters
+
+        single_losses, single_params = run(["a"] * 16, {"a": teachers["a"]})
+        routed_losses, routed_params = run(
+            ["a", "b", "a", "b", "a", "a", "a", "a"] * 2,
+            {"a": teachers["a"], "b": teachers["a"]},
+        )
+
+        torch.testing.assert_close(torch.tensor(routed_losses), torch.tensor(single_losses), rtol=1e-4, atol=1e-8)
+        assert single_params.keys() == routed_params.keys()
+        for name, single_param in single_params.items():
+            torch.testing.assert_close(routed_params[name], single_param, rtol=1e-5, atol=1e-7, msg=name)
+
     def test_two_teachers_log_per_teacher_metrics(self, teachers):
         # Two different checkpoints train the student end to end, and every per-teacher metric family is logged under
         # each routing ID, as "teacher/<teacher_id>/<metric>".
