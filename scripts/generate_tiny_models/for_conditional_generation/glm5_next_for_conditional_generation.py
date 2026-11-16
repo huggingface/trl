@@ -94,7 +94,7 @@ text_config = Glm5NextTextConfig(
 vision_config = Glm5NextVisionConfig(
     depth=2,
     hidden_size=16,
-    num_heads=4,
+    num_heads=2,  # head size 16 // 2 = 8, as Flash Attention requires
     intermediate_size=32,
     out_hidden_size=32,
     projection_intermediate_size=32,
