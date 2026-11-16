@@ -4265,7 +4265,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
 _FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
@@ -4290,13 +4289,13 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen25-vl"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, id="llama31"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, id="llama32"),
-        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, id="mistral"),
-        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", _FA3_HEAD_DIM, id="gemma"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, id="llama31"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, id="llama32"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", {}, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            {"sliding_window": 16},
             id="gemma2-sliding-window-softcap",
             marks=[
                 pytest.mark.skipif(
@@ -4320,17 +4319,17 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
                 reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
             ),
         ),
-        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", {}, id="glm4-moe"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
-        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", {}, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            {"sliding_window": 16},
             id="cohere2-interleaved-sliding-window",
         ),
         pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
-            {**_FA3_ONE_HEAD, "sliding_window": 16},
+            {"sliding_window": 16},
             id="olmo3-interleaved-sliding-window",
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
