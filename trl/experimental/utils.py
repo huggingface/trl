@@ -866,8 +866,7 @@ def enable_gradient_checkpointing(
     else:
         checkpointed_model.gradient_checkpointing_enable()
 
-    # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558),
-    # but is dropping it for reentrant checkpointing, the only mode that needs it
+    # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
     if Version(transformers.__version__) < Version("5.0.0") or (gradient_checkpointing_kwargs or {}).get(
         "use_reentrant"
     ):

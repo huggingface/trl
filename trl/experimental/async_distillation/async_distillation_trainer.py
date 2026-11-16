@@ -1258,9 +1258,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     "from `target_modules`."
                 )
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
-        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558), but transformers is dropping it for
-        # reentrant checkpointing, the only mode that needs it
+        # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
         if (
             is_peft_model(model)
             and args.gradient_checkpointing
