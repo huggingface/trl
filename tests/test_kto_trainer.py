@@ -966,8 +966,8 @@ class TestKTOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_kto_trainer_without_providing_ref_model_with_lora`, since gradient
-    # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: if the default ever
-    # changes, we still explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: the assert fails if the
+    # default ever changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -979,9 +979,9 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
 
         trainer = KTOTrainer(
             model=model_id,
@@ -1387,17 +1387,16 @@ class TestKTOTrainer(TrlTestCase):
             assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
     # In practice, this test is the same as `test_kto_trainer`, since gradient checkpointing is enabled by default in
-    # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `KTOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )

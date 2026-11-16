@@ -715,7 +715,12 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
-        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {"activation_checkpointing": False}
+        else:
+            checkpointing_args = {"gradient_checkpointing": False}
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
         if peft_type == "prompt_tuning":
             peft_config = PromptTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
@@ -1046,8 +1051,8 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
-    # enabled by default in `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still
-    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # enabled by default in `SFTTrainer`. We keep it as a regression guard: the assert fails if the default ever
+    # changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1056,7 +1061,8 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
 
         trainer = SFTTrainer(
             model=model_id,
@@ -1088,12 +1094,18 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = SFTConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
 
         trainer = SFTTrainer(
             model=model_id,
@@ -2146,12 +2158,12 @@ class TestSFTTrainer(TrlTestCase):
         torch.testing.assert_close(loss, expected)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `SFTTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2179,12 +2191,18 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": gradient_checkpointing_kwargs,
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": gradient_checkpointing_kwargs,
+            }
+        training_args = SFTConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
