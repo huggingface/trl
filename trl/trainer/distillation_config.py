@@ -50,12 +50,9 @@ class DistillationConfig(_BaseConfig):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
-        teacher_model_init_kwargs_by_teacher (`str` or `dict[str, dict[str, Any]]`, *optional*):
-            Per-teacher loading overrides for multi-teacher distillation, keyed by the routing ID used in the trainer's
-            `teacher_model` mapping. Each entry is merged over `teacher_model_init_kwargs`, so it can give one teacher
-            its own `revision` or `dtype` while the rest share the common kwargs. Only valid together with a mapping of
-            teachers.
+            from a string. When `teacher_model` is a mapping, provide a mapping from teacher ID to loading kwargs
+            instead, e.g. `{"math": {"dtype": "bfloat16"}, "code": {"revision": "main"}}`. Omitted teachers use the
+            default loading kwargs.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
@@ -175,7 +172,6 @@ class DistillationConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "teacher_model_init_kwargs",
-        "teacher_model_init_kwargs_by_teacher",
         "generation_kwargs",
         "chat_template_kwargs",
     ]
@@ -217,14 +213,8 @@ class DistillationConfig(_BaseConfig):
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
-        },
-    )
-    teacher_model_init_kwargs_by_teacher: dict[str, Any] | str | None = field(
-        default=None,
-        metadata={
-            "help": "Per-teacher loading overrides for multi-teacher distillation, keyed by routing ID. Each entry "
-            "is merged over `teacher_model_init_kwargs`."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher, "
+            "or a mapping from teacher ID to loading kwargs for multi-teacher distillation."
         },
     )
     disable_dropout: bool = field(

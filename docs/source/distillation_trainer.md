@@ -292,7 +292,7 @@ trainer = DistillationTrainer(
     args=DistillationConfig(
         output_dir="mopd-student",
         # Route one teacher to a specific revision while the rest load normally.
-        teacher_model_init_kwargs_by_teacher={"code": {"revision": "<revision-name>"}},
+        teacher_model_init_kwargs={"code": {"revision": "<revision-name>"}},
     ),
 )
 trainer.train()
@@ -300,8 +300,8 @@ trainer.train()
 
 ### Requirements
 
-- Every teacher must share the student's vocabulary, i.e. the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs, so a teacher trained on a different tokenizer is training the student against the wrong tokens. Use [GOLD](gold_trainer) for cross-tokenizer distillation.
-- Teachers must be unquantized teachers loaded without device dispatch or offload hooks. Teachers move between CPU and the accelerator as complete modules, and the loss reads their output heads as dense matrices; quantized and dispatched teacher backends have not been integrated or validated. A `quantization_config` and an active `device_map` are rejected at initialization, per teacher after the per-teacher overrides are merged, and every loaded teacher is checked for quantization and device dispatch — including one loaded from a checkpoint that carries its quantization in its own config. `device_map=None` is allowed.
+- Every teacher must share the student's vocabulary. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs, so a teacher trained on a different tokenizer is training the student against the wrong tokens. Use [GOLD](gold_trainer) for cross-tokenizer distillation.
+- Teachers must be unquantized and loaded without device dispatch or offload hooks. Teachers move between CPU and the accelerator as complete modules, and the loss reads their output heads as dense matrices; quantized and dispatched teacher backends have not been integrated or validated. A `quantization_config` and an active `device_map` are rejected at initialization, per teacher using each teacher's loading kwargs, and every loaded teacher is checked for quantization and device dispatch — including one loaded from a checkpoint that carries its quantization in its own config. `device_map=None` is allowed.
 - Students must be text-only. VLM students are not supported in multi-teacher mode; pass a single teacher as `teacher_model` for VLM distillation.
 - DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or a single teacher.
 
@@ -330,11 +330,16 @@ Teachers are inference-only sources: they never enter the student's module tree,
 
 Multi-teacher runs additionally log, per registered teacher:
 
-- `teacher_jsd/<id>`: the token-weighted mean divergence (at the configured `beta`) over the tokens that teacher scored in the accumulated window — the window's total divergence divided by its total scored tokens, so microbatches of unequal size do not count equally.
-- `teacher_token_frac/<id>`: that teacher's share of the accumulated window's valid (trained) tokens.
-- `teacher_score_s/<id>`: the mean wall-clock seconds that teacher cost per generation batch it appeared in — its device upload, its scoring forwards and its eviction back to CPU.
+- `teacher/<id>/jsd`: the token-weighted mean divergence (at the configured `beta`) over the tokens that teacher scored in the accumulated window — the window's total divergence divided by its total scored tokens, so microbatches of unequal size do not count equally.
+- `teacher/<id>/token_frac`: that teacher's share of the accumulated window's valid (trained) tokens.
+- `teacher/<id>/score_s`: the mean wall-clock seconds that teacher cost per generation batch it appeared in — its device upload, its scoring forwards and its eviction back to CPU.
 
-A teacher absent from a window still logs `teacher_token_frac/<id> = 0.0`, but its `teacher_jsd/<id>` is left out entirely rather than reported as a misleading zero.
+A teacher absent from a window still logs `teacher/<id>/token_frac = 0.0`, but its `teacher/<id>/jsd` is left out entirely rather than reported as a misleading zero.
+
+The per-teacher metric names follow the async distillation trainer.
+
+The loss uses the same token-weighted normalization as single-teacher distillation. Longer completions therefore
+contribute more than shorter ones; this differs from the paper's average of per-trajectory mean losses.
 
 ### Checkpointing
 
@@ -342,7 +347,7 @@ Each checkpoint saves a `teacher_manifest.json` alongside the student weights, r
 
 ### Precision and distributed training
 
-Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; DeepSpeed ZeRO-2 was measured bitwise identical on two GPUs as well; ZeRO-1 shares the same mechanism but was not measured. Neither is covered by the CPU test suite. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; DeepSpeed ZeRO-2 was measured bitwise identical on two GPUs as well; ZeRO-1 shares the same mechanism but was not measured. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
 
 With several teachers, the microbatch rows are grouped per teacher and each group is a separate call into the same loss, so the order in which the per-token divergences are summed differs from one ungrouped call; the result agrees to within floating-point noise rather than bitwise.
 

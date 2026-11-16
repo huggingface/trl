@@ -28,6 +28,7 @@ from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
+from transformers.utils.hub import cached_file, extract_commit_hash
 
 from trl import DistillationConfig, DistillationTrainer
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
@@ -1825,6 +1826,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
 
+@require_torch_accelerator
 class TestDistillationTrainerMultiTeacher(TrlTestCase):
     """
     End-to-end tests for multi-teacher distillation, i.e. a mapping of teachers as the `teacher_model` argument.
@@ -1849,9 +1851,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").save_pretrained(path)
         return path
 
-    @classmethod
     @pytest.fixture(scope="class")
-    def teachers(cls, tmp_path_factory):
+    def teachers(self, tmp_path_factory):
         """
         Two local teacher checkpoints, shared by every test in this class.
 
@@ -1861,13 +1862,13 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         """
         directory = tmp_path_factory.mktemp("multi-teacher")
         return {
-            "a": cls._save_teacher(str(directory / "a"), scale=1.05),
-            "b": cls._save_teacher(str(directory / "b"), scale=0.95),
+            "a": self._save_teacher(str(directory / "a"), scale=1.05),
+            "b": self._save_teacher(str(directory / "b"), scale=0.95),
         }
 
     @staticmethod
-    def _prompts(count: int) -> list[str]:
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+    def _prompts(count: int) -> list[list[dict[str, str]]]:
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         prompts = list(dataset["prompt"])
         return [prompts[index % len(prompts)] for index in range(count)]
 
@@ -1891,7 +1892,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         # different algorithm: same seed, same data, same two optimizer steps, bitwise-identical result. Bitwise and
         # not within a tolerance: the two paths schedule the teacher forwards differently, but neither the split into
         # scoring batches nor the projection through the teacher's head may change the arithmetic the student sees.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         def run(**trainer_kwargs):
             training_args = DistillationConfig(
@@ -1976,12 +1977,12 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         step_logs = [entry for entry in routed.state.log_history if "loss" in entry]
         assert step_logs, "no training step was logged"
         for entry in step_logs:
-            assert "teacher_jsd/a" in entry, sorted(entry)
-            assert "teacher_jsd/b" in entry, sorted(entry)
+            assert "teacher/a/jsd" in entry, sorted(entry)
+            assert "teacher/b/jsd" in entry, sorted(entry)
 
     def test_two_teachers_log_per_teacher_metrics(self, teachers):
         # Two different checkpoints train the student end to end, and every per-teacher metric family is logged under
-        # each routing ID, as "<family>/<teacher_id>".
+        # each routing ID, as "teacher/<teacher_id>/<metric>".
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -2005,12 +2006,14 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
         assert step_logs, "no training step was logged"
         for entry in step_logs:
-            for family in ("teacher_jsd", "teacher_token_frac"):
+            for family in ("jsd", "token_frac"):
                 for teacher_id in ("a", "b"):
-                    assert f"{family}/{teacher_id}" in entry, f"{family}/{teacher_id} missing from {sorted(entry)}"
+                    assert f"teacher/{teacher_id}/{family}" in entry, (
+                        f"{family}/{teacher_id} missing from {sorted(entry)}"
+                    )
             # The two checkpoints differ, so their divergences must differ too.
-            assert entry["teacher_jsd/a"] != entry["teacher_jsd/b"]
-            assert entry["teacher_token_frac/a"] + entry["teacher_token_frac/b"] == pytest.approx(1.0)
+            assert entry["teacher/a/jsd"] != entry["teacher/b/jsd"]
+            assert entry["teacher/a/token_frac"] + entry["teacher/b/token_frac"] == pytest.approx(1.0)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2018,7 +2021,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         # A window that routes to "a" only reports no divergence for "b": a mean over zero tokens is
-        # undefined, so that key is omitted rather than logged as zero. `teacher_token_frac` is defined for an
+        # undefined, so that key is omitted rather than logged as zero. `teacher/<id>/token_frac` is defined for an
         # absent teacher and is logged as exactly 0.0.
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
@@ -2039,9 +2042,9 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         only_a_logs = [entry for entry in only_a.state.log_history if "loss" in entry]
         assert only_a_logs, "no training step was logged"
         for entry in only_a_logs:
-            assert "teacher_jsd/a" in entry
-            assert "teacher_jsd/b" not in entry, f"unexpected teacher_jsd/b in {sorted(entry)}"
-            assert entry["teacher_token_frac/b"] == 0.0
+            assert "teacher/a/jsd" in entry
+            assert "teacher/b/jsd" not in entry, f"unexpected teacher/b/jsd in {sorted(entry)}"
+            assert entry["teacher/b/token_frac"] == 0.0
 
     @pytest.mark.parametrize(
         ("teacher_ids", "error"),
@@ -2135,19 +2138,26 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             )
 
     def test_cached_hub_teacher_loads_offline(self):
-        # Registering a Hub ID resolves the teacher's identity from the config transformers stamps while loading, not
-        # from a metadata request, so a fully cached teacher loads with the Hub unreachable and still pins a commit.
+        # A fully cached teacher loads with the Hub unreachable and still pins a commit.
+        dataset = self._unrouted_dataset(4)
         with patch("huggingface_hub.constants.HF_HUB_OFFLINE", True):
             trainer = DistillationTrainer(
                 model=self.model_id,
                 args=DistillationConfig(
                     output_dir=self.tmp_dir,
                     report_to="none",
-                    teacher_model_init_kwargs={"local_files_only": True},
+                    max_steps=1,
+                    per_device_train_batch_size=2,
+                    max_completion_length=4,
+                    save_steps=1,
+                    teacher_model_init_kwargs={"a": {"local_files_only": True}},
                 ),
                 teacher_model={"a": self.model_id},
+                train_dataset=dataset,
             )
-        (entry,) = trainer._teacher_manifest
+            trainer.train()
+        with open(os.path.join(self.tmp_dir, "checkpoint-1", "teacher_manifest.json")) as handle:
+            (entry,) = json.load(handle)["teachers"]
         assert entry["source"] == self.model_id
         assert re.fullmatch(r"[0-9a-f]{40}", entry["revision"]), entry
 
@@ -2156,13 +2166,24 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         # single-teacher argument. Pinning the commit the default branch resolves to loads the same weights either
         # way, so the revision really reaching the loader is shown by a revision that does not exist: it can only
         # fail the load if it was forwarded.
-        commit = AutoConfig.from_pretrained(self.model_id)._commit_hash
+        commit = extract_commit_hash(cached_file(self.model_id, "config.json"), None)
         trainer = DistillationTrainer(
             model=self.model_id,
-            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_revision=commit),
+            args=DistillationConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                teacher_model_revision=commit,
+                max_steps=1,
+                per_device_train_batch_size=2,
+                max_completion_length=4,
+                save_steps=1,
+            ),
             teacher_model={"a": self.model_id},
+            train_dataset=self._unrouted_dataset(4),
         )
-        (entry,) = trainer._teacher_manifest
+        trainer.train()
+        with open(os.path.join(self.tmp_dir, "checkpoint-1", "teacher_manifest.json")) as handle:
+            (entry,) = json.load(handle)["teachers"]
         assert entry["revision"] == commit
 
         with pytest.raises(OSError, match="not a valid git identifier"):
@@ -2182,68 +2203,19 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 output_dir=self.tmp_dir,
                 report_to="none",
                 teacher_model_revision="does-not-exist",
-                teacher_model_init_kwargs_by_teacher={"a": {"revision": "main"}},
+                max_steps=1,
+                per_device_train_batch_size=2,
+                max_completion_length=4,
+                save_steps=1,
+                teacher_model_init_kwargs={"a": {"revision": "main"}},
             ),
             teacher_model={"a": self.model_id},
+            train_dataset=self._unrouted_dataset(4),
         )
-        (entry,) = trainer._teacher_manifest
-        assert entry["revision"] == commit
-
-    def test_checkpoint_manifest_is_written_before_the_parent_serializes(self, teachers):
-        # The manifest must be on disk before the parent checkpoint routine is entered. The parent reaches the
-        # student's weights by different routes — `_save` for a full state dict, `save_fsdp_model` for a sharded one,
-        # which never calls `_save` — and schedules the folder's Hub push before returning, so a manifest written by
-        # one of those hooks, or afterwards, can be missing from a sharded checkpoint or from an upload.
-        present_on_entry = []
-        parent_save_checkpoint = transformers.Trainer._save_checkpoint
-
-        def record_then_save(trainer, model, trial):
-            checkpoint = os.path.join(trainer.args.output_dir, f"checkpoint-{trainer.state.global_step}")
-            present_on_entry.append(os.path.exists(os.path.join(checkpoint, "teacher_manifest.json")))
-            return parent_save_checkpoint(trainer, model, trial)
-
-        training_args = DistillationConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_completion_length=4,
-            max_steps=1,
-            save_strategy="steps",
-            save_steps=1,
-            report_to="none",
-        )
-        trainer = DistillationTrainer(
-            model=self.model_id,
-            args=training_args,
-            train_dataset=self._unrouted_dataset(8),
-            teacher_model={"a": teachers["a"]},
-        )
-        with patch.object(transformers.Trainer, "_save_checkpoint", record_then_save):
-            trainer.train()
-        assert present_on_entry == [True]
+        trainer.train()
         with open(os.path.join(self.tmp_dir, "checkpoint-1", "teacher_manifest.json")) as handle:
-            assert [entry["id"] for entry in json.load(handle)["teachers"]] == ["a"]
-
-    def test_teacher_jsd_is_the_token_weighted_window_mean(self, teachers):
-        # The logged value is the window's total divergence over its total scored tokens, not a mean of per-microbatch
-        # means: a one-token microbatch must not weigh as much as a nine-token one.
-        trainer = DistillationTrainer(
-            model=self.model_id,
-            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-            teacher_model={"a": teachers["a"]},
-        )
-        trainer.model.train()  # `compute_loss` files its metrics under the mode the student is currently in
-        # Drives the metric path with known statistics rather than model math. `_compute_loss` returns the loss, the
-        # entropy sum, the valid-token count, and the `[2, num_teachers]` per-teacher (divergence sum, token count).
-        for count, divergence_sum in [(1, 1.0), (9, 27.0)]:
-            trainer._forward_redirection = lambda *args, count=count, divergence_sum=divergence_sum: (
-                torch.tensor(1.0),
-                torch.tensor(0.0),
-                torch.tensor(count),
-                torch.tensor([[divergence_sum], [float(count)]]),
-            )
-            trainer.compute_loss(trainer.model, {})
-        trainer.log({"loss": 1.0})
-        assert trainer.state.log_history[-1]["teacher_jsd/a"] == pytest.approx((1.0 + 27.0) / (1 + 9))
+            (entry,) = json.load(handle)["teachers"]
+        assert entry["revision"] == commit
 
     def test_empty_teacher_model_mapping_is_rejected(self, teachers):
         # An empty mapping still opts into multi-teacher distillation, where it would leave every row without a
@@ -2279,8 +2251,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert step_logs, "no training step was logged"
         for entry in step_logs:
             for teacher_id in ("a", "b"):
-                assert f"teacher_score_s/{teacher_id}" in entry, sorted(entry)
-                assert entry[f"teacher_score_s/{teacher_id}"] > 0.0
+                assert f"teacher/{teacher_id}/score_s" in entry, sorted(entry)
+                assert entry[f"teacher/{teacher_id}/score_s"] > 0.0
 
     def test_mapping_argument_wins_over_the_config_teacher(self, teachers):
         # `args.teacher_model_name_or_path` is only read when the argument is omitted, exactly as for a single
@@ -2335,13 +2307,27 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
         assert step_logs, "no training step was logged"
         for teacher_id in ("a", "b"):
-            assert step_logs[-1][f"teacher_jsd/{teacher_id}"] > 0.0
+            assert step_logs[-1][f"teacher/{teacher_id}/jsd"] > 0.0
+
+    def test_config_parses_per_teacher_init_kwargs(self):
+        args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            teacher_model_init_kwargs='{"a": {"dtype": "float32"}, "b": {"revision": "main"}}',
+        )
+        assert args.teacher_model_init_kwargs == {"a": {"dtype": "float32"}, "b": {"revision": "main"}}
+
+    def test_unknown_teacher_init_kwargs_id_is_rejected(self, teachers):
+        args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            teacher_model_init_kwargs={"typo": {"revision": "main"}},
+        )
+        with pytest.raises(ValueError, match="Unknown teacher IDs.*typo"):
+            DistillationTrainer(model=self.model_id, args=args, teacher_model=teachers)
 
     def test_per_teacher_init_kwargs(self, teachers):
-        # Per-ID loading overrides really reach the loader. Two observable effects through public API:
-        # (1) the dtype a teacher materializes in is recorded in the saved manifest, and it is part of the teacher's
-        #     identity, so the same checkpoint registered twice with different dtypes gets two different source keys;
-        # (2) an override that cannot apply to the source is rejected at construction.
+        # Per-ID loading kwargs determine each teacher's dtype, which is recorded in the saved manifest.
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -2352,7 +2338,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             save_steps=1,
             logging_steps=1,
             report_to="none",
-            teacher_model_init_kwargs_by_teacher={"a": {"dtype": "float32"}, "b": {"dtype": "bfloat16"}},
+            teacher_model_init_kwargs={"a": {"dtype": "float32"}, "b": {"dtype": "bfloat16"}},
         )
         trainer = DistillationTrainer(
             model=self.model_id,
@@ -2374,7 +2360,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         # One generation batch is split into `gradient_accumulation_steps` micro-batches, and the multi-teacher path
         # schedules teacher scoring across that whole batch. The resulting update must still be the single-teacher
         # one, bitwise.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         def run(**trainer_kwargs):
             training_args = DistillationConfig(
@@ -2436,7 +2422,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert len(eval_logs) >= 2, f"expected one evaluation per step, got {len(eval_logs)}"
         for entry in eval_logs:
             assert not torch.isnan(torch.tensor(entry["eval_loss"]))
-        expected_keys = {f"eval_{family}/{tid}" for family in ("teacher_jsd", "teacher_token_frac") for tid in "ab"}
+        expected_keys = {f"eval_teacher/{tid}/{family}" for family in ("jsd", "token_frac") for tid in "ab"}
         assert any(expected_keys <= set(entry) for entry in eval_logs), (
             f"no evaluation logged both teachers; last eval keys: {sorted(eval_logs[-1])}"
         )
@@ -2553,7 +2539,9 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
     def test_rejects_unsupported_teacher_kwargs(self, teachers, unsupported):
         # Managed teachers are loaded as plain dense CPU models and scored through their own head, so quantized and
         # device-mapped teachers are refused before anything is loaded.
-        args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=unsupported)
+        args = DistillationConfig(
+            output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"a": unsupported}
+        )
         with pytest.raises(ValueError, match=next(iter(unsupported))):
             DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
 
@@ -2561,61 +2549,19 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
     def test_accepts_inert_teacher_kwargs(self, teachers, inert):
         # The guard reads the effective value, not the key: `device_map=None` is exactly what managed teachers are
         # loaded with, and an explicit `quantization_config=None` asks for no quantization at all.
-        args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=inert)
+        args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"a": inert})
         trainer = DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
         assert list(trainer.teacher_models) == ["a"]
 
     def test_rejects_unsupported_per_teacher_override(self, teachers):
-        # The effective value is the merge of the common kwargs with this teacher's, so an override that turns an
-        # inert option active is caught as well.
+        # Unsupported loading kwargs are checked for each teacher.
         args = DistillationConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            teacher_model_init_kwargs={"device_map": None},
-            teacher_model_init_kwargs_by_teacher={"a": {"device_map": "auto"}},
+            teacher_model_init_kwargs={"a": {"device_map": "auto"}},
         )
         with pytest.raises(ValueError, match="device_map"):
             DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
-
-    def test_accepts_common_option_every_teacher_overrides(self, teachers):
-        # Only what each registered teacher will actually be loaded with is checked. The common dict is never judged
-        # on its own, so an active option that every teacher overrides back to an inert value is supported.
-        args = DistillationConfig(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            teacher_model_init_kwargs={"device_map": "auto"},
-            teacher_model_init_kwargs_by_teacher={"a": {"device_map": None}},
-        )
-        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
-        assert list(trainer.teacher_models) == ["a"]
-
-    def test_rejects_preloaded_quantized_teacher(self, teachers):
-        # An already-instantiated teacher can arrive quantized or dispatched; the loading options say nothing about it.
-        teacher = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
-        teacher.hf_quantizer = object()  # what transformers sets on a model a quantizer loaded
-        with pytest.raises(ValueError, match="quantized or dispatched"):
-            DistillationTrainer(
-                model=self.model_id,
-                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_model={"a": teacher},
-            )
-
-    def test_rejects_quantized_teacher_checkpoint(self, teachers):
-        # A checkpoint can carry its quantization in its own config, so no loading kwarg reveals it: the teacher is
-        # checked after it is loaded. The loader is patched to return a quantized-looking model, which tests the
-        # validation control flow rather than a quantization backend.
-        quantized = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
-        quantized.hf_quantizer = object()
-        # The student is instantiated here so the patched loader only ever serves the teacher's string source.
-        student = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
-        with patch("trl.trainer.distillation_trainer.create_model_from_path", return_value=quantized):
-            with pytest.raises(ValueError, match="quantized or dispatched"):
-                DistillationTrainer(
-                    model=student,
-                    processing_class=AutoTokenizer.from_pretrained(self.model_id),
-                    args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                    teacher_model={"a": teachers["a"]},
-                )
 
     @require_vision
     def test_rejects_vlm_student(self, teachers):

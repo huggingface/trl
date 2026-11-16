@@ -68,6 +68,25 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
+    def test_distillation_multi_teacher(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_distillation_trainer.py",
+                "-k",
+                "test_two_teachers_log_per_teacher_metrics",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            os.environ.copy(),
+        )
+
     @pytest.mark.parametrize(
         "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
     )
