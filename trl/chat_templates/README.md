@@ -191,7 +191,11 @@ Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B
 
 ### `muse_spark.jinja`
 
-Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant before [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+
+### `muse_spark_v2.jinja`
+
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
 
 ### `nemotron_3_nano.jinja`
 
@@ -414,7 +418,7 @@ Wrap the whole assistant branch — every ATEM channel of the turn — with `{% 
 
 ### `muse_spark_training.jinja`
 
-Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
 ### `nemotron_3_nano_training.jinja`
 
