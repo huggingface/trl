@@ -22,6 +22,8 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import select
+import socket
 import threading
 import time
 from collections import OrderedDict, defaultdict
@@ -882,26 +884,25 @@ class TransformersVLLMServer:
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
         if self.script is not None:
-            with self.generate_lock, torch.no_grad():
+            with torch.no_grad():
                 completion_ids = torch.tensor(self.script(prompt_ids[0].tolist()), device=self.model.device)
                 logits = self.model(torch.cat([prompt_ids[0], completion_ids])[None]).logits[
                     0, prompt_ids.shape[1] - 1 : -1
                 ]
             return completion_ids, (logits.float() / sampling_params["temperature"]).log_softmax(-1)
-        with self.generate_lock:
-            output = self.model.generate(
-                prompt_ids,
-                attention_mask=torch.ones_like(prompt_ids),
-                do_sample=True,
-                max_new_tokens=min(sampling_params["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                top_k=sampling_params["top_k"],
-                min_p=sampling_params.get("min_p"),
-                repetition_penalty=sampling_params["repetition_penalty"],
-                output_scores=True,
-                return_dict_in_generate=True,
-            )
+        output = self.model.generate(
+            prompt_ids,
+            attention_mask=torch.ones_like(prompt_ids),
+            do_sample=True,
+            max_new_tokens=min(sampling_params["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
+            temperature=sampling_params["temperature"],
+            top_p=sampling_params["top_p"],
+            top_k=sampling_params["top_k"],
+            min_p=sampling_params.get("min_p"),
+            repetition_penalty=sampling_params["repetition_penalty"],
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
         return output.sequences[0, prompt_ids.shape[1] :], torch.cat(output.scores).float().log_softmax(-1)
 
     def _handler(self):
@@ -913,7 +914,12 @@ class TransformersVLLMServer:
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                self.reply(server.post(urlsplit(self.path).path, json.loads(body or "{}")))
+                with server.generate_lock:
+                    # As vLLM, skip a request whose client has disconnected (#8378)
+                    if select.select([self.connection], [], [], 0)[0] and not self.connection.recv(1, socket.MSG_PEEK):
+                        return
+                    payload = server.post(urlsplit(self.path).path, json.loads(body or "{}"))
+                self.reply(payload)
 
             def reply(self, payload):
                 if payload is None:
