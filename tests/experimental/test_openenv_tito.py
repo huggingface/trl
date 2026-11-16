@@ -46,8 +46,10 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
+from trl import AsyncGRPOConfig
+from trl.experimental.async_grpo import openenv_harness
+from trl.trainer import async_grpo_trainer
+from trl.trainer.async_grpo_trainer import Rollout, TurnRecord, _chain_to_sequences, _SampleBuilder
 
 from ..testing_utils import is_ampere_or_newer, require_vllm
 
@@ -495,7 +497,7 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     session = Session(captured_entry())
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     monkeypatch.setattr(
-        async_rollout_worker, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+        async_grpo_trainer, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
     )
     with pytest.raises(ValueError, match="invalid training sequence"):
         loop._run()

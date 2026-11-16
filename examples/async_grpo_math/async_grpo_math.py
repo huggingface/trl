@@ -34,7 +34,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/async_grpo_math/async_grpo_math.py
 
 from datasets import load_dataset
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
 
