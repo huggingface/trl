@@ -70,7 +70,7 @@ You can customize the server configuration by passing additional arguments. For 
 > And GPUs **4-7** for training:
 >
 > ```sh
-> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 > ```
 
 </hfoption>
@@ -110,7 +110,7 @@ You can customize the server configuration by passing additional arguments. For 
 > And GPUs **4-7** for training:
 >
 > ```sh
-> CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+> CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --nproc_per_node 4 train.py
 > ```
 
 </hfoption>
@@ -151,60 +151,6 @@ training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_
 
 </hfoption>
 </hfoptions>
-
-## Liger Kernel for memory optimization
-
-Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
-
-<hfoptions id="liger">
-<hfoption id="SFT">
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="DPO">
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="KTO">
-
-```python
-from trl import KTOConfig
-
-training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-</hfoptions>
-
-For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ## Mixed precision training
 

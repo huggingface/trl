@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "google/gemma-7b-it"
 
@@ -38,8 +41,9 @@ config = GemmaConfig(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
-    head_dim=2,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     hidden_act="gelu",
+    rope_scaling=None,
 )
 model = GemmaForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

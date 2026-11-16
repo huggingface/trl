@@ -58,16 +58,16 @@ The default hyperparameters follow the reference fine-tuning configs of the rele
 1.5e-4, Adam betas (0.95, 0.99), weight decay 1e-4, 25 warmup steps then cosine to 10% of the initial learning rate,
 global batch size 8, sequence length 1024, 800 steps, LoRA rank 16 with alpha 32), so a run only needs:
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+torchrun --nproc_per_node 8 examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --use_peft \
-    --gradient_checkpointing \
+    --activation_checkpointing \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 
 Drop `--use_peft` for full fine-tuning, which keeps the MoE router frozen like the reference recipe.
 
 Hardware: the 26B parameters do not fit on a single 80 GB GPU, so this needs at least 2 GPUs to shard them
-across ranks with ZeRO-3. Gradient checkpointing (`--gradient_checkpointing`) is required to keep activations within
+across ranks with ZeRO-3. Activation checkpointing (`--activation_checkpointing`) is required to keep activations within
 memory. Two 80 GB H100s are enough for the defaults above; more GPUs increase throughput.
 """
 
@@ -354,6 +354,8 @@ def main(script_args, training_args, model_args):
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trainer.end()
 
 
 def make_parser():

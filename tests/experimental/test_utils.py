@@ -22,6 +22,7 @@ from trl.experimental.utils import (
     create_reference_model,
     prepare_peft_model,
     truncate_dataset,
+    truncate_right,
 )
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
@@ -166,6 +167,21 @@ class TestTruncateExamples(TrlTestCase):
         assert dataset.to_dict() == expected_output
 
 
+class TestTruncateRight(TrlTestCase):
+    def test_truncates_after_the_first_of_any_stop_token(self):
+        # The second row stops on 3, a stop token the first row does not use
+        input_ids = torch.tensor([[5, 2, 7, 8], [5, 3, 7, 8]])
+        output_ids, mask = truncate_right(input_ids, [2, 3], pad_token_id=0)
+        assert output_ids.tolist() == [[5, 2, 0, 0], [5, 3, 0, 0]]
+        assert mask.tolist() == [[1, 1, 0, 0], [1, 1, 0, 0]]
+
+    def test_keeps_sequences_without_a_stop_token(self):
+        input_ids = torch.tensor([[5, 7, 8, 9]])
+        output_ids, mask = truncate_right(input_ids, [2, 3], pad_token_id=0)
+        assert output_ids.tolist() == [[5, 7, 8, 9]]
+        assert mask.tolist() == [[1, 1, 1, 1]]
+
+
 class TestPreparePeftModel(TrlTestCase):
     @require_peft
     @require_bitsandbytes
@@ -188,6 +204,31 @@ class TestPreparePeftModel(TrlTestCase):
 
         fp32 = [name for name, param in model.named_parameters() if param.dtype == torch.float32]
         assert fp32 == [], f"expected no float32 params after prepare_peft_model, got e.g. {fp32[:5]}"
+
+    @require_peft
+    @require_bitsandbytes
+    @require_torch_accelerator
+    def test_qlora_gradient_checkpointing_passes_use_reentrant(self):
+        import warnings
+
+        from peft import LoraConfig
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments
+
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            quantization_config=BitsAndBytesConfig(load_in_4bit=True),
+        )
+        args = TrainingArguments(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to=[])
+        peft_config = LoraConfig(r=8, target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM")
+        model = prepare_peft_model(model, peft_config, args)
+        model.train()
+
+        input_ids = torch.tensor([[1, 2, 3, 4]], device=model.device)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model(input_ids=input_ids, labels=input_ids).loss.backward()
+        # Without explicit kwargs, transformers sets `use_reentrant`; an empty dict reaches torch without it
+        assert not [w for w in caught if "use_reentrant" in str(w.message)]
 
 
 class TestReferenceModel(TrlTestCase):

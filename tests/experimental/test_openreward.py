@@ -41,22 +41,20 @@ _HERE = Path(__file__).parent
 _ECHO_ENV_SCRIPT = _HERE / "_openreward_echo_env.py"
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture(scope="class")
 def echo_env_url():
     """Spawn the echo env on a free port; tear down on teardown."""
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, str(_ECHO_ENV_SCRIPT)],
-        env={**os.environ, "PORT": str(port)},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # Pass the bound socket: rebinding a free port in the subprocess races with other xdist workers (see #7885)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        proc = subprocess.Popen(
+            [sys.executable, str(_ECHO_ENV_SCRIPT)],
+            env={**os.environ, "FD": str(sock.fileno())},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(sock.fileno(),),
+        )
     url = f"http://127.0.0.1:{port}"
     deadline = time.time() + 30.0
     while time.time() < deadline:
@@ -193,9 +191,71 @@ class TestOpenRewardSpec(TrlTestCase):
         env_b.reset(**spec.train_dataset[1])
         env_a.echo(text="hello")
         assert env_a.reward == 1.0
-        assert env_b.reward == 0.0  # untouched
+        assert env_b.reward is None  # untouched
         env_a._close()
         env_b._close()
+
+    @pytest.mark.parametrize(
+        "calls, failure_reward, expected_history, expected_reward",
+        [
+            ([], 0.0, [], None),
+            (["hint"], 0.0, [None], None),
+            (["missing_tool"], 0.0, [None], None),
+            (["wrong"], 0.0, [0.0], 0.0),
+            (["wrong"], -1.0, [-1.0], -1.0),
+            (["correct"], 0.0, [1.0], 1.0),
+            (["wrong", "hint"], 0.0, [0.0, None], 0.0),
+            (["wrong", "missing_tool"], -1.0, [-1.0, None], -1.0),
+            (["wrong", "hint", "correct"], -1.0, [-1.0, None, 1.0], 1.0),
+        ],
+    )
+    def test_reward_func_distinguishes_missing_and_observed_rewards(
+        self, echo_env_url, calls, failure_reward, expected_history, expected_reward
+    ):
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        env = spec.environment_factory()
+        try:
+            env.reset(task_spec={"id": "reward-test", "target": "hello", "failure_reward": failure_reward})
+            for call in calls:
+                if call == "wrong":
+                    env.echo(text="wrong")
+                elif call == "correct":
+                    env.echo(text="hello")
+                elif call == "hint":
+                    env.hint()
+                else:
+                    assert env._call_ors_tool("missing_tool", {}).startswith("Error:")
+            assert env.rewards == expected_history
+            assert spec.reward_funcs(environments=[env]) == [expected_reward]
+        finally:
+            env._close()
+
+    @pytest.mark.parametrize("failure_reward", [0.0, -1.0])
+    def test_reward_func_reset_clears_previous_outcome(self, echo_env_url, failure_reward):
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        env = spec.environment_factory()
+        try:
+            env.reset(task_spec={"id": "reward-test", "target": "hello", "failure_reward": failure_reward})
+            env.echo(text="wrong")
+            assert spec.reward_funcs(environments=[env]) == [failure_reward]
+            env.reset(task_index=0)
+            assert env.rewards == []
+            assert spec.reward_funcs(environments=[env]) == [None]
+        finally:
+            env._close()
+
+    def test_reward_func_mixed_scoring_coverage(self, echo_env_url):
+        spec = OpenRewardSpec(echo_env_url, env_name="echoenvironment", num_tasks=1)
+        envs = [spec.environment_factory() for _ in range(3)]
+        try:
+            for env in envs:
+                env.reset(task_index=0)
+            envs[1].echo(text="wrong")
+            envs[2].echo(text="hello")
+            assert spec.reward_funcs(environments=envs) == [None, 0.0, 1.0]
+        finally:
+            for env in envs:
+                env._close()
 
     def test_metadata_does_not_overwrite_reserved_columns(self, echo_env_url):
         # If a task spec ever shipped a `prompt` key, the metadata loop must

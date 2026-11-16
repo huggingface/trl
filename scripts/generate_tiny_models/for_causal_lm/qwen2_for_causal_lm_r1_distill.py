@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 
@@ -35,6 +38,7 @@ config = Qwen2Config(
     vocab_size=151936,
     hidden_size=8,
     num_attention_heads=4,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
@@ -42,6 +46,7 @@ config = Qwen2Config(
     max_window_layers=21,
     bos_token_id=151643,
     eos_token_id=151643,
+    use_mrope=False,
 )
 model = Qwen2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

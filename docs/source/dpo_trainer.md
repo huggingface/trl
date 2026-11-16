@@ -114,13 +114,14 @@ Several formulations of the objective have been proposed in the literature. Init
 | `"exo_pair"` | The [EXO](https://huggingface.co/papers/2402.00856) authors propose reverse-KL preference optimization. `label_smoothing` must be strictly greater than `0.0`; a recommended value is `1e-3` (see Eq. 16 for the simplified pairwise variant). The full method uses `K>2` SFT completions and approaches PPO as `K` grows. |
 | `"nca_pair"` | The [NCA](https://huggingface.co/papers/2402.05369) authors shows that NCA optimizes the absolute likelihood for each response rather than the relative likelihood. |
 | `"robust"` | The [Robust DPO](https://huggingface.co/papers/2403.00409) authors propose an unbiased DPO loss under noisy preferences. Use `label_smoothing` in [`DPOConfig`] to model label-flip probability; valid values are in the range `[0.0, 0.5)`. |
-| `"bco_pair"` | The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0. For unpaired data, we recommend the dedicated [`experimental.bco.BCOTrainer`]. |
+| `"bco_pair"` | The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0. |
 | `"sppo_hard"` | The [SPPO](https://huggingface.co/papers/2405.00675) authors claim that SPPO is capable of solving the Nash equilibrium iteratively by pushing the chosen rewards to be as large as 1/2 and the rejected rewards to be as small as -1/2 and can alleviate data sparsity issues. The implementation approximates this algorithm by employing hard label probabilities, assigning 1 to the winner and 0 to the loser. |
 | `"aot"`  or `loss_type="aot_unpaired"` | The [AOT](https://huggingface.co/papers/2406.05882) authors propose Distributional Preference Alignment via Optimal Transport. `loss_type="aot"` is for paired data; `loss_type="aot_unpaired"` is for unpaired data. Both enforce stochastic dominance via sorted quantiles; larger per-GPU batch sizes help. |
 | `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an anchored objective. `apo_zero` boosts winners and downweights losers (useful when the model underperforms the winners). `apo_down` downweights both, with stronger pressure on losers (useful when the model already outperforms winners). |
 | `"discopop"` | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). |
 | `"sft"` | SFT (Supervised Fine-Tuning) loss is the negative log likelihood loss, used to train the model to generate preferred responses. |
 | `"sigmoid_norm"` | The [SimPO](https://huggingface.co/papers/2405.14734) authors address the length-bias in the original sigmoid loss by normalizing by the number of non-mask tokens; TRL exposes this as `loss_type="sigmoid_norm"`. |
+| `"udpo"` | The [UDPO](https://huggingface.co/papers/2607.03248) authors propose an unbiased DPO loss under noisy preferences that, unlike `"robust"`, stays unbiased when the flip probability is overestimated. Use `label_smoothing` in [`DPOConfig`] to set the flip probability ε; valid values are in the range `[0.0, 0.5)`. |
 
 ## Logged metrics
 
@@ -151,10 +152,7 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
 - `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-- With `use_liger_kernel=True`:
-  - only a single `loss_type` is supported,
-  - `compute_metrics` is not supported,
-  - `precompute_ref_log_probs=True` is not supported.
+- PEFT adapters targeting `lm_head` are not supported (use `modules_to_save=["lm_head"]` instead).
 - `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 - `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 - `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
@@ -237,10 +235,6 @@ trainer.train()
 > ```python
 > DPOConfig(learning_rate=1e-5, ...)
 > ```
-
-### Train with Liger Kernel
-
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for DPO
 

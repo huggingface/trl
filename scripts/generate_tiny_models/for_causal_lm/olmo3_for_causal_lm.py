@@ -21,12 +21,15 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 # 4.57.0 (the release that introduced Olmo 3) was yanked for a packaging issue, so pin the first non-yanked patch.
 check_transformers_version("4.57.1")
+
+set_seed()
 
 MODEL_ID = "allenai/Olmo-3-7B-Think"
 
@@ -36,6 +39,7 @@ config = Olmo3Config(
     vocab_size=len(tokenizer.vocab),
     hidden_size=8,
     num_attention_heads=4,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,

@@ -19,12 +19,14 @@ from .._lazy_module import _LazyModule
 
 _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
+    "selective_activation_checkpointing": ["enable_selective_activation_checkpointing"],
     "utils": ["create_reference_model", "prepare_deepspeed", "prepare_fsdp", "unwrap_model_for_generation"],
 }
 
 
 if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
+    from .selective_activation_checkpointing import enable_selective_activation_checkpointing
     from .utils import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 else:
     import sys

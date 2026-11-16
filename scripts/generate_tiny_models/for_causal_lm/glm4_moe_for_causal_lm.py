@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "zai-org/GLM-4.5"
 
@@ -39,7 +42,7 @@ config = Glm4MoeConfig(
     num_hidden_layers=2,
     intermediate_size=32,
     moe_intermediate_size=32,
-    head_dim=2,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     n_routed_experts=4,
     num_experts_per_tok=2,
     attention_bias=True,

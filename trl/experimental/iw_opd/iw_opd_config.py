@@ -439,16 +439,6 @@ class IWOPDConfig(_BaseConfig):
                 f"{self.per_device_train_batch_size} * {self.gradient_accumulation_steps}."
             )
 
-        if self.use_teacher_server and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with use_teacher_server=True because the Liger loss path "
-                "requires a local teacher model."
-            )
-        if self.distillation_objective == "iw_opd" and self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported with distillation_objective='iw_opd' because IW-OPD needs "
-                "sampled-token student and teacher logprobs."
-            )
         if self.distillation_objective == "iw_opd" and self.lmbda < 1.0:
             raise ValueError(
                 "distillation_objective='iw_opd' requires lmbda=1.0 because IW-OPD is an on-policy objective."

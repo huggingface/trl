@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "Qwen/Qwen2.5-32B-Instruct"
 
@@ -36,6 +39,7 @@ config = Qwen2Config(
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_hidden_layers=2,
     intermediate_size=32,
     rope_theta=1000000.0,

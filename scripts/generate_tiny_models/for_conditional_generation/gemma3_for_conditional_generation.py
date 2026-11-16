@@ -15,10 +15,19 @@
 import torch
 from transformers import AutoConfig, AutoProcessor, Gemma3ForConditionalGeneration, GenerationConfig
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "google/gemma-3-4b-it"
 
@@ -42,7 +51,7 @@ text_config = {
 vision_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
-    "num_attention_heads": 4,
+    "num_attention_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "num_key_value_heads": 2,
     "embed_dim": 64,
     "intermediate_size": 32,

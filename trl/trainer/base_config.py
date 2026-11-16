@@ -14,6 +14,8 @@
 
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -41,9 +43,10 @@ class _BaseConfig(TrainingArguments):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
             the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
-            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations. Increases multi-GPU
-            throughput by ~20% and reduces memory usage by ~60%. Works with Flash Attention, FSDP, and DeepSpeed.
-            Currently, supports Llama, Mistral, Mixtral, and Gemma models.
+            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations: transformers patches the
+            model's layers with Liger's Triton kernels. Deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`],
+            [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0: use `model_init_kwargs={"use_kernels":
+            True}` instead.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
             will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
@@ -58,10 +61,12 @@ class _BaseConfig(TrainingArguments):
             "will be interpreted as ratio of total training steps."
         },
     )
-    gradient_checkpointing: bool = field(
-        default=True,
+    gradient_checkpointing: bool | None = field(
+        default=None,
         metadata={
-            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training."
+            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training.",
+            "nargs": "?",
+            "const": True,
         },
     )
     bf16: bool | None = field(
@@ -90,7 +95,9 @@ class _BaseConfig(TrainingArguments):
     use_liger_kernel: bool = field(
         default=False,
         metadata={
-            "help": "Enable Liger Kernel optimizations. Increases throughput by ~20%% and reduces memory by ~60%%."
+            "help": "Enable Liger Kernel optimizations: transformers patches the model's layers with Liger's Triton kernels. "
+            "Deprecated in `SFTTrainer`, `DPOTrainer`, `KTOTrainer`, `GRPOTrainer` and `RLOOTrainer`, and will be "
+            'removed in v2.0.0: use `model_init_kwargs={"use_kernels": True}` instead.'
         },
     )
     # - Introduced in v4.54.1; fixed in v5.3.0
@@ -103,5 +110,15 @@ class _BaseConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # TRL enables activation checkpointing by default, under the name this transformers version reads: from 5.23,
+        # `activation_checkpointing`. A `gradient_checkpointing` the user passes still gets transformers' deprecation
+        # warning.
+        if self.gradient_checkpointing is None:
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                if self.activation_checkpointing is None:
+                    self.activation_checkpointing = True
+            else:
+                self.gradient_checkpointing = True
 
         super().__post_init__()

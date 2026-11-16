@@ -28,9 +28,8 @@
 pip install math_verify
 
 # For Qwen/Qwen2.5-VL-3B-Instruct
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/gspo_visual_math/gspo_visual_math.py \
+torchrun --nproc_per_node 8 examples/gspo_visual_math/gspo_visual_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir gspo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
@@ -139,3 +138,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trainer.end()

@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -35,6 +38,7 @@ config = LlamaConfig(
     vocab_size=128256,
     hidden_size=8,
     num_attention_heads=4,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
