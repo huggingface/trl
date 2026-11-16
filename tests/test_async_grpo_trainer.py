@@ -4272,6 +4272,12 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     "text config",
     strict=True,
 )
+_NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
+    Version(transformers.__version__) >= Version("5.24.0.dev0"),
+    raises=ValueError,
+    reason="transformers refuses Flash Attention for models with bidirectional attention over image tokens, see #8400",
+    strict=True,
+)
 
 
 @require_torch_accelerator
@@ -4308,8 +4314,18 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
                 ),
             ],
         ),
-        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
-        pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            {},
+            id="gemma3",
+            marks=_NO_FLASH_ATTN_FOR_IMAGES,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            {},
+            id="gemma4",
+            marks=_NO_FLASH_ATTN_FOR_IMAGES,
+        ),
         pytest.param(
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             {},
