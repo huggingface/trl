@@ -598,7 +598,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1262,8 +1262,8 @@ class TestGRPOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -1288,8 +1288,8 @@ class TestGRPOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         peft_config = LoraConfig(
             target_modules=["q_proj", "v_proj"],
             modules_to_save=["lm_head"],
@@ -2576,7 +2576,7 @@ class TestGRPOTrainer(TrlTestCase):
             use_vllm=True,
         )
         trainer = GRPOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -2753,9 +2753,10 @@ class TestGRPOTrainer(TrlTestCase):
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
+        # Tied embeddings, which vLLM holds as one tensor
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
-        )  # tiny model is too small for vLLM
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", dtype="float32"
+        )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -2818,7 +2819,7 @@ class TestGRPOTrainer(TrlTestCase):
             vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = GRPOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -2866,7 +2867,7 @@ class TestGRPOTrainer(TrlTestCase):
             vllm_importance_sampling_clip_max=vllm_importance_sampling_clip_max,
         )
         trainer = GRPOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -2939,7 +2940,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
 
         trainer = GRPOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -3726,7 +3727,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        Version(transformers.__version__) < Version("5.13.0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
     )
     def test_tools_without_jmespath(self):
@@ -3957,6 +3958,11 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
@@ -4048,6 +4054,11 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["reward"] == pytest.approx(1 / 3)
         # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset` or `get_reward`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4079,15 +4090,29 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory=IncrementRewardEnvironment,
         )
 
-        # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
-        # a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "IncrementRewardEnvironment"]
-        assert trainer.reward_weights.tolist() == [0.5, 1.0]
-        assert len(trainer.reward_funcs) == 2
-        # `get_reward` is not exposed as a tool; `increment` is.
-        tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "increment" in tool_names
-        assert "get_reward" not in tool_names
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        # The env-owned reward is logged under the env class name next to the trainer-owned reward func, with a fixed
+        # weight of 1. Counters are 1, 0, 0 -> env rewards 1.0, 0.0, 0.0
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/IncrementRewardEnvironment/mean"}
+        assert logged["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+        assert logged["reward"] == pytest.approx(0.5 * logged["rewards/str_length_reward/mean"] + 1 / 3)
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset` or `get_reward`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -4143,6 +4168,8 @@ class TestGRPOTrainer(TrlTestCase):
         reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
         assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
         assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+        # 6 of the 9 rollouts are bound to `ScoredEnvironment`, so the env reward adds 1.0 to two thirds of them
+        assert logged["reward"] == pytest.approx(logged["rewards/str_length_reward/mean"] + 2 / 3)
 
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
