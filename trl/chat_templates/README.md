@@ -191,7 +191,11 @@ Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B
 
 ### `muse_spark.jinja`
 
-Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant before [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Renders the same ATEM protocol as `muse_glimmer.jinja`, and ships its own `{% generation %}` / `{% endgeneration %}` markers and `response_template`, so `add_response_schema` leaves it alone.
+
+### `muse_spark_v2.jinja`
+
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
 
 ### `nemotron_3_nano.jinja`
 
@@ -282,7 +286,11 @@ Qwen3-Coder-Next chat template (as shipped by `Qwen/Qwen3-Coder-Next`). Same as 
 
 ### `smolvlm.jinja`
 
-Original SmolVLM chat template. Also matches SmolVLM2, which ships a byte-identical template. Does not support tool calling.
+Original SmolVLM chat template. Also matches SmolVLM2 (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e)), which shipped a byte-identical template. Does not support tool calling.
+
+### `smolvlm_v2.jinja`
+
+SmolVLM2 chat template (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` since [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` since [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e)). Same as `smolvlm.jinja`, except that string message content is rendered instead of dropped. Does not support tool calling.
 
 ## Training templates
 
@@ -410,7 +418,7 @@ Wrap the whole assistant branch — every ATEM channel of the turn — with `{% 
 
 ### `muse_spark_training.jinja`
 
-Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
 ### `nemotron_3_nano_training.jinja`
 
@@ -519,6 +527,10 @@ Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` 
 
 ### `smolvlm_training.jinja`
 
-Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+Patched SmolVLM template (also used for SmolVLM2-2.2B-Instruct before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and SmolVLM2-500M-Video-Instruct before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e), which shipped a byte-identical template). Diff vs `smolvlm.jinja`:
 
 Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
+
+### `smolvlm_v2_training.jinja`
+
+Patched SmolVLM2 template. Same diff as `smolvlm_training.jinja`, applied to `smolvlm_v2.jinja`.
