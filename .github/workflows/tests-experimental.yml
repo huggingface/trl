@@ -13,6 +13,7 @@ on:
       - "tests/experimental/**"
       - "pyproject.toml"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
@@ -52,6 +53,7 @@ jobs:
     defaults:
       run:
         shell: bash
+    if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
