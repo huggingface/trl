@@ -100,6 +100,10 @@ def is_vllm_available(min_version: str | None = None) -> bool:
     return _vllm_available
 
 
+def is_vllm_bnb_plugin_available() -> bool:
+    return _is_package_available("vllm_bnb_plugin")
+
+
 def is_weave_available() -> bool:
     return _is_package_available("weave")
 
