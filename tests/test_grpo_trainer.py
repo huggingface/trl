@@ -348,7 +348,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
