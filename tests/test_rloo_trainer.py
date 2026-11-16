@@ -153,7 +153,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -748,8 +748,8 @@ class TestRLOOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -1372,7 +1372,7 @@ class TestRLOOTrainer(TrlTestCase):
             use_vllm=True,
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1443,9 +1443,10 @@ class TestRLOOTrainer(TrlTestCase):
     )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
+        # Tied embeddings, which vLLM holds as one tensor
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
-        )  # tiny model is too small for vLLM
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", dtype="float32"
+        )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -1503,7 +1504,7 @@ class TestRLOOTrainer(TrlTestCase):
             vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1575,7 +1576,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
