@@ -22,15 +22,7 @@
 
 ## 🎉 What's New
 
-**🔥 Mistral Large 4:** Fine-tune [Mistral Large 4](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on a single node of 8 B300s, on top of its FP8 weights. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_mistral_large_4).
-
-**🚀 Training on AMD GPUs:** TRL's trainers now run on [AMD Instinct GPUs](https://huggingface.co/docs/trl/amd_gpus) through PyTorch's ROCm build.
-
-**🔥 Beam:** Fine-tune [Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on a single node of 8 B300s. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_beam).
-
-**🔥 Muse Spark Open:** Fine-tune [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), sharded across your GPUs at load time. See the [8-node LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_muse_spark_open).
-
-**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Overview
 
@@ -38,7 +30,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 ## Highlights
 
-- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) and more.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) and more.
 
 - **Efficient and scalable**:
   - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
@@ -115,6 +107,40 @@ trainer.train()
 
 > [!NOTE]
 > For reasoning models, use the `reasoning_accuracy_reward()` function for better results.
+
+### `AsyncGRPOTrainer`
+
+[`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer) runs the same algorithm as [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), much faster: a vLLM server streams rollouts while the trainer updates the model, so generation and training overlap instead of alternating. The trainer needs vLLM and kernels, and `accuracy_reward` needs math-verify, which you can install with `pip install trl[vllm,kernels,math_verify]`.
+
+```python
+# train_async_grpo.py
+from datasets import load_dataset
+from trl import AsyncGRPOTrainer
+from trl.rewards import accuracy_reward
+
+if __name__ == "__main__":
+    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+
+    trainer = AsyncGRPOTrainer(
+        model="Qwen/Qwen3.5-2B",
+        reward_funcs=accuracy_reward,
+        train_dataset=dataset,
+    )
+    trainer.train()
+```
+
+Generation runs on a vLLM server, on a different GPU than the trainer. Start it on GPU 0:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+    --weight-transfer-config '{"backend": "nccl"}' --logprobs-mode processed_logprobs --max-model-len 4096
+```
+
+Then run the training on GPU 1:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
+```
 
 ### `DPOTrainer`
 
@@ -224,7 +250,7 @@ Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimenta
 ```bibtex
 @software{vonwerra2020trl,
   title   = {{TRL: Transformers Reinforcement Learning}},
-  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin and Dirhoussi, Amine and Villanova del Moral, Albert and Paniego Blanco, Sergio},
   license = {Apache-2.0},
   url     = {https://github.com/huggingface/trl},
   year    = {2020}

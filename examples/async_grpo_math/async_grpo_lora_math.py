@@ -39,8 +39,7 @@ vllm serve Qwen/Qwen3-8B \
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora --max-lora-rank 32 --max-loras 6
 
-CUDA_VISIBLE_DEVICES=1 accelerate launch --num_processes 1 \
-    examples/async_grpo_math/async_grpo_lora_math.py
+CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_math/async_grpo_lora_math.py
 ```
 """
 
@@ -49,7 +48,7 @@ import os
 from datasets import load_dataset
 from peft import LoraConfig
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
 
@@ -78,7 +77,7 @@ def main() -> None:
         learning_rate=1e-4,
         per_device_train_batch_size=8,
         gradient_accumulation_steps=4,
-        gradient_checkpointing=True,
+        activation_checkpointing=True,
         max_completion_length=1024,
         chat_template_kwargs={"enable_thinking": False},
         max_steps=200,

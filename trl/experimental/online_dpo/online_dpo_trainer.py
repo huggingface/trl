@@ -46,7 +46,7 @@ from transformers import (
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
+from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
@@ -74,15 +74,6 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
-
-
-if is_sagemaker_mp_enabled():
-    from smdistributed.modelparallel import __version__ as SMP_VERSION
-
-    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
-
-else:
-    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 if is_vllm_available():
@@ -564,6 +555,17 @@ class OnlineDPOTrainer(_BaseTrainer):
             if isinstance(processing_class, ProcessorMixin):
                 # A sampled image token would mismatch the image features
                 generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
+                # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+                if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                    "qwen2_vl",
+                    "qwen2_5_vl",
+                    "qwen3_vl",
+                    "qwen3_vl_moe",
+                    "qwen3_5",
+                    "qwen3_5_moe",
+                    "paddleocr_vl",
+                ):
+                    generation_kwargs["suppress_tokens"].append(model.config.vision_start_token_id)
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             # Remove None values
@@ -619,14 +621,17 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Ensure use_cache is disabled
         model.config.use_cache = False
 
-        # Enable gradient checkpointing on the base model for PEFT
-        if is_peft_model(model):
-            model.base_model.gradient_checkpointing_enable()
-        # Enable gradient checkpointing for non-PEFT models
+        # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
+        checkpointed_model = model.base_model if is_peft_model(model) else model
+        # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointed_model.activation_checkpointing_enable()
         else:
-            model.gradient_checkpointing_enable()
+            checkpointed_model.gradient_checkpointing_enable()
 
-        model.enable_input_require_grads()
+        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if Version(transformers.__version__) < Version("5.0.0"):
+            model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):
@@ -782,7 +787,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
-            if "original_module" in name:
+            # and the other adapters' copies (e.g. a "ref" adapter)
+            if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -851,7 +857,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        # and the other adapters' copies (e.g. a "ref" adapter)
+                        if "original_module" in name or (
+                            "modules_to_save." in name and "modules_to_save.default." not in name
+                        ):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -916,33 +925,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         for prefix in prefixes:
             name = name.replace(prefix, "")
         return name
-
-    def process_vision_row(
-        self, features: dict[str, list | torch.Tensor], processing_class=None
-    ) -> dict[str, list[int]]:
-        """
-        Process a vision row for VLM models (adapted from DPO trainer)
-        """
-        processor = processing_class or self.processing_class
-        processed_features = processor(images=[features["image"]], text=features["prompt"], add_special_tokens=False)
-
-        prompt_input_ids = processed_features["input_ids"][0]
-
-        # Create the output dict with required fields
-        output = {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": processed_features["attention_mask"][0],
-        }
-
-        # Add vision-specific fields
-        if "pixel_values" in processed_features:
-            output["pixel_values"] = processed_features["pixel_values"][0]
-        if "pixel_attention_mask" in processed_features:
-            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        if "image_sizes" in processed_features:
-            output["image_sizes"] = processed_features["image_sizes"][0]
-
-        return output
 
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""

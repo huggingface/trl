@@ -403,11 +403,14 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, torch.Tensor | Any], num_items_in_batch: int | None = None
-    ) -> torch.Tensor:
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        # On-policy and sequence-level KD replace the dataset labels with generated ones. Generate as the batches are
+        # collected, so that `Trainer` counts the label tokens that normalize the loss on the generated completions.
+        return super().get_batch_samples(map(self._maybe_generate, epoch_iterator), num_batches, device)
+
+    def _maybe_generate(self, inputs: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         """
-        Perform a training step for the Generalized Knowledge Distillation (GKD) model.
+        Prepare a batch for the Generalized Knowledge Distillation (GKD) model.
 
         This method implements the on-policy learning approach described in the GKD paper. With probability
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
@@ -416,7 +419,7 @@ class GKDTrainer(SFTTrainer):
         if random.random() <= self.lmbda:
             with (
                 unwrap_model_for_generation(
-                    model,
+                    self.model_wrapped,
                     self.accelerator,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                     gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
@@ -443,5 +446,4 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
 
-        loss = super().training_step(model, inputs, num_items_in_batch)
-        return loss
+        return inputs

@@ -28,9 +28,8 @@ pip install math_verify
 # For Qwen/Qwen3-0.6B
 pip install num2words==0.5.14
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/gspo_math/gspo_math.py \
+torchrun --nproc_per_node 8 examples/gspo_math/gspo_math.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --output_dir gspo-Qwen3-0.6B \
     --learning_rate 1e-5 \
