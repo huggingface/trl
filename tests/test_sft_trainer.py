@@ -14,6 +14,7 @@
 
 import json
 import pathlib
+from importlib.metadata import version
 
 import pytest
 import torch
@@ -27,6 +28,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
+from transformers.integrations import is_deepspeed_available
 from transformers.testing_utils import torch_device
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
@@ -62,6 +64,12 @@ _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
     reason="The tiny checkpoint's attention head size is not a multiple of 8, which Flash Attention kernels need, see #6857",
     strict=True,
     run=Version(torch.__version__) >= Version("2.13.0"),  # torch<2.13 leaks checkpoint hooks into later tests (#8302)
+)
+_NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
+    Version(transformers.__version__) >= Version("5.24.0.dev0"),
+    raises=ValueError,
+    reason="transformers refuses Flash Attention for models with bidirectional attention over image tokens, see #8400",
+    strict=True,
 )
 
 
@@ -1114,6 +1122,34 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    @pytest.mark.skipif(
+        not is_deepspeed_available() or Version(version("deepspeed")) >= Version("0.19.3"),
+        reason="The trainer forces reentrant checkpointing for PEFT + ZeRO-3 only on DeepSpeed < 0.19.3",
+    )
+    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch):
+        # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
+        # reach the checkpoint function whichever name transformers reads the kwargs from.
+        monkeypatch.setenv("ACCELERATE_USE_DEEPSPEED", "false")  # `TrainingArguments` sets it, restore it after
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, deepspeed={"zero_optimization": {"stage": 3}}, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # The Trainer enables checkpointing from these kwargs in `train()`; since 5.23 it reads the new name
+        assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
+
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
@@ -1244,7 +1280,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
-            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=256, report_to="none"
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1449,7 +1485,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1481,7 +1517,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1507,7 +1543,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        Version(transformers.__version__) >= Version("5.18.0"),
         reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
     )
     @require_vision
@@ -1626,7 +1662,7 @@ class TestSFTTrainer(TrlTestCase):
         """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=64, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=256, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2336,15 +2372,16 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_NO_FLASH_ATTN_FOR_IMAGES),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.5.0"),
+                        reason="Gemma4 models were introduced in transformers-5.5.0",
+                    ),
+                    _NO_FLASH_ATTN_FOR_IMAGES,
+                ],
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
