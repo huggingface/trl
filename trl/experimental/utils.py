@@ -835,14 +835,11 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
     # Enable gradient checkpointing if needed
     if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
+        # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
+        if Version(transformers.__version__) < Version("5.0.0") or (gradient_checkpointing_kwargs or {}).get(
+            "use_reentrant"
+        ):
             model.enable_input_require_grads()
-        else:
-            # backward-compatible hook
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
         if Version(transformers.__version__) >= Version("5.23.0"):
