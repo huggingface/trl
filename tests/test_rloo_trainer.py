@@ -1390,6 +1390,8 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    # peft warns about this config before TRL raises (#8387)
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
