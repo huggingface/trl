@@ -4321,7 +4321,7 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
-        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, id="phi35"),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
