@@ -268,8 +268,8 @@ class DistillationTrainer(_BaseTrainer):
             teachers of a mapping are held on CPU and moved to the accelerator one at a time — even for a single entry,
             which trains identically to passing that teacher on its own — so device memory is bounded by the largest
             teacher rather than their sum. Several IDs may point at the same checkpoint with different
-            `args.teacher_model_init_kwargs` entries. Every teacher must share the student's vocabulary.
-            May be omitted by subclasses that supply the teacher another way (e.g. a remote server).
+            `args.teacher_model_init_kwargs` entries. Every teacher must share the student's vocabulary. May be omitted
+            by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
