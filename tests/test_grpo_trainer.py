@@ -1264,6 +1264,46 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif("TRL_TEST_TP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_tensor_parallel_same_completions_body(self):
+        # Launched under torchrun by tests/distributed. The ranks of a tensor-parallel group hold one model between
+        # them and receive the same prompts, so they must sample the same completions (issue #8056). With
+        # tp_size == world_size there is a single TP group, so every rank must produce identical completions.
+        import torch.distributed as dist
+        from transformers.distributed import DistributedConfig
+
+        world_size = int(os.environ["WORLD_SIZE"])
+        agreements = []
+
+        def agreement_reward(completions, **kwargs):
+            gathered = [None] * world_size
+            dist.all_gather_object(gathered, completions)
+            agreements.append(all(group == gathered[0] for group in gathered))
+            return [0.0] * len(completions)
+
+        dataset = Dataset.from_dict({"prompt": ["The capital of France is", "One, two, three,"] * 8})
+        training_args = GRPOConfig(
+            output_dir=os.environ["TRL_TEST_TP_OUTPUT_DIR"],
+            model_init_kwargs={"dtype": "bfloat16", "distributed_config": DistributedConfig(tp_size=world_size)},
+            per_device_train_batch_size=4,
+            num_generations=4,
+            max_completion_length=16,
+            max_steps=3,
+            cache_implementation="static",
+            bf16=True,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=agreement_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer._tp_size == world_size
+        trainer.train()
+        assert agreements and all(agreements), "TP ranks sampled different completions"
+
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_with_reward_model(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")

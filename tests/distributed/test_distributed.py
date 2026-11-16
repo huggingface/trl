@@ -143,6 +143,46 @@ class TestDistributed(TrlTestCase):
             {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
         )
 
+    def test_grpo_tensor_parallel_same_completions(self):
+        # The ranks of a tensor-parallel group must sample the same completions (issue #8056).
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_grpo_trainer.py",
+                "-k",
+                "test_tensor_parallel_same_completions_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_TP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    def test_rloo_tensor_parallel_same_completions(self):
+        # The ranks of a tensor-parallel group must sample the same completions (issue #8056).
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_rloo_trainer.py",
+                "-k",
+                "test_tensor_parallel_same_completions_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_TP_OUTPUT_DIR": self.tmp_dir},
+        )
+
     @pytest.mark.parametrize(
         "config",
         [
