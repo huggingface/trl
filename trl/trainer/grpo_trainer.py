@@ -1954,7 +1954,7 @@ class GRPOTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
