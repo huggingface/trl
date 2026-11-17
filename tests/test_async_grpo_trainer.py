@@ -115,8 +115,8 @@ else:
     _DEFAULT_ATTN_IMPLEMENTATION = "kernels-community/flash-attn3"
 
 
-# The reward functions, tools and environments of the tests are module-level, unlike GRPO's, which its tests define
-# in place: the rollout worker runs them in a spawned process, which unpickles them by import path.
+# The reward functions, tools and environments of the tests are module-level: the rollout worker runs them in a
+# spawned process, which unpickles them by import path.
 def multiply_tool(a: int, b: int) -> int:
     """
     Multiplies two integers.
@@ -237,10 +237,10 @@ def recorded(path: str) -> dict[str, list]:
 
 
 class ScriptedTurns:
-    """A [`TransformersVLLMServer`] script that replays the fake generations of GRPO's tool tests, one request at a time.
+    """A [`TransformersVLLMServer`] script that answers each prompt with a completion written as text.
 
-    GRPO's tests fake one batched generate call per turn. Here each rollout is its own request, so the k-th first turn
-    of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets `after_tool`.
+    The k-th first turn of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets
+    `after_tool`.
 
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
@@ -369,45 +369,9 @@ class IncrementEnvironment:
         return self._counter
 
 
-class IncrementRewardEnvironment:
-    def reset(self, **kwargs):
-        self._counter = 0
-
-    def increment(self, step: int) -> int:
-        """
-        Increment the internal counter.
-
-        Args:
-            step: Value to add to the counter.
-
-        Returns:
-            The updated counter value.
-        """
-        self._counter += step
-        return self._counter
-
+class IncrementRewardEnvironment(IncrementEnvironment):
     def get_reward(self) -> float:
         return float(self._counter)
-
-
-class GuessRewardEnvironment:
-    def reset(self, **kwargs):
-        self._solved = False
-
-    def guess(self, word: str) -> str:
-        """
-        Submit a guess.
-
-        Args:
-            word: The guessed word.
-
-        Returns:
-            Feedback about the guess.
-        """
-        return "nope"
-
-    def get_reward(self) -> float:
-        return 1.0 if self._solved else 0.0
 
 
 class PropertyEnvironment:
@@ -453,22 +417,6 @@ class ScoredEnvironment:  # owns its reward
 
     def get_reward(self) -> float:
         return 1.0
-
-
-class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
-    def reset(self, **kwargs): ...
-
-    def play(self, x: int) -> int:
-        """
-        Play.
-
-        Args:
-            x: A value.
-
-        Returns:
-            The value.
-        """
-        return x
 
 
 class GuessTheWordEnvironment:
@@ -2265,6 +2213,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
         assert records["reset_counter"] and records["reset_echo"]
         assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
+        # Each rollout is shown only the tool of its own environment
+        prompts = list(server.script.seen)
+        assert all(("increment" in prompt) == ("Count." in prompt) for prompt in prompts)
+        assert all(("shout" in prompt) == ("Echo." in prompt) for prompt in prompts)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2501,17 +2453,17 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
-            environment_factory=GuessRewardEnvironment,
+            environment_factory=IncrementRewardEnvironment,
         )
 
         # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
         # a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "GuessRewardEnvironment"]
+        assert trainer.reward_func_names == ["str_length_reward", "IncrementRewardEnvironment"]
         assert trainer.reward_weights.tolist() == [0.5, 1.0]
         assert len(trainer.reward_funcs) == 2
-        # `get_reward` is not exposed as a tool; `guess` is.
+        # `get_reward` is not exposed as a tool; `increment` is.
         tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "guess" in tool_names
+        assert "increment" in tool_names
         assert "get_reward" not in tool_names
 
     @require_response_parsing
@@ -2544,7 +2496,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
-            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
+            environment_factory={
+                "scored": ScoredEnvironment,
+                "scored2": ScoredEnvironment,
+                "plain": IncrementEnvironment,
+            },
         )
 
         # No tool call. Distinct-length completions within the group give reward variance, so advantages are non-zero.
@@ -2555,7 +2511,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
         # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
-        # `ScoredEnvironment`: a `PlainEnvironment` rollout is left out instead of raising. Reward metrics are logged
+        # `ScoredEnvironment`: an `IncrementEnvironment` rollout is left out instead of raising. Reward metrics are logged
         # only by the steps that scored a group, so the columns are gathered over the whole log
         logs = [log for log in trainer.state.log_history if "reward" in log]
         reward_columns = {key for log in logs for key in log if key.startswith("rewards/") and key.endswith("/mean")}
@@ -2596,17 +2552,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
         # training length.
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                return "Guess the 5-letter word."
-
         training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             AsyncGRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
                 args=training_args,
-                environment_factory=DummyEnvironment,
+                environment_factory=GuessTheWordEnvironment,
             )
 
     @require_response_parsing
@@ -3943,34 +3895,6 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         )
 
     def test_multiple_environments_expose_only_their_own_tools(self):
-        class CounterEnvironment:
-            def reset(self, **kwargs): ...
-
-            def increment(self, step: int) -> int:
-                """Increment the counter.
-
-                Args:
-                    step: Value to add.
-
-                Returns:
-                    The updated value.
-                """
-                return step
-
-        class EchoEnvironment:
-            def reset(self, **kwargs): ...
-
-            def shout(self, text: str) -> str:
-                """Shout the text.
-
-                Args:
-                    text: Text to shout.
-
-                Returns:
-                    The text in upper case.
-                """
-                return text.upper()
-
         loop = self._make_loop({"counter": CounterEnvironment, "echo": EchoEnvironment})
         try:
             assert loop._multi_environment is True
@@ -4155,20 +4079,6 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
         # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
-        class CounterEnvironment:
-            def reset(self, **kwargs): ...
-
-            def increment(self, step: int) -> int:
-                """Increment the counter.
-
-                Args:
-                    step: Value to add.
-
-                Returns:
-                    The updated value.
-                """
-                return step
-
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         dataset = dataset.map(lambda example: {"environment": "unknown"})
 
@@ -5439,34 +5349,8 @@ class TestCustomRolloutLoop(TrlTestCase):
         assert loop.events[-1] == "close"
         assert "generate" in loop.events[1:-1]
 
-    def test_each_rollout_gets_the_tools_of_its_environment(self):
-        class CounterEnvironment:
-            def reset(self, **kwargs): ...
-
-            def increment(self, step: int) -> int:
-                """Increment the counter.
-
-                Args:
-                    step: Value to add.
-
-                Returns:
-                    The updated value.
-                """
-                return step
-
-        class EchoEnvironment:
-            def reset(self, **kwargs): ...
-
-            def shout(self, text: str) -> str:
-                """Shout the text.
-
-                Args:
-                    text: Text to shout.
-
-                Returns:
-                    The text in upper case.
-                """
-                return text.upper()
+    def test_each_rollout_gets_the_tools_of_its_environment(self, monkeypatch):
+        monkeypatch.setenv("TRL_TEST_RECORD", os.path.join(self.tmp_dir, "record.jsonl"))
 
         class ToolsLoop(_FixedRolloutLoop):
             async def generate_one(self, prompt, tools, group_id=0):

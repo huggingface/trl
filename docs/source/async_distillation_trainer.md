@@ -68,7 +68,7 @@ CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
 
 ```bash
 # Terminal 2: student's vLLM server on GPU 1 (dev mode + NCCL weight transfer are required)
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --gpu-memory-utilization 0.9 \
     --port 8000 \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
@@ -95,7 +95,7 @@ trainer = AsyncDistillationTrainer(
 Every weight sync has to get the updated student to its server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the student's vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --gpu-memory-utilization 0.9 \
     --port 8000 \
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora \
