@@ -24,7 +24,9 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.types
 import torch
+import transformers
 from accelerate.utils import is_peft_model
+from packaging.version import Version
 from pyarrow import compute as pc
 from tokenizers.models import BPE
 from torch import nn
@@ -524,6 +526,8 @@ class DataCollatorForChatML:
             # Forward the raw example dicts so the on-policy tool path can pass them to `environment.reset(**kwargs)`
             # per-rollout, mirroring the VLM path and GRPO. The environment `reset` protocol accepts `**kwargs`.
             out["reset_kwargs"] = list(examples)
+        if "teacher_prompt_text" in examples[0]:
+            out["teacher_prompt_text"] = [ex["teacher_prompt_text"] for ex in examples]
         return out
 
     def _tool_byte_ranges(
@@ -996,9 +1000,6 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
         model, "hqq_quantized", False
     )
 
-    if gradient_checkpointing_kwargs is None:
-        gradient_checkpointing_kwargs = {}
-
     for _, param in model.named_parameters():
         # freeze all parameters
         param.requires_grad = False
@@ -1014,40 +1015,32 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-            inspect.signature(model.gradient_checkpointing_enable).parameters
-        )
-        gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
-        model.gradient_checkpointing_enable(**gc_kwargs)
+        # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            model.activation_checkpointing_enable(gradient_checkpointing_kwargs)
+        else:
+            supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
+                inspect.signature(model.gradient_checkpointing_enable).parameters
+            )
+            gc_kwargs = {"gradient_checkpointing_kwargs": gradient_checkpointing_kwargs} if supports_gc_kwargs else {}
+            model.gradient_checkpointing_enable(**gc_kwargs)
 
     return model
 
 
-def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
-) -> PreTrainedModel:
+def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
-    # Enable gradient checkpointing on the base model for PEFT
-    if is_peft_model(model):
-        model.base_model.gradient_checkpointing_enable()
-    # Enable gradient checkpointing for non-PEFT models
+    # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
+    checkpointed_model = model.base_model if is_peft_model(model) else model
+    # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        checkpointed_model.activation_checkpointing_enable()
     else:
-        model.gradient_checkpointing_enable()
+        checkpointed_model.gradient_checkpointing_enable()
 
-    gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
-    use_reentrant = (
-        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-    )
-
-    if use_reentrant:
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+    # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+    if Version(transformers.__version__) < Version("5.0.0"):
+        model.enable_input_require_grads()
 
     return model
 
@@ -1082,12 +1075,16 @@ def prepare_peft_model(
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=args.gradient_checkpointing,
-            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
+            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs,
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
         args.gradient_checkpointing = False
+        # transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing` and the Trainer reads the
+        # new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            args.activation_checkpointing = False
     elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
+        model = enable_gradient_checkpointing(model)
 
     # Create PEFT model
     if peft_config is not None:

@@ -239,6 +239,40 @@ class TestAccuracyReward:
         assert not exceptions, f"accuracy_reward raised in worker thread: {exceptions[0]}"
         assert results == [1.0]
 
+    @require_math_latex
+    def test_accuracy_reward_does_not_hang(self, monkeypatch):
+        """An answer that makes sympy compute forever scores 0 instead of hanging (huggingface/Math-Verify#65)."""
+        from trl.rewards import accuracy_rewards
+
+        monkeypatch.setattr(accuracy_rewards, "GRADE_TIMEOUT", 10)
+        completions = [
+            [{"content": r"\boxed{\dfrac{5^{\left(5^{\left(5^{\left(5^5\right)}\right)} - 4\right)} - 5}{16}}"}],
+            [{"content": r"\boxed{\frac{1}{3}}"}],
+        ]
+        solutions = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        results = []
+
+        # Off the main thread, as in the async GRPO rollout worker
+        t = threading.Thread(target=lambda: results.extend(accuracy_reward(completions, solutions)))
+        t.start()
+        t.join(timeout=60)
+
+        assert not t.is_alive(), "accuracy_reward hung"
+        # The grading process is restarted after the timeout, so the next answer is still graded
+        assert results == [0.0, 1.0]
+
+    @require_math_latex
+    def test_accuracy_reward_after_grading_process_died(self):
+        """If the grading process died (e.g. out of memory), the next call starts a new one."""
+        from trl.rewards import accuracy_rewards
+
+        completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
+        solutions = [r"\frac{1}{3}"]
+        assert accuracy_reward(completions, solutions) == [1.0]
+        accuracy_rewards._grader._process.kill()
+        accuracy_rewards._grader._process.wait()
+        assert accuracy_reward(completions, solutions) == [1.0]
+
 
 class TestReasoningAccuracyReward:
     @require_math_latex

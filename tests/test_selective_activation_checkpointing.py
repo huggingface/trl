@@ -14,6 +14,8 @@
 
 import pytest
 import torch
+import transformers
+from packaging.version import Version
 from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.checkpoint import CheckpointPolicy
 from transformers import AutoModelForCausalLM
@@ -74,7 +76,10 @@ class TestSelectiveActivationCheckpointing(TrlTestCase):
         model.train()
         if selective:
             enable_selective_activation_checkpointing(model)
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            model.activation_checkpointing_enable(activation_checkpointing_kwargs={"use_reentrant": False})
+        else:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         torch.manual_seed(42)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 32), device=torch_device)
         with _SDPACounter() as counter:
@@ -100,6 +105,11 @@ class TestSelectiveActivationCheckpointing(TrlTestCase):
         """Enabling SAC twice on the same model must not stack wrappers."""
         model = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
         enable_selective_activation_checkpointing(model)
-        once_wrapped = model.gradient_checkpointing_enable
-        enable_selective_activation_checkpointing(model)
-        assert model.gradient_checkpointing_enable is once_wrapped
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            once_wrapped = model.activation_checkpointing_enable
+            enable_selective_activation_checkpointing(model)
+            assert model.activation_checkpointing_enable is once_wrapped
+        else:
+            once_wrapped = model.gradient_checkpointing_enable
+            enable_selective_activation_checkpointing(model)
+            assert model.gradient_checkpointing_enable is once_wrapped

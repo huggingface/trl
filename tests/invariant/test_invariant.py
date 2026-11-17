@@ -25,6 +25,7 @@ import accelerate
 import pytest
 import torch
 import transformers
+from packaging.version import Version
 
 from ..testing_utils import is_bf16_supported
 
@@ -107,7 +108,8 @@ def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         cmd = ["trl", config.method]
-        cmd += ["--num_processes", str(config.num_processes)]
+        if config.num_processes > 1:
+            cmd += ["--nproc_per_node", str(config.num_processes)]
         cmd += ["--output_dir", tmpdir, *config.cli_args()]
         env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(config.num_processes))}
         subprocess.run(cmd, check=True, env=env)
@@ -196,6 +198,13 @@ def _build(
     return CorrectnessConfig(name=name, method=method, args=args, num_processes=num_processes)
 
 
+# transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing` (see #8134)
+if Version(transformers.__version__) >= Version("5.23.0"):
+    NO_CHECKPOINTING = {"activation_checkpointing": False}
+else:
+    NO_CHECKPOINTING = {"gradient_checkpointing": False}
+
+
 # Equivalence classes: each maps to a `members` list plus per-field `tol` (max |Δ|) and `residual_tol` (mean Δ)
 # dicts. The first member is the canonical config — it owns the class's reference snapshot and is the only one
 # re-recorded by `python -m tests.invariant.test_invariant <klass>`. Every other member is asserted to match that
@@ -209,7 +218,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "members": [
             _build("sft_default", "sft", SFT_DATASET),
             _build("sft_pdb1_gas8", "sft", SFT_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
-            _build("sft_no_grad_ckpt", "sft", SFT_DATASET, gradient_checkpointing=False),
+            _build("sft_no_grad_ckpt", "sft", SFT_DATASET, **NO_CHECKPOINTING),
             _build("sft_ddp2", "sft", SFT_DATASET, per_device_train_batch_size=4, num_processes=2),
         ],
     },
@@ -250,7 +259,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         "members": [
             _build("dpo_default", "dpo", DPO_DATASET),
             _build("dpo_pdb1_gas8", "dpo", DPO_DATASET, per_device_train_batch_size=1, gradient_accumulation_steps=8),
-            _build("dpo_no_grad_ckpt", "dpo", DPO_DATASET, gradient_checkpointing=False),
+            _build("dpo_no_grad_ckpt", "dpo", DPO_DATASET, **NO_CHECKPOINTING),
             _build("dpo_ddp2", "dpo", DPO_DATASET, per_device_train_batch_size=4, num_processes=2),
         ],
     },
