@@ -1407,7 +1407,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_raises_when_every_group_is_dropped(self, make_vllm_server):
-        # Equal rewards drop every group, so training would wait forever for a batch
+        # Equal rewards drop every group (#8423)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(

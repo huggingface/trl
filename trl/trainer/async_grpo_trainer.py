@@ -2317,8 +2317,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if isinstance(sample, int):
                 self.dropped_groups.add(sample)
                 dropped_in_a_row += 1
-                # The trainer waits here for its batch, so the weights cannot change and a whole pass over the prompts
-                # without a trainable group means none will come
+                # No weight update while every group is dropped: raise instead of waiting forever (#8423)
                 if self.max_dropped_in_a_row is not None and dropped_in_a_row >= self.max_dropped_in_a_row:
                     raise RuntimeError(
                         f"The last {dropped_in_a_row} groups were all dropped, because the rewards of each group were "
@@ -3186,7 +3185,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
             )
 
-        # Prompts in one pass over the dataset; unknown for a streaming dataset or when an environment owns the data
+        # None for a streaming dataset or environment-owned data
         self._num_prompts = len(train_dataset) if isinstance(train_dataset, Dataset) else None
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
