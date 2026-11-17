@@ -4396,14 +4396,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-# LFM2 has no `head_dim` kwarg, so a single head spans the whole hidden size. Drop this once the tiny LFM2 models are
-# Flash Attention compatible (https://github.com/huggingface/trl/issues/6857)
-_LFM2_ONE_HEAD = {
-    "hidden_size": 32,
-    "num_attention_heads": 1,
-    "num_key_value_heads": 1,
-    "ignore_mismatched_sizes": True,
-}
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
     "text config",
@@ -4423,9 +4415,9 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", _LFM2_ONE_HEAD, id="lfm2-conv"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", _LFM2_ONE_HEAD, id="lfm25-conv"),
-        pytest.param("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", _LFM2_ONE_HEAD, id="lfm25-moe-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
         ),
