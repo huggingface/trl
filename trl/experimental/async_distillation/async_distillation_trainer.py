@@ -82,8 +82,8 @@ MetricValue = float | tuple[float, float]
 def _reduce_metric(key: str, values: list[MetricValue]) -> float:
     """Reduce one logging window into the number that gets logged.
 
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer._reduce_metric`]. The value's shape and the
-    key's suffix declare the reduction, so nothing has to be registered or configured:
+    Ported verbatim from [`~trainer.async_grpo_trainer._reduce_metric`]. The value's shape and the key's suffix declare
+    the reduction, so nothing has to be registered or configured:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
@@ -373,7 +373,7 @@ def _chunked_jsd_loss(
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer.TokenBudgetBatcher`].
+    Ported verbatim from [`~trainer.async_grpo_trainer.TokenBudgetBatcher`].
     """
 
     def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
@@ -462,10 +462,9 @@ class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
     An epoch is counted in distinct prompts actually trained (accumulated in the collator, which runs on the main
-    process just before the model forward). Where [`~trl.experimental.async_grpo.async_grpo_trainer`] counts
-    prompt-groups, one prompt here yields exactly one training sample, so a prompt and a group are the same thing. Only
-    the main process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep
-    data-parallel workers in lockstep.
+    process just before the model forward). Where [`~trainer.async_grpo_trainer`] counts prompt-groups, one prompt here
+    yields exactly one training sample, so a prompt and a group are the same thing. Only the main process collates
+    (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
@@ -490,9 +489,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
     Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
     show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
     is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
-    training. Ported from [`~trl.experimental.async_grpo.async_grpo_trainer.log_rollout_traces`]; unlike GRPO's
-    version, there is no `advantage`/`group_id` to log (distillation has no group-relative baseline, see
-    `RolloutSample`).
+    training. Ported from [`~trainer.async_grpo_trainer.log_rollout_traces`]; unlike GRPO's version, there is no
+    `advantage`/`group_id` to log (distillation has no group-relative baseline, see `RolloutSample`).
 
     Args:
         samples (`list[RolloutSample]`):
@@ -660,10 +658,9 @@ class DataCollatorForRollout(DataCollatorMixin):
     `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
     `compute_loss`.
 
-    Structurally the same as [`~trl.experimental.async_grpo.async_grpo_trainer.DataCollatorForRollout`], with
-    `advantages` replaced by `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to
-    `teacher_top_k + 1` candidates with id `-1` / logprob `-inf`, then packed along the sequence dimension like every
-    other per-token field).
+    Structurally the same as [`~trainer.async_grpo_trainer.DataCollatorForRollout`], with `advantages` replaced by
+    `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to `teacher_top_k + 1` candidates with
+    id `-1` / logprob `-inf`, then packed along the sequence dimension like every other per-token field).
 
     Args:
         pad_token_id (`int`):
@@ -1062,11 +1059,11 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncDistil
 class AsyncDistillationTrainer(_BaseTrainer):
     """
     Async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected exactly like
-    [`~trl.experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy
-    completions and scores them against a teacher server while training proceeds concurrently, decoupling rollout from
-    the gradient-update loop. Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this
-    trainer's `compute_loss` reads a sparse per-position teacher distribution and minimizes a generalized JSD against
-    it (see `AsyncDistillationConfig.beta`), always on-policy: the student generates every completion it trains on.
+    [`AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy completions and scores them
+    against a teacher server while training proceeds concurrently, decoupling rollout from the gradient-update loop.
+    Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this trainer's `compute_loss` reads a
+    sparse per-position teacher distribution and minimizes a generalized JSD against it (see
+    `AsyncDistillationConfig.beta`), always on-policy: the student generates every completion it trains on.
 
     Unlike the synchronous `DistillationTrainer`, this trainer only supports scoring against a teacher served over HTTP
     (an external vLLM server). A local (in-process, GPU) teacher forward pass cannot run inside the rollout worker's

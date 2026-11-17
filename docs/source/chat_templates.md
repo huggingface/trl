@@ -43,7 +43,7 @@ Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `{% endif
 Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 
 - Removes the `'</think>'` split on assistant content. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
-- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn, and the `<think>\n` that the generation prompt pre-fills after `<｜Assistant｜>`, stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_training.jinja`
 
@@ -51,7 +51,7 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
-- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn, and the `<think>\n` that the generation prompt pre-fills after `<｜Assistant｜>`, stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_v2_training.jinja`
 
@@ -175,7 +175,7 @@ Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assi
 
 ### `muse_spark_training.jinja`
 
-Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged.
+Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
 ### `nemotron_3_nano_training.jinja`
 
@@ -209,7 +209,7 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
 
 ### `qwen2_5_base_training.jinja`
 
@@ -250,9 +250,13 @@ Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` 
 
 ### `smolvlm_training.jinja`
 
-Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+Patched SmolVLM template (also used for SmolVLM2-2.2B-Instruct before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and SmolVLM2-500M-Video-Instruct before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e), which shipped a byte-identical template). Diff vs `smolvlm.jinja`:
 
 Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
+
+### `smolvlm_v2_training.jinja`
+
+Patched SmolVLM2 template. Same diff as `smolvlm_training.jinja`, applied to `smolvlm_v2.jinja`.
 
 ## Related utilities
 
