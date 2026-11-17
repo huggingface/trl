@@ -544,8 +544,8 @@ class TestRewardTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config`, since gradient checkpointing is
-    # enabled by default in `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still
-    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # enabled by default in `RewardTrainer`. We keep it as a regression guard: the assert fails if the default ever
+    # changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -554,7 +554,8 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
 
         trainer = RewardTrainer(
             model=model_id,
@@ -586,12 +587,18 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = RewardConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
 
         trainer = RewardTrainer(
             model=model_id,
@@ -1001,12 +1008,12 @@ class TestRewardTrainer(TrlTestCase):
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `RewardTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -1028,12 +1035,18 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = RewardConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,

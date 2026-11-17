@@ -32,7 +32,7 @@ Each weight sync publishes only the adapter (~160 MB at r=32) instead of the mer
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 \
-vllm serve Qwen/Qwen3-8B \
+vllm serve Qwen/Qwen3-8B --gpu-memory-utilization 0.9 \
     --dtype bfloat16 \
     --max-model-len 2048 \
     --logprobs-mode processed_logprobs \
