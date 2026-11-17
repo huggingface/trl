@@ -39,6 +39,7 @@ config = Phi3Config(
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
+    head_dim=8,  # a multiple of 8, as Flash Attention requires
     num_hidden_layers=2,
     intermediate_size=32,
     sliding_window=2047,

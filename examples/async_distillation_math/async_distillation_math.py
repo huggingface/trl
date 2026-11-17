@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --gpu-memory-utilization 0.9 \
     --port 8000 \
     --weight-transfer-config '{"backend":"nccl"}'
 

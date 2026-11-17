@@ -1014,8 +1014,8 @@ class TestDPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
-    # enabled by default in `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still
-    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # enabled by default in `DPOTrainer`. We keep it as a regression guard: the assert fails if the default ever
+    # changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1027,9 +1027,9 @@ class TestDPOTrainer(TrlTestCase):
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
 
         trainer = DPOTrainer(
             model=model_id,
@@ -1538,17 +1538,16 @@ class TestDPOTrainer(TrlTestCase):
         assert metrics["mean_token_accuracy"][-1] == pytest.approx(accuracy)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `DPOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
