@@ -1,7 +1,7 @@
 # s3 information aggregation with AsyncGRPO
 
 A small replication of the information-aggregation experiment from
-[s3 (arXiv 2611.08615)](https://arxiv.org/abs/2611.08615): a team of N = 4 Qwen3-0.6B agents (thinking on) trained
+[s3 (arXiv 2611.08615)](https://huggingface.co/papers/2611.08615): a team of N = 4 Qwen3-0.6B agents (thinking on) trained
 with a shared team reward to talk to each other.
 
 Each agent holds one private number between 1 and 99, written in English words. The team must return all four
