@@ -43,7 +43,7 @@ python examples/grpo_sudoku/grpo_sudoku.py --vllm-mode colocate --env-url https:
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Sudoku-SFT --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Sudoku-SFT --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
