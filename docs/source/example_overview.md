@@ -6,7 +6,8 @@ Basic single-trainer training scripts are not examples: they live in [`trl/scrip
 
 Shared resources sit at the root of `examples/`:
 
-- [`examples/accelerate_configs`](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs): 🤗 Accelerate configuration files for multi-GPU, DeepSpeed ZeRO, FSDP, and context-parallel setups, used by many examples.
+- [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs): DeepSpeed ZeRO configuration files, passed with `--deepspeed`, used by many examples.
+- [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs): FSDP configuration files, passed with `--fsdp --fsdp_config` (a bare `--fsdp` on the command line needs transformers 5.10 or later; with older versions, set `fsdp=True` in the training config).
 - [`examples/datasets`](https://github.com/huggingface/trl/tree/main/examples/datasets): the scripts used to generate the `trl-lib` datasets used across the examples.
 
 **Getting Started**
@@ -23,9 +24,10 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 
 | Example | Description | Open in Colab |
 | --- | --- | --- |
-| [`async_distillation_math`](https://github.com/huggingface/trl/tree/main/examples/async_distillation_math) | Async on-policy distillation on GSM8K with [`experimental.async_distillation.AsyncDistillationTrainer`]: the teacher is served over HTTP with vLLM, including a multi-teacher (MOPD) variant that fuses the math, code and instruction-following experts released with Open-MOPD. | |
+| [`async_distillation_math`](https://github.com/huggingface/trl/tree/main/examples/async_distillation_math) | Async on-policy distillation on GSM8K with [`experimental.async_distillation.AsyncDistillationTrainer`]: the teacher is served over HTTP with vLLM. | |
+| [`async_distillation_mopd`](https://github.com/huggingface/trl/tree/main/examples/async_distillation_mopd) | Multi-teacher on-policy distillation (MOPD) with [`experimental.async_distillation.AsyncDistillationTrainer`]: fuses the math, code and instruction-following experts of Open-MOPD into their SFT checkpoint: 17.5 to 24.2 on AIME24 and 67.5 to 73.0 on IFEval in 60 steps (script, Hugging Face Jobs launcher and README with the results). | |
 | [`async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) | AsyncGRPO training on a [Harbor](https://huggingface.co/docs/openenv/environments/harbor) task suite through any installed coding agent (`mini-swe-agent`, `opencode`, `claude-code`, ...) served over [OpenEnv](openenv): the agent owns its own loop in a sandbox and TRL trains on the token ids and logprobs recorded by the capture proxy. | |
-| [`async_grpo_math`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_math) | Asynchronous GRPO on GSM8K with [`experimental.async_grpo.AsyncGRPOTrainer`], decoupling generation (vLLM server) from training, including a LoRA variant that syncs only the adapter to the vLLM server. | |
+| [`async_grpo_math`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_math) | Asynchronous GRPO on GSM8K with [`AsyncGRPOTrainer`], decoupling generation (vLLM server) from training, including a LoRA variant that syncs only the adapter to the vLLM server. | |
 | [`dpo_reduce_hallucinations`](https://github.com/huggingface/trl/tree/main/examples/dpo_reduce_hallucinations) | DPO fine-tuning of a Vision Language Model to reduce hallucinations using the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset) dataset. | |
 | [`gold_chatbot_arena`](https://github.com/huggingface/trl/tree/main/examples/gold_chatbot_arena) | General Online Logit Distillation (GOLD) of a Qwen2 teacher into a Llama 3.2 student (cross-tokenizer) on chatbot_arena_completions with [`experimental.gold.GOLDTrainer`], with full-training and LoRA variants. | |
 | [`gold_qwen3_vl`](https://github.com/huggingface/trl/tree/main/examples/gold_qwen3_vl) | General Online Logit Distillation (GOLD) of Qwen3-VL-8B into smaller VLM students with [`experimental.gold.GOLDTrainer`], covering same-family (JSD loss) and cross-family (ULD loss) distillation. | |
@@ -43,17 +45,19 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 | [`grpo_rnj_1_instruct`](https://github.com/huggingface/trl/tree/main/examples/grpo_rnj_1_instruct) | GRPO on rnj-1-instruct with QLoRA on Colab to add reasoning capabilities. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/grpo_rnj_1_instruct/grpo_rnj_1_instruct.ipynb) |
 | [`grpo_seta`](https://github.com/huggingface/trl/tree/main/examples/grpo_seta) | GRPO training against the SETA ORS environment on the openreward.ai catalog. See the [OpenReward Integration](openreward) guide. | |
 | [`grpo_sql_agent`](https://github.com/huggingface/trl/tree/main/examples/grpo_sql_agent) | GRPO to train an agent that answers questions by querying a SQL database (script and notebook; not runnable on free Colab due to OOM). | |
-| [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku) | GRPO to play Sudoku on an [OpenEnv](openenv) environment (script and notebook). | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/grpo_sudoku/grpo_sudoku.ipynb) |
+| [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku) | GRPO to play Sudoku (TextArena) on an [OpenEnv](openenv) environment, starting from an SFT model: 0, 10 and 22 puzzles out of 30 solved at 26 empty cells for the base, SFT and SFT + GRPO models (script, notebook and README with the results). | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/grpo_sudoku/grpo_sudoku.ipynb) |
 | [`grpo_visual_math`](https://github.com/huggingface/trl/tree/main/examples/grpo_visual_math) | GRPO fine-tuning of a multimodal model for reasoning using the [lmms-lab/multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset. | |
 | [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle) | GRPO to play Wordle (TextArena) on an [OpenEnv](openenv) environment (script and notebook). | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb) |
 | [`gspo_math`](https://github.com/huggingface/trl/tree/main/examples/gspo_math) | GSPO via the [`GRPOTrainer`] for math reasoning on the [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) dataset. | |
 | [`gspo_visual_math`](https://github.com/huggingface/trl/tree/main/examples/gspo_visual_math) | GSPO via the [`GRPOTrainer`] to fine-tune a multimodal model for reasoning using the [lmms-lab/multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset. | |
+| [`lfm2_5_moe_research_agent`](https://github.com/huggingface/trl/tree/main/examples/lfm2_5_moe_research_agent) | LiquidAI/LFM2.5-8B-A1B in two steps: full SFT on xLAM function calling on one 8xH100 node with [`SFTTrainer`], sharded at load time by transformers' `DistributedConfig` (expert parallelism with token dispatch, plus FSDP), then GRPO of a multi-turn research agent on HotpotQA with [`GRPOTrainer`] and `environment_factory` (`search` / `read` tools, exact-match reward). | |
 | [`mpo_visual_preferences`](https://github.com/huggingface/trl/tree/main/examples/mpo_visual_preferences) | MPO via the [`DPOTrainer`] to align a multimodal model based on preferences using the [HuggingFaceH4/rlaif-v_formatted](https://huggingface.co/datasets/HuggingFaceH4/rlaif-v_formatted) dataset and a set of loss weights. | |
 | [`online_dpo_visual_math`](https://github.com/huggingface/trl/tree/main/examples/online_dpo_visual_math) | Online DPO fine-tuning of a Vision Language Model with [`experimental.online_dpo.OnlineDPOTrainer`]. | |
 | [`rloo_math`](https://github.com/huggingface/trl/tree/main/examples/rloo_math) | RLOO with the [`RLOOTrainer`] for math reasoning on the [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) dataset with vLLM. | |
 | [`rloo_visual_math`](https://github.com/huggingface/trl/tree/main/examples/rloo_visual_math) | RLOO fine-tuning of a multimodal model for reasoning using the [lmms-lab/multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset. | |
 | [`sdft_privileged_context`](https://github.com/huggingface/trl/tree/main/examples/sdft_privileged_context) | Self-distillation fine-tuning with [`experimental.sdft.SDFTTrainer`], distilling privileged (teacher-only) context into the model. | |
 | [`sdpo_math`](https://github.com/huggingface/trl/tree/main/examples/sdpo_math) | SDPO with [`experimental.sdpo.SDPOTrainer`] using verifiable math rewards and optional environment feedback on [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k). | |
+| [`sft_agent_traces`](https://github.com/huggingface/trl/tree/main/examples/sft_agent_traces) | SFT of Qwen3.5-2B on agent traces: Qwen3.5-397B-A17B works through data-analysis [Harbor](harbor) tasks as an OpenCode agent in Hugging Face Sandboxes, recorded by [OpenEnv](openenv), and the student trains on the solved conversations with assistant-only loss. On tasks whose data no trace touched, about 500 traces take it from 7.6% to 33.3% (rollout, dataset and training scripts, and README with the results). | |
 | [`sft_beam`](https://github.com/huggingface/trl/tree/main/examples/sft_beam) | LoRA SFT of reflection/Beam-1.0-501B-A23B on one 8xB300 node with [`SFTTrainer`], sharded at load time by transformers' `DistributedConfig` (expert parallelism with token dispatch). | |
 | [`sft_diffusion_gemma`](https://github.com/huggingface/trl/tree/main/examples/sft_diffusion_gemma) | SFT of the DiffusionGemma block-diffusion language model on GSM8K by extending the [`SFTTrainer`] with a block-diffusion objective. | |
 | [`sft_gemma3`](https://github.com/huggingface/trl/tree/main/examples/sft_gemma3) | SFT of Gemma 3 on the Codeforces COTS dataset. | |
@@ -73,16 +77,16 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 
 ## Distributed Training
 
-You can run the example scripts on multiple GPUs with 🤗 Accelerate:
+You can run the example scripts on multiple GPUs with torchrun:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
 ```
 
 For DeepSpeed ZeRO-{1,2,3}:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero{1,2,3}.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --deepspeed examples/deepspeed_configs/zero{1,2,3}.json --all_arguments_of_the_script
 ```
 
 Adjust `NUM_GPUS` and `--all_arguments_of_the_script` as needed.

@@ -14,7 +14,9 @@
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, features, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
@@ -515,7 +517,13 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
+            ),
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
@@ -582,3 +590,28 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         )
 
         assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
+
+    def test_generation_suppresses_vision_start_token(self):
+        # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+        model_id = "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=AutoModelForImageTextToText.from_pretrained(model_id),
+            reward_funcs=reward_model,
+            args=training_args,
+            processing_class=AutoProcessor.from_pretrained(model_id),
+            train_dataset=dataset,
+            reward_processing_classes=reward_tokenizer,
+        )
+
+        expected = [trainer.model.config.image_token_id]
+        if Version(transformers.__version__) < Version("5.3.0"):
+            expected.append(trainer.model.config.vision_start_token_id)
+        assert trainer.generation_config.suppress_tokens == expected
