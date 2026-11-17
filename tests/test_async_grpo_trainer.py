@@ -1606,8 +1606,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
-    # default in `AsyncGRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly
-    # test PEFT + gradient checkpointing, which has caused issues in the past.
+    # default in `AsyncGRPOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -1620,10 +1619,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,  # enable gradient checkpointing
             vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = AsyncGRPOTrainer(
             model=model,
             reward_funcs=str_length_reward,
@@ -1843,10 +1842,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,
             vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=str_length_reward,
