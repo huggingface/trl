@@ -28,8 +28,10 @@ import numpy as np
 import pytest
 import requests
 import torch
+import transformers
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
+from packaging.version import Version
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
@@ -1131,6 +1133,19 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+    )
+    def test_init_vlm_from_name(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            args=AsyncDistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        assert isinstance(trainer.model, transformers.Qwen3VLForConditionalGeneration)
 
     def test_router_aux_loss_coef_on_a_dense_model_raises(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
