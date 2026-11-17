@@ -2025,7 +2025,8 @@ class TestTreePackingParity(TrlTestCase):
 
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
-        model.set_attn_implementation(reference)
+        # Models that refuse Flash Attention take it on their language model (#8400)
+        (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(reference)
         with patch("trl.trainer.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 
