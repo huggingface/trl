@@ -31,9 +31,9 @@ so the training rows are exactly the sampled tokens and the sampler's logprobs, 
 - **Groups are G = 8 teams on the same problem.** The numbers are the same across the group; the agent names and
   teammate orders differ.
 - **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
-  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). Each micro-batch holds one team
-  (`per_device_train_batch_size = N`), so the token mean is per team, and `gradient_accumulation_steps` is the number
-  of teams per update.
+  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). A small `TeamBatcher` replaces TRL's token-budget packing so
+  that each micro-batch is one whole team: the token mean is per team, and `gradient_accumulation_steps` is the number
+  of teams per update. This is exact with one training GPU; with several, each micro-batch holds one team per GPU.
 - **All-equal groups are kept** as advantage-0 rows (App. C), so every update is exactly `--teams-per-update` teams.
 - **Concurrency.** `_init_kv_cap` starts at `--concurrent-teams` instead of TRL's default (KV cache tokens / max model
   length), which assumes one full-length sequence per rollout.

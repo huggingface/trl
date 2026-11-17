@@ -20,7 +20,8 @@
 # ]
 # ///
 
-"""s3 (arXiv 2611.08615) replication: multi-agent team RL with `AsyncGRPOTrainer`: information aggregation with Qwen3-0.6B.
+"""Multi-agent team RL with `AsyncGRPOTrainer`: information aggregation with Qwen3-0.6B, a replication of s3
+(https://huggingface.co/papers/2611.08615).
 
 One TRL rollout is one whole team episode: `generate_one` awaits `harness.run_team` (N token-level agents talking to
 the vLLM server, with an in-memory message board) on the rollout loop's event loop, and returns every agent's sampled
@@ -36,9 +37,10 @@ The paper's objective for information aggregation:
 - Loss (Eq. 3): -1/|B| sum_g 1/|T_g| sum_{t in T_g} m_t rho_t A_g, with rho_t = pi_theta / mu (mu is the vLLM
   sampler's logprob) and m_t = 1[0.2 <= rho_t <= 5.0]. Here the importance mask is
   `vllm_importance_sampling_clip_min/max` = 0.2 / 5.0 and PPO clipping is off (`epsilon` = 1, `epsilon_high` = 1e9,
-  so the min of the clipped and unclipped terms is rho * A). A micro-batch holds exactly one team
-  (`per_device_train_batch_size` = N rows), so TRL's per-micro-batch token mean is the team mean 1/|T_g| sum_t, and
-  `gradient_accumulation_steps` = teams per update averages over teams (1/|B| sum_g).
+  so the min of the clipped and unclipped terms is rho * A). `TeamBatcher` replaces TRL's token-budget packing so
+  that a micro-batch is exactly one team (its N agent rows) per training process. TRL's per-micro-batch token mean is
+  then the team mean 1/|T_g| sum_t, and `gradient_accumulation_steps` = teams per update averages over teams
+  (1/|B| sum_g). This is exact on one training process; with more, each micro-batch averages over one team per rank.
 - Not implemented: the KL penalty listed for aggregation in the paper's Table 4 (coefficient and reference model are
   not published).
 
@@ -67,7 +69,15 @@ from datasets import Dataset
 from harness import Settings, VLLMSampler, run_team
 
 from trl import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.trainer.async_grpo_trainer import AsyncRolloutLoop, Rollout, RolloutSample, TurnRecord
+from trl.trainer import async_grpo_trainer
+from trl.trainer.async_grpo_trainer import (
+    AsyncRolloutLoop,
+    Rollout,
+    RolloutSample,
+    TokenBudgetBatcher,
+    TreeRow,
+    TurnRecord,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -144,7 +154,10 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         self._push_metrics(
             {"team/success": float(ep.success), "team/tokens": float(ep.tokens), "team/messages": float(msgs)}
         )
-        summary = [f"problem {problem} target {ep.problem.target} success {ep.success} reward {ep.reward:.3f}"]
+        summary = [
+            f"problem {problem} seed {ep.problem.seed} target {ep.problem.target} success {ep.success} "
+            f"reward {ep.reward:.3f}"
+        ]
         summary += [
             f"{st.name}: {st.work_generated}+{st.final_generated} tok, "
             f"{sum(e['kind'] == 'message' for e in st.events)} msgs, answer {st.answer}"
@@ -164,7 +177,7 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         team average, so an update is exactly `teams_per_update` teams collected, as in the paper."""
         samples = await super()._score_group(group)
         if samples or group.rewards is None or not len(group.completions_sequences):
-            return samples
+            return _tag_teams(samples)
         kept = float(np.nanmean(group.rewards)) if not np.isnan(group.rewards).all() else 0.0
         out = []
         for prompt, completion, sequences in zip(
@@ -185,14 +198,56 @@ class TeamRolloutLoop(AsyncRolloutLoop):
                         advantage=0.0,
                         model_version=group.model_version,
                         group_id=group.group_id,
-                        metrics={"reward_kept": kept},
+                        metrics={"reward_trained": kept, "reward_group_std": 0.0},
                     )
                 )
-        return out
+        return _tag_teams(out)
+
+
+def _tag_teams(samples: list[RolloutSample]) -> list[RolloutSample]:
+    """Mark which team each row came from (the episode summary is unique per team), for `TeamBatcher`."""
+    for s in samples:
+        s.metrics["team"] = s.completion[0]["content"]
+    return samples
+
+
+class TeamBatcher(TokenBudgetBatcher):
+    """One whole team per row: each micro-batch is `num_processes` teams, one per rank.
+
+    A team's rows arrive consecutively (a group's samples are queued together, team by team), so a team is complete
+    when the next sample belongs to another team. The team tag is removed here, so it is never logged as a metric."""
+
+    def __iter__(self):
+        teams, team, key = [], [], None
+        for sample in self.dataset:
+            k = sample["metrics"].pop("team")
+            if team and k != key:
+                teams.append(team)
+                team = []
+                if len(teams) == self.num_processes:
+                    yield [self._row(t) for t in teams]
+                    teams = []
+            team.append(sample)
+            key = k
+
+    @staticmethod
+    def _row(team: list[dict]) -> TreeRow:
+        row = TreeRow()
+        for sample in team:
+            row.add(sample)
+        return row
 
 
 class TeamTrainer(AsyncGRPOTrainer):
     loop_cls = TeamRolloutLoop
+
+    def get_train_dataloader(self):
+        """TRL's dataloader with `TeamBatcher` in place of `TokenBudgetBatcher`."""
+        async_grpo_trainer.TokenBudgetBatcher = TeamBatcher
+        try:
+            return super().get_train_dataloader()
+        finally:
+            async_grpo_trainer.TokenBudgetBatcher = TokenBudgetBatcher
 
 
 def main() -> None:
@@ -214,8 +269,8 @@ def main() -> None:
         team_agents=a.agents,
         team_model=a.model,
         num_generations=8,  # G team attempts per problem
-        per_device_train_batch_size=a.agents,  # one team per micro-batch (fixed-count batching)
-        token_budget=0,
+        # TeamBatcher forms one-team micro-batches; the token budget only sizes how far generation may run ahead
+        token_budget=a.agents * 40960,
         gradient_accumulation_steps=a.teams_per_update,
         max_steps=a.updates,
         learning_rate=a.lr,
