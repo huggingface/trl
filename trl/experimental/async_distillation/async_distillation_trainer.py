@@ -1199,6 +1199,19 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
+        self._is_vlm = text_config is not model.config
+        if self._is_vlm:
+            # Train the text model only. It is located through the text config, since module names differ across
+            # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
+            text_model = next(
+                module
+                for module in model.modules()
+                if isinstance(module, PreTrainedModel) and module is not model and module.config is text_config
+            )
+            model.requires_grad_(False)
+            text_model.requires_grad_(True)
+            model.get_output_embeddings().requires_grad_(True)
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
