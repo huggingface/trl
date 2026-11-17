@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.24.0` to `0.33.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.24.0` to `0.34.x`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -29,7 +29,7 @@ pip install "trl[vllm]"
 Then run the server on specific GPUs (e.g., GPUs 0-3):
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --tensor-parallel-size 4 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --gpu-memory-utilization 0.9 --tensor-parallel-size 4 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -153,7 +153,7 @@ For more details, check out [vLLM Transformers Backend](https://blog.vllm.ai/202
 Example:
 
 ```sh
-CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-VL-3B-Instruct \
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-VL-3B-Instruct --gpu-memory-utilization 0.9 \
     --tensor-parallel-size 1 --port 8000 --enforce-eager --model-impl transformers \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \

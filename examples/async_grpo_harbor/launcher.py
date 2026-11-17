@@ -367,6 +367,7 @@ def main() -> None:
         "--default-chat-template-kwargs", '{"enable_thinking": false}',
         "--return-tokens-as-token-ids",
         "--logprobs-mode", "processed_logprobs",
+        "--gpu-memory-utilization", "0.9",
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
     proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})
