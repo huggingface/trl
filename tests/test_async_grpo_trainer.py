@@ -22,6 +22,8 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import select
+import socket
 import threading
 import time
 from collections import OrderedDict, defaultdict
@@ -903,31 +905,30 @@ class TransformersVLLMServer:
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
         if self.script is not None:
-            with self.generate_lock, torch.no_grad():
+            with torch.no_grad():
                 completion_ids = torch.tensor(self.script(prompt_ids[0].tolist()), device=self.model.device)
                 logits = self.model(torch.cat([prompt_ids[0], completion_ids])[None]).logits[
                     0, prompt_ids.shape[1] - 1 : -1
                 ]
             temperature = sampling_params["temperature"] if self.logprobs_mode == "processed_logprobs" else 1.0
             return completion_ids, (logits.float() / temperature).log_softmax(-1)
-        with self.generate_lock:
-            output = self.model.generate(
-                prompt_ids,
-                attention_mask=torch.ones_like(prompt_ids),
-                do_sample=True,
-                max_new_tokens=min(sampling_params["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                top_k=sampling_params["top_k"],
-                min_p=sampling_params.get("min_p"),
-                repetition_penalty=sampling_params["repetition_penalty"],
-                output_scores=True,
-                return_dict_in_generate=True,
-            )
+        output = self.model.generate(
+            prompt_ids,
+            attention_mask=torch.ones_like(prompt_ids),
+            do_sample=True,
+            max_new_tokens=min(sampling_params["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
+            temperature=sampling_params["temperature"],
+            top_p=sampling_params["top_p"],
+            top_k=sampling_params["top_k"],
+            min_p=sampling_params.get("min_p"),
+            repetition_penalty=sampling_params["repetition_penalty"],
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
         completion_ids = output.sequences[0, prompt_ids.shape[1] :]
         if self.logprobs_mode == "raw_logprobs":
             # Sampling still uses temperature, but a raw-logprobs server reports the unmodified policy distribution.
-            with self.generate_lock, torch.no_grad():
+            with torch.no_grad():
                 logits = self.model(output.sequences).logits[0, prompt_ids.shape[1] - 1 : -1]
             return completion_ids, logits.float().log_softmax(-1)
         return completion_ids, torch.cat(output.scores).float().log_softmax(-1)
@@ -941,7 +942,12 @@ class TransformersVLLMServer:
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                self.reply(server.post(urlsplit(self.path).path, json.loads(body or "{}")))
+                with server.generate_lock:
+                    # As vLLM, skip a request whose client has disconnected (#8378)
+                    if select.select([self.connection], [], [], 0)[0] and not self.connection.recv(1, socket.MSG_PEEK):
+                        return
+                    payload = server.post(urlsplit(self.path).path, json.loads(body or "{}"))
+                self.reply(payload)
 
             def reply(self, payload):
                 if payload is None:
@@ -1622,8 +1628,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
-    # default in `AsyncGRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly
-    # test PEFT + gradient checkpointing, which has caused issues in the past.
+    # default in `AsyncGRPOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self, make_vllm_server):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -1636,10 +1641,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,  # enable gradient checkpointing
             vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = AsyncGRPOTrainer(
             model=model,
             reward_funcs=str_length_reward,
@@ -1859,10 +1864,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,
             vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=str_length_reward,
@@ -4533,20 +4538,12 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
-_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
     "text config",
     strict=True,
 )
 _FA2_AVAILABLE = pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed")
-_NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
-    Version(transformers.__version__) >= Version("5.24.0.dev0"),
-    raises=ValueError,
-    reason="transformers refuses Flash Attention for models with bidirectional attention over image tokens, see #8400",
-    strict=True,
-)
 
 
 @require_torch_accelerator
@@ -4571,13 +4568,13 @@ _NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
             marks=_VLM_TEXT_HEAD_DIM_4,
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, None, id="qwen25-vl"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, None, id="llama31"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, None, id="llama32"),
-        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, None, id="mistral"),
-        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", _FA3_HEAD_DIM, None, id="gemma"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, None, id="llama31"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, None, id="llama32"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, None, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", {}, None, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            {"sliding_window": 16},
             None,
             id="gemma2-sliding-window-softcap",
             marks=[
@@ -4590,20 +4587,8 @@ _NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
                 ),
             ],
         ),
-        pytest.param(
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            {},
-            None,
-            id="gemma3",
-            marks=_NO_FLASH_ATTN_FOR_IMAGES,
-        ),
-        pytest.param(
-            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-            {},
-            None,
-            id="gemma4",
-            marks=_NO_FLASH_ATTN_FOR_IMAGES,
-        ),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, None, id="gemma3"),
+        pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, None, id="gemma4"),
         pytest.param(
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             {},
@@ -4615,18 +4600,18 @@ _NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
                 reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
             ),
         ),
-        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, None, id="glm4-moe"),
-        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, None, id="phi35"),
-        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, None, id="cohere"),
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", {}, None, id="glm4-moe"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, None, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", {}, None, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            {"sliding_window": 16},
             None,
             id="cohere2-interleaved-sliding-window",
         ),
         pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
-            {**_FA3_ONE_HEAD, "sliding_window": 16},
+            {"sliding_window": 16},
             None,
             id="olmo3-interleaved-sliding-window",
         ),
@@ -4649,7 +4634,7 @@ _NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
         ),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            {"sliding_window": 16},
             "flash_attention_2",
             id="gemma2-sliding-window-softcap-fa2",
             marks=_FA2_AVAILABLE,
@@ -4742,7 +4727,8 @@ class TestTreePackingParity(TrlTestCase):
 
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
-        model.set_attn_implementation(reference)
+        # Models that refuse Flash Attention take it on their language model (#8400)
+        (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(reference)
         with patch("trl.trainer.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 

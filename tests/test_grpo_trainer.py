@@ -1194,8 +1194,7 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
-    # default in `GRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
-    # PEFT + gradient checkpointing, which has caused issues in the past.
+    # default in `GRPOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -1208,9 +1207,9 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,  # enable gradient checkpointing
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = GRPOTrainer(
             model=model,
             reward_funcs=str_length_reward,
@@ -2481,6 +2480,8 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
     @require_peft
+    # peft warns about this config before TRL raises (#8387)
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
