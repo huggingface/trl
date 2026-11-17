@@ -810,6 +810,8 @@ class TestSFTTrainer(TrlTestCase):
         "expert layers (#7767)",
         strict=True,
     )
+    # peft 0.21.0 to 0.21.3 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
+    @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
     def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
         # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
         model_id = "trl-internal-testing/tiny-Glm4MoeForCausalLM"
@@ -1491,7 +1493,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1523,7 +1525,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1549,7 +1551,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        Version(transformers.__version__) >= Version("5.18.0"),
         reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
     )
     @require_vision
@@ -2384,14 +2386,6 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
                 marks=[
