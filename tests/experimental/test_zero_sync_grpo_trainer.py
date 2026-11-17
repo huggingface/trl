@@ -666,6 +666,11 @@ class _LifecycleLoop(_FixedRolloutLoop):
         self.events.append("close")
 
 
+class _FailingAdvantagesLoop(_FixedRolloutLoop):
+    def compute_advantages(self, group):
+        raise RuntimeError("advantages failed")
+
+
 class TestCustomRolloutLoop(TrlTestCase):
     @pytest.fixture(autouse=True)
     def _init_accelerate_state(self):
@@ -697,6 +702,16 @@ class TestCustomRolloutLoop(TrlTestCase):
         )
         with pytest.raises(RuntimeError, match="rejected every prompt of epoch 0"):
             loop.run_until(lambda: False)
+
+    def test_stop_after_a_failed_loop_leaves_no_task_pending(self):
+        loop = _rollout_loop(_FailingAdvantagesLoop, num_generations=2, reward_funcs=[two_reward])
+        loop.prompts = iter(
+            [list(load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"))]
+        )
+        with pytest.raises(RuntimeError, match="advantages failed"):
+            loop.run_until(lambda: False)
+        loop.stop()
+        assert not asyncio.all_tasks(loop._loop)  # every loop and rollout finished
 
     def test_the_built_in_generate_one_needs_a_reward_source(self):
         with pytest.raises(ValueError, match="No reward source provided"):

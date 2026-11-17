@@ -597,9 +597,13 @@ class ZeroSyncRolloutLoop:
     def stop(self) -> None:
         """Stop the loops, dropping the rollouts in flight, and release their resources."""
         self._stop_event.set()
-        if self._run_task is not None:
-            self._run_task.cancel()
-            self._loop.run_until_complete(asyncio.gather(self._run_task, return_exceptions=True))
+        # Every task of the loop, not only the run task: when one loop fails, the run task ends with its error while
+        # the other loops and the rollouts are still pending, and closing the event loop under them leaves coroutines
+        # that can never finish.
+        tasks = asyncio.all_tasks(self._loop)
+        for task in tasks:
+            task.cancel()
+        self._loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
         self._tool_pool.shutdown(wait=True, cancel_futures=True)
         self._loop.close()
 
