@@ -1632,7 +1632,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        Version(transformers.__version__) < Version("5.13.0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
     )
     def test_tools_without_jmespath(self):
