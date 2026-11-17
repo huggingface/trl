@@ -4391,8 +4391,14 @@ class TestTreePacking(TrlTestCase):
 
 
 _FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
-# LFM2 has no `head_dim` kwarg, so a single head spans the whole hidden size
-_LFM2_ONE_HEAD = {"hidden_size": 32, **_FA3_ONE_HEAD}
+# LFM2 has no `head_dim` kwarg, so a single head spans the whole hidden size. Drop this once the tiny LFM2 models are
+# Flash Attention compatible (https://github.com/huggingface/trl/issues/6857)
+_LFM2_ONE_HEAD = {
+    "hidden_size": 32,
+    "num_attention_heads": 1,
+    "num_key_value_heads": 1,
+    "ignore_mismatched_sizes": True,
+}
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
     "text config",
