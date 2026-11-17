@@ -65,12 +65,6 @@ _HEAD_SIZE_NOT_MULTIPLE_OF_8 = pytest.mark.xfail(
     strict=True,
     run=Version(torch.__version__) >= Version("2.13.0"),  # torch<2.13 leaks checkpoint hooks into later tests (#8302)
 )
-_NO_FLASH_ATTN_FOR_IMAGES = pytest.mark.xfail(
-    Version(transformers.__version__) >= Version("5.24.0.dev0"),
-    raises=ValueError,
-    reason="transformers refuses Flash Attention for models with bidirectional attention over image tokens, see #8400",
-    strict=True,
-)
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
@@ -2374,17 +2368,6 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_NO_FLASH_ATTN_FOR_IMAGES),
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.5.0"),
-                        reason="Gemma4 models were introduced in transformers-5.5.0",
-                    ),
-                    _NO_FLASH_ATTN_FOR_IMAGES,
-                ],
-            ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
                 marks=[
