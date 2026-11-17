@@ -127,7 +127,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
        --weight-transfer-config '{"backend": "nccl"}' \
        --logprobs-mode processed_logprobs \
        --max-logprobs -1
