@@ -303,6 +303,10 @@ class DataCollatorForChatML:
     # GOLD sets this when training with tools so the on-policy path can re-render prompts with tool schemas and
     # environment observations before generation, and pass per-rollout kwargs to `environment.reset`.
     forward_prompt_messages: bool = False
+    # Use the `tools` column: render with its tool schemas and train on a row with tools as a multi-turn tool
+    # trajectory (the completion starts at the first assistant turn, and tool results are masked out of the labels).
+    # GOLD sets this; other trainers leave it off and only train on the last assistant turn.
+    use_tools_column: bool = False
     # Chat template override for every render in this collator. GOLD sets this to the prefix-preserving training
     # template when training with tools and the tokenizer's own template is not prefix-preserving (e.g. Qwen3 drops
     # historical `<think>` blocks, which would shift the incremental tool-span scan in `_tool_byte_ranges`).
@@ -325,8 +329,9 @@ class DataCollatorForChatML:
         prompt_messages: list[list[dict]] = []
 
         for example in examples:
-            tools = example.get("tools")
-            tools = json.loads(tools) if isinstance(tools, str) else tools
+            tools = example.get("tools") if self.use_tools_column else None
+            # An empty tools list means no tools
+            tools = (json.loads(tools) if isinstance(tools, str) else tools) or None
             example_tool_ranges: list[tuple[int, int]] = []
 
             # With tools, the completion spans every assistant/tool turn (multi-turn tool calling), so the prompt is

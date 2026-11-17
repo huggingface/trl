@@ -1424,6 +1424,7 @@ class GOLDTrainer(SFTTrainer):
                     # With tools, the on-policy path re-renders prompts from messages (tool schemas + environment
                     # observations), so the collator must forward the raw prompt message lists.
                     forward_prompt_messages=bool(tools or environment_factory),
+                    use_tools_column=True,
                 )
 
         teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
@@ -2616,6 +2617,11 @@ class GOLDTrainer(SFTTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+            # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+            # (huggingface/transformers#50094)
+            if isinstance(prefix_ids, torch.Tensor):
+                prefix_ids = prefix_ids.tolist()
+                full_ids = full_ids.tolist()
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
@@ -3482,20 +3488,21 @@ class GOLDTrainer(SFTTrainer):
                 result = {}
                 # Absolute UTF-8 byte spans of tool-result (`role == "tool"`) messages inside `full_text`. Used below
                 # to mask tool-result tokens out of the off-policy labels, mirroring the on-policy `tool_mask` and the
-                # VLM collator. `emit_tool_mask` is set for any conversational prompt-completion row carrying a `tools`
-                # column, so every row of a tools dataset emits a `tool_mask` (all-ones when it has no tool results),
-                # keeping the dataset features homogeneous.
+                # VLM collator. `emit_tool_mask` is set for any row carrying a `tools` column, so every row of a tools
+                # dataset emits a `tool_mask` (all-ones when it has no tool results), keeping the dataset features
+                # homogeneous.
                 tool_ranges: list[tuple[int, int]] = []
-                emit_tool_mask = False
+                emit_tool_mask = "tools" in example
                 tools = example.get("tools")
-                tools = json.loads(tools) if isinstance(tools, str) else tools
+                # An empty tools list means no tools
+                tools = (json.loads(tools) if isinstance(tools, str) else tools) or None
 
                 # With tools, a `messages` conversation is a multi-turn tool trajectory: the completion spans every
                 # assistant/tool turn, so the prompt is everything up to the *first* assistant turn — not up to the
                 # last one, which would bury the assistant tool-call turns in the masked prompt. Convert to the
                 # prompt-completion layout so the branch below renders with the tool schemas and emits `tool_mask`
                 # (mirrors `DataCollatorForChatML` and the on-policy path).
-                if "prompt" not in example and "messages" in example and example.get("tools") is not None:
+                if "prompt" not in example and "messages" in example and tools is not None:
                     messages = example["messages"]
                     first_assistant = next(
                         (i for i, m in enumerate(messages) if m.get("role") == "assistant"), max(len(messages) - 1, 0)
@@ -3523,8 +3530,7 @@ class GOLDTrainer(SFTTrainer):
 
                         messages = example["prompt"] + example["completion"]
                         boundary = len(example["prompt"])
-                        emit_tool_mask = tools is not None
-                        if emit_tool_mask and any(m.get("role") == "tool" for m in messages[boundary:]):
+                        if tools is not None and any(m.get("role") == "tool" for m in messages[boundary:]):
                             # Locate each tool message's rendered byte span by incremental prefix rendering (the same
                             # technique the collators use; requires the prefix-preserving `tool_chat_template`).
                             # Rendered with the same `tools=` and template as `full_text`, so the byte coordinates

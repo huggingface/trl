@@ -2752,7 +2752,7 @@ def test_smollm3_collator_masks_tool_results_supervises_assistant(smollm_tokeniz
     ]
     example = {"messages": messages, "tools": _MULTIPLY_TOOL_SCHEMA}
 
-    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=1024)
+    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=1024, use_tools_column=True)
     batch = collator([example])
 
     input_ids = batch["input_ids"][0].tolist()
