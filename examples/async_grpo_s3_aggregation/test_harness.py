@@ -42,32 +42,31 @@ class FakeSampler:
     async def encode(self, text):
         return [END_ID] if text == "<|im_end|>" else [ord(c) for c in text]
 
-    def _plan(self, ctx: str, name: str, n: int) -> str:
-        if "Submit the sorted list" in ctx[ctx.rfind("<|im_start|>user") :]:
-            got = [int(x) for x in re.findall(READ, ctx)]
-            return "<think>final</think>#### " + json.dumps(sorted(got + [self.own[name]]))
-        if name in self.silent:
-            return "<think>stay quiet</think>ok"
-        if '"status": "sent"' not in ctx:
-            return (
-                '<think>share</think><tool_call>\n{"name": "message", "arguments": {"to": "all", "text": '
-                f'"number {self.own[name]}"}}}}\n</tool_call>'
-            )
-        got = re.findall(READ, ctx)
-        if len(got) == n - 1:
-            return "<think>done</think>#### " + json.dumps(sorted([int(x) for x in got] + [self.own[name]]))
-        if ctx.rfind('"unread_by_sender"') > ctx.rfind('"messages"'):
-            return '<think>notified</think><tool_call>\n{"name": "read_messages", "arguments": {}}\n</tool_call>'
-        return "<think>nothing to do; wait</think>ok"
-
     async def generate(self, prompt, max_tokens, temperature):
         ctx = "".join(chr(t) if t > 1 else "<|im_end|>" for t in prompt)
         name = re.search(r"Your name is (agent_\d+)", ctx).group(1)
         n = len(re.search(r"Your teammates: (.*)\.", ctx).group(1).split(", ")) + 1
         await asyncio.sleep(0)  # let teammates interleave
         at, rest = self.pending.pop(name, (None, ""))
+        got = [int(x) for x in re.findall(READ, ctx)]
         # continue a cut response only if nothing was appended since; after a notification, re-plan like a model would
-        text = rest if at == len(prompt) and rest else self._plan(ctx, name, n)
+        if at == len(prompt) and rest:
+            text = rest
+        elif "Submit the sorted list" in ctx[ctx.rfind("<|im_start|>user") :]:
+            text = "<think>final</think>#### " + json.dumps(sorted(got + [self.own[name]]))
+        elif name in self.silent:
+            text = "<think>stay quiet</think>ok"
+        elif '"status": "sent"' not in ctx:
+            text = (
+                '<think>share</think><tool_call>\n{"name": "message", "arguments": {"to": "all", "text": '
+                f'"number {self.own[name]}"}}}}\n</tool_call>'
+            )
+        elif len(got) == n - 1:
+            text = "<think>done</think>#### " + json.dumps(sorted(got + [self.own[name]]))
+        elif ctx.rfind('"unread_by_sender"') > ctx.rfind('"messages"'):
+            text = '<think>notified</think><tool_call>\n{"name": "read_messages", "arguments": {}}\n</tool_call>'
+        else:
+            text = "<think>nothing to do; wait</think>ok"
         out, rest = text[:max_tokens], text[max_tokens:]
         if rest:
             self.pending[name] = (len(prompt) + len(out), rest)

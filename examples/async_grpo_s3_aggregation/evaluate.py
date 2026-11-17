@@ -36,7 +36,20 @@ from harness import Settings, VLLMSampler, run_team
 HELD_OUT = 1_000_000
 
 
-async def main_async(a: argparse.Namespace) -> None:
+async def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--url", required=True)
+    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--name", required=True)
+    ap.add_argument("--out")
+    ap.add_argument("--n", type=int, default=4)
+    ap.add_argument("--episodes", type=int, default=192)
+    ap.add_argument("--concurrency", type=int, default=64, help="teams in flight")
+    ap.add_argument("--work-tokens", type=int, default=8192)
+    ap.add_argument("--final-tokens", type=int, default=1024)
+    ap.add_argument("--save-tokens", action="store_true", help="keep each agent's tokens and mask (for transcripts)")
+    a = ap.parse_args()
+
     out = Path(a.out or f"runs/{a.name}.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
     sampler = VLLMSampler(a.url, a.model)
@@ -63,20 +76,5 @@ async def main_async(a: argparse.Namespace) -> None:
     )
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--url", required=True)
-    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--out")
-    ap.add_argument("--n", type=int, default=4)
-    ap.add_argument("--episodes", type=int, default=192)
-    ap.add_argument("--concurrency", type=int, default=64, help="teams in flight")
-    ap.add_argument("--work-tokens", type=int, default=8192)
-    ap.add_argument("--final-tokens", type=int, default=1024)
-    ap.add_argument("--save-tokens", action="store_true", help="keep each agent's tokens and mask (for transcripts)")
-    asyncio.run(main_async(ap.parse_args()))
-
-
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -38,7 +38,6 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Protocol
 
 import httpx
 
@@ -49,10 +48,9 @@ from .task import (
     Problem,
     after_thinking,
     count_words,
-    first_user_turn,
     notice,
+    opening,
     parse_answer,
-    system_prompt,
     team_reward,
 )
 
@@ -76,16 +74,10 @@ class Settings:
         return self.work_tokens + self.final_tokens
 
 
-class Sampler(Protocol):
-    async def chat_prompt(self, messages: list[dict], tools: list[dict], enable_thinking: bool) -> list[int]: ...
-    async def encode(self, text: str) -> list[int]: ...
-    async def generate(
-        self, prompt: list[int], max_tokens: int, temperature: float
-    ) -> tuple[list[int], list[float], str, str]: ...
-
-
 class VLLMSampler:
-    """`/tokenize` for the chat template, `/v1/completions` on token ids with the sampled ids and logprobs."""
+    """`/tokenize` for the chat template, `/v1/completions` on token ids with the sampled ids and logprobs.
+
+    The harness only calls `chat_prompt`, `encode` and `generate`, so a test can swap in a scripted fake."""
 
     def __init__(self, base_url: str, model: str, client: httpx.AsyncClient | None = None, timeout_s: float = 900.0):
         self.base_url, self.model = base_url.rstrip("/").removesuffix("/v1"), model
@@ -236,7 +228,7 @@ class AgentState:
 
 
 class Agent:
-    def __init__(self, i: int, problem: Problem, board: Board, sampler: Sampler, s: Settings):
+    def __init__(self, i: int, problem: Problem, board: Board, sampler: VLLMSampler, s: Settings):
         self.p, self.board, self.sampler, self.s = problem, board, sampler, s
         self.n = len(problem.names)
         self.st = AgentState(problem.names[i], problem.numbers[i])
@@ -317,17 +309,64 @@ class Agent:
     async def run(self) -> AgentState:
         st, i = self.st, self.p.names.index(self.st.name)
         st.tokens = await self.sampler.chat_prompt(
-            [
-                {"role": "system", "content": system_prompt(st.name, self.teammates, self.n, self.s.token_cost)},
-                {"role": "user", "content": first_user_turn(self.n, self.p.numbers[i])},
-            ],
+            opening(st.name, self.teammates, self.n, self.p.numbers[i], self.s.token_cost),
             TOOLS,
             self.s.enable_thinking,
         )
         st.mask, st.logprobs, st.prompt_len = [0] * len(st.tokens), [0.0] * len(st.tokens), len(st.tokens)
         self._end = set(await self.sampler.encode(END))
+        s, segment = self.s, ""
         try:
-            reason = await self._work()
+            while True:
+                room = min(s.work_tokens - st.work_generated, s.context - len(st.tokens) - s.final_tokens - 256)
+                if room <= 0:
+                    self.board.finish(st.name)
+                    reason = "allowance" if st.work_generated >= s.work_tokens else "context"
+                    break
+                before = len(st.tokens)
+                text, finish = await self._gen(min(s.chunk, room))
+                st.work_generated += len(st.tokens) - before
+                segment += text
+                if finish == "length":  # a request boundary: deliver a notification if one is due
+                    note = self._notice()
+                    if note is not None:
+                        await self._close_assistant(finish)
+                        await self._user(f"<tool_response>\n{note}\n</tool_response>")
+                        segment = ""
+                    continue
+                await self._close_assistant(finish)
+                visible = after_thinking(segment)
+                segment = ""
+                calls = []
+                for raw in TOOL_CALL.findall(visible):
+                    try:
+                        c = json.loads(raw)
+                        calls.append(c if isinstance(c, dict) else {"_bad": raw})
+                    except json.JSONDecodeError:
+                        calls.append({"_bad": raw})
+                if calls:
+                    results = [
+                        json.dumps({"error": "tool call is not valid JSON"}) if "_bad" in c else self._tool(c)
+                        for c in calls
+                    ]
+                    note = self._notice()
+                    if note is not None:
+                        results.append(note)
+                    await self._user("\n".join(f"<tool_response>\n{r}\n</tool_response>" for r in results))
+                    continue
+                answer = parse_answer(visible)
+                if answer is not None:
+                    st.answer = answer
+                    st.events.append({"kind": "submit", "at": len(st.tokens), "phase": "work", "answer": answer})
+                    self.board.finish(st.name)
+                    reason = "answered"
+                    break
+                stalled = await self.board.idle(st.name, self.notified)
+                if stalled:
+                    reason = "idle"
+                    break
+                st.events.append({"kind": "woken", "at": len(st.tokens)})
+                await self._user(f"<tool_response>\n{self._notice()}\n</tool_response>")
         except BaseException:
             if not self.board.stalled:
                 self.board.finish(st.name)  # never leave teammates parked on an agent that died
@@ -341,56 +380,6 @@ class Agent:
             st.answer = parse_answer(after_thinking(text)) or []
             st.events.append({"kind": "submit", "at": len(st.tokens), "phase": "final", "answer": st.answer})
         return st
-
-    async def _work(self) -> str:
-        st, s, segment = self.st, self.s, ""
-        while True:
-            room = min(s.work_tokens - st.work_generated, s.context - len(st.tokens) - s.final_tokens - 256)
-            if room <= 0:
-                self.board.finish(st.name)
-                return "allowance" if st.work_generated >= s.work_tokens else "context"
-            before = len(st.tokens)
-            text, finish = await self._gen(min(s.chunk, room))
-            st.work_generated += len(st.tokens) - before
-            segment += text
-            if finish == "length":  # a request boundary: deliver a notification if one is due
-                note = self._notice()
-                if note is not None:
-                    await self._close_assistant(finish)
-                    await self._user(f"<tool_response>\n{note}\n</tool_response>")
-                    segment = ""
-                continue
-            await self._close_assistant(finish)
-            visible = after_thinking(segment)
-            segment = ""
-            calls = []
-            for raw in TOOL_CALL.findall(visible):
-                try:
-                    c = json.loads(raw)
-                    calls.append(c if isinstance(c, dict) else {"_bad": raw})
-                except json.JSONDecodeError:
-                    calls.append({"_bad": raw})
-            if calls:
-                results = [
-                    json.dumps({"error": "tool call is not valid JSON"}) if "_bad" in c else self._tool(c)
-                    for c in calls
-                ]
-                note = self._notice()
-                if note is not None:
-                    results.append(note)
-                await self._user("\n".join(f"<tool_response>\n{r}\n</tool_response>" for r in results))
-                continue
-            answer = parse_answer(visible)
-            if answer is not None:
-                st.answer = answer
-                st.events.append({"kind": "submit", "at": len(st.tokens), "phase": "work", "answer": answer})
-                self.board.finish(st.name)
-                return "answered"
-            stalled = await self.board.idle(st.name, self.notified)
-            if stalled:
-                return "idle"
-            st.events.append({"kind": "woken", "at": len(st.tokens)})
-            await self._user(f"<tool_response>\n{self._notice()}\n</tool_response>")
 
 
 @dataclass
@@ -429,7 +418,7 @@ class Episode:
         return out
 
 
-async def run_team(sampler: Sampler, problem: int, seed: int, n: int = 4, s: Settings | None = None) -> Episode:
+async def run_team(sampler: VLLMSampler, problem: int, seed: int, n: int = 4, s: Settings | None = None) -> Episode:
     s = s or Settings()
     p = Problem.make(problem, seed, n)
     board = Board(p.names)

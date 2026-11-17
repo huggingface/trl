@@ -209,10 +209,12 @@ TOOLS = [  # Table 2
 ]
 
 
-def system_prompt(name: str, teammates: list[str], n: int, token_cost: bool = True) -> str:
-    return "\n\n".join(
+def opening(name: str, teammates: list[str], n: int, number: int, token_cost: bool = True) -> list[dict]:
+    """The system prompt and first user turn of one agent."""
+    w = count_words(n)
+    system = "\n\n".join(
         [
-            TASK.format(n=count_words(n), reward=REWARD_TOKEN_COST if token_cost else REWARD_NO_COST),
+            TASK.format(n=w, reward=REWARD_TOKEN_COST if token_cost else REWARD_NO_COST),
             GUIDANCE,
             SHARED_REWARD,
             IDENTITY.format(name=name, teammates=", ".join(teammates)),
@@ -221,11 +223,8 @@ def system_prompt(name: str, teammates: list[str], n: int, token_cost: bool = Tr
             IDLENESS_RULES,
         ]
     )
-
-
-def first_user_turn(n: int, number: int) -> str:
-    w = count_words(n)
-    return FIRST_USER_TURN.format(n_cap=w.capitalize(), n=w, number=number_words(number))
+    user = FIRST_USER_TURN.format(n_cap=w.capitalize(), n=w, number=number_words(number))
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def notice(counts: dict[str, int]) -> str:

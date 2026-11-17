@@ -58,6 +58,7 @@ See README.md for the results of this run and how to evaluate the checkpoint.
 """
 
 import argparse
+import itertools
 import logging
 import math
 import os
@@ -89,28 +90,6 @@ class TeamConfig(AsyncGRPOConfig):
     team_work_tokens: int = field(default=8192, metadata={"help": "per-agent work-phase token allowance"})
     team_final_tokens: int = field(default=1024, metadata={"help": "per-agent final-answer token allowance"})
     team_model: str = field(default="Qwen/Qwen3-0.6B", metadata={"help": "served model name on the vLLM server"})
-
-
-def agent_turns(state) -> list[TurnRecord]:
-    """One TurnRecord per contiguous stretch of model-sampled tokens; the context before it is the prompt."""
-    toks, mask, lps = state.tokens, state.mask, state.logprobs
-    turns, i = [], 0
-    while i < len(toks):
-        if not mask[i]:
-            i += 1
-            continue
-        j = i
-        while j < len(toks) and mask[j]:
-            j += 1
-        turns.append(
-            TurnRecord(
-                prompt_ids=list(toks[:i]),
-                output_ids=list(toks[i:j]),
-                output_log_probs=[float(x) for x in lps[i:j]],
-            )
-        )
-        i = j
-    return turns
 
 
 class TeamRolloutLoop(AsyncRolloutLoop):
@@ -145,11 +124,22 @@ class TeamRolloutLoop(AsyncRolloutLoop):
                 turns=[],
                 reward=None,
             )
-        turns, completion_ids = [], []
+        # one turn per stretch of model-sampled tokens; the context before it is its prompt
+        turns = []
         for st in ep.agents:
-            t = agent_turns(st)
-            turns += t
-            completion_ids += [x for tr in t for x in tr.output_ids]
+            i = 0
+            for sampled, run in itertools.groupby(st.mask):
+                k = len(list(run))
+                if sampled:
+                    turns.append(
+                        TurnRecord(
+                            prompt_ids=st.tokens[:i],
+                            output_ids=st.tokens[i : i + k],
+                            output_log_probs=st.logprobs[i : i + k],
+                        )
+                    )
+                i += k
+        completion_ids = [x for tr in turns for x in tr.output_ids]
         msgs = sum(e["kind"] == "message" for st in ep.agents for e in st.events)
         self._push_metrics(
             {"team/success": float(ep.success), "team/tokens": float(ep.tokens), "team/messages": float(msgs)}
@@ -176,39 +166,31 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         update has `gradient_accumulation_steps` teams with signal; kept, they add no gradient but count in the 1/|B|
         team average, so an update is exactly `teams_per_update` teams collected, as in the paper."""
         samples = await super()._score_group(group)
-        if samples or group.rewards is None or not len(group.completions_sequences):
-            return _tag_teams(samples)
-        kept = float(np.nanmean(group.rewards)) if not np.isnan(group.rewards).all() else 0.0
-        out = []
-        for prompt, completion, sequences in zip(
-            group.prompts, group.completions, group.completions_sequences, strict=True
-        ):
-            for seq in sequences:
-                n = len(seq.input_ids)
-                out.append(
-                    RolloutSample(
-                        prompt=prompt,
-                        completion=completion,
-                        input_ids=np.asarray(seq.input_ids, dtype=np.int64),
-                        completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
-                        old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
-                        sampling_mask=seq.sampling_mask,
-                        sampler_ids=np.full((n, 0), -1, dtype=np.int64),
-                        sampler_log_probs=np.full((n, 0), -math.inf, dtype=np.float32),
-                        advantage=0.0,
-                        model_version=group.model_version,
-                        group_id=group.group_id,
-                        metrics={"reward_trained": kept, "reward_group_std": 0.0},
-                    )
+        if not samples and group.rewards is not None and len(group.completions_sequences):
+            kept = float(np.nanmean(group.rewards)) if not np.isnan(group.rewards).all() else 0.0
+            samples = [
+                RolloutSample(
+                    prompt=prompt,
+                    completion=completion,
+                    input_ids=np.asarray(seq.input_ids, dtype=np.int64),
+                    completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
+                    old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
+                    sampling_mask=seq.sampling_mask,
+                    sampler_ids=np.full((len(seq.input_ids), 0), -1, dtype=np.int64),
+                    sampler_log_probs=np.full((len(seq.input_ids), 0), -math.inf, dtype=np.float32),
+                    advantage=0.0,
+                    model_version=group.model_version,
+                    group_id=group.group_id,
+                    metrics={"reward_trained": kept, "reward_group_std": 0.0},
                 )
-        return _tag_teams(out)
-
-
-def _tag_teams(samples: list[RolloutSample]) -> list[RolloutSample]:
-    """Mark which team each row came from (the episode summary is unique per team), for `TeamBatcher`."""
-    for s in samples:
-        s.metrics["team"] = s.completion[0]["content"]
-    return samples
+                for prompt, completion, sequences in zip(
+                    group.prompts, group.completions, group.completions_sequences, strict=True
+                )
+                for seq in sequences
+            ]
+        for s in samples:  # which team each row came from (the summary is unique per team), for TeamBatcher
+            s.metrics["team"] = s.completion[0]["content"]
+        return samples
 
 
 class TeamBatcher(TokenBudgetBatcher):
@@ -225,17 +207,14 @@ class TeamBatcher(TokenBudgetBatcher):
                 teams.append(team)
                 team = []
                 if len(teams) == self.num_processes:
-                    yield [self._row(t) for t in teams]
+                    rows = [TreeRow() for _ in teams]
+                    for row, members in zip(rows, teams, strict=True):
+                        for s in members:
+                            row.add(s)
+                    yield rows
                     teams = []
             team.append(sample)
             key = k
-
-    @staticmethod
-    def _row(team: list[dict]) -> TreeRow:
-        row = TreeRow()
-        for sample in team:
-            row.add(sample)
-        return row
 
 
 class TeamTrainer(AsyncGRPOTrainer):
