@@ -4660,6 +4660,13 @@ _FA2_AVAILABLE = pytest.mark.skipif(not is_flash_attn_2_available(), reason="Fla
             id="qwen35-gdn-fa2",
             marks=_FA2_AVAILABLE,
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            {},
+            "flash_attention_2",
+            id="deepseek-v3-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
     ],
 )
 class TestTreePackingParity(TrlTestCase):

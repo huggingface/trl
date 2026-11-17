@@ -336,6 +336,10 @@ def tree_attention(
     """
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2).to(dtype) for x in (query, key, value))
+    # FA2 requires matching Q/K and V head dimensions; pad MLA's smaller V heads and crop below.
+    head_dim, v_head_dim = query.shape[-1], value.shape[-1]
+    if v_head_dim != head_dim:
+        value = torch.nn.functional.pad(value, [0, head_dim - v_head_dim])
     # Transformers selects the requested FlashAttention backend and adapts its kernel arguments.
     # Each segment queries its root-to-segment path, whose K/V length can exceed the query length.
     out = _flash_attention_forward(
@@ -355,6 +359,8 @@ def tree_attention(
         target_dtype=dtype,
         attn_implementation=tree_attn_implementation,
     )
+    if v_head_dim != head_dim:
+        out = out[..., :v_head_dim]
     return out, None
 
 
