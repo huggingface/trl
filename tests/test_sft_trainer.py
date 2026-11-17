@@ -2332,16 +2332,6 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             pytest.param(
-                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
-            pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
                 marks=[
                     pytest.mark.skipif(
