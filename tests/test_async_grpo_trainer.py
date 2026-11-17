@@ -1406,6 +1406,28 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert new_param.dtype == torch.float16
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_raises_when_every_group_is_dropped(self, make_vllm_server):
+        # Equal rewards drop every group, so training would wait forever for a batch
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=constant_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(RuntimeError, match=f"The last {len(dataset)} groups were all dropped"):
+            trainer.train()
+
     @require_peft
     def test_peft_init_is_seeded(self, make_vllm_server):
         # Two trainers with the same seed start from the same adapter weights

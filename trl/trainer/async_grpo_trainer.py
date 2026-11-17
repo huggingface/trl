@@ -2250,11 +2250,13 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         metrics,
         dropped_groups,
         token_allowance,
+        max_dropped_in_a_row=None,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
     ):
         self.queue = rollout_queue
+        self.max_dropped_in_a_row = max_dropped_in_a_row
         self.token_allowance = token_allowance
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
@@ -2296,6 +2298,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             ctx.run(log_rollout_traces, samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
+        dropped_in_a_row = 0
         while True:
             t0 = time.time()
             while True:
@@ -2313,7 +2316,17 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
 
             if isinstance(sample, int):
                 self.dropped_groups.add(sample)
+                dropped_in_a_row += 1
+                # The trainer waits here for its batch, so the weights cannot change and a whole pass over the prompts
+                # without a trainable group means none will come
+                if self.max_dropped_in_a_row is not None and dropped_in_a_row >= self.max_dropped_in_a_row:
+                    raise RuntimeError(
+                        f"The last {dropped_in_a_row} groups were all dropped, because the rewards of each group were "
+                        "equal, or rejected by `filter_prompt`, so no batch can reach the trainer. Check that the "
+                        "reward functions return different rewards for different completions."
+                    )
                 continue
+            dropped_in_a_row = 0
             self.consumed_tokens += len(sample.input_ids)
             self.step_tokens += len(sample.input_ids)
             self.token_allowance.value = self.consumed_tokens + self.lookahead_tokens
@@ -3173,6 +3186,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
             )
 
+        # Prompts in one pass over the dataset; unknown for a streaming dataset or when an environment owns the data
+        self._num_prompts = len(train_dataset) if isinstance(train_dataset, Dataset) else None
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
             # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
@@ -3382,6 +3397,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
                 token_allowance=self.rollout_worker.token_allowance,
+                max_dropped_in_a_row=self._num_prompts,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
