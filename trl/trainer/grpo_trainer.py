@@ -104,6 +104,10 @@ from .utils import (
 )
 
 
+# peft maps LoRA `target_modules` onto the fused MoE experts only for models mapped to mixtral or qwen2_moe (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
@@ -483,7 +487,8 @@ class GRPOTrainer(_BaseTrainer):
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type, model.config.model_type)
+                in ("mixtral", "qwen2_moe")
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -503,7 +508,8 @@ class GRPOTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type, model.config.model_type)
+                in ("mixtral", "qwen2_moe")
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
