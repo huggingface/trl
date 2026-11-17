@@ -52,7 +52,7 @@ Some argument combinations are intentionally restricted in the current [`experim
 - Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
 - The trainer needs `transformers>=5.19.0`.
 - The model generates and trains in one dtype. With `bf16=True`, the default, a model id is loaded in bf16, and a model passed as an instance must already be in bf16. The optimizer keeps fp32 copies of the parameters, see [Configuring the generation engine](#configuring-the-generation-engine). `fp16=True` is not supported.
-- Every process holds the whole model, or its share of it with `tp_size`, see [Scaling](#scaling). FSDP and DeepSpeed are not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
+- Every process holds the whole model, or its share of it with `tp_size`, see [Scaling](#scaling). With `tp_size > 1`, the number of processes must currently equal `tp_size`: transformers' device mesh has no dimension for plain replicas of a tensor-parallel model (its `dp_replicate_size` wraps the model in FSDP). FSDP and DeepSpeed are not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
 - `use_liger_kernel=True` is not supported.
 - PEFT is not supported.
 - Models with linear attention layers (Qwen3.5, Qwen3.6, Qwen3-Next, ...) need flash attention, see [Packed training](#packed-training).
