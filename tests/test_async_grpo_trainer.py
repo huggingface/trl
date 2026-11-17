@@ -4402,6 +4402,11 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     strict=True,
 )
 
+_LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.22.0"),
+    reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
+)
+
 
 @require_torch_accelerator
 @pytest.mark.usefixtures("stub_weight_transfer")
@@ -4415,9 +4420,13 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv"),
-        pytest.param("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv", marks=_LFM2_CONV_BEFORE_5_22),
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv", marks=_LFM2_CONV_BEFORE_5_22
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv", marks=_LFM2_CONV_BEFORE_5_22
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
         ),
@@ -4565,6 +4574,17 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     def test_init_raises(self, model_id, match):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=str_length_reward,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+    def test_init_raises_on_short_conv_before_transformers_5_22(self):
+        model_id = "trl-internal-testing/tiny-Lfm2ForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with patch("transformers.__version__", "5.21.0"), pytest.raises(ValueError, match="transformers>=5.22.0"):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=str_length_reward,
