@@ -310,6 +310,12 @@ class ZeroSyncGRPOConfig(_BaseConfig):
                 "example with `dataset.remove_columns(...)`."
             )
 
+        if self.fp16:
+            raise ValueError(
+                "`fp16=True` is not supported: ZeroSyncGRPO keeps fp32 copies of the parameters in its optimizer and "
+                "trains bf16 weights, and fp16 would need loss scaling, which that optimizer does not do. Use `bf16`."
+            )
+
         if self.num_generations < 2:
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "

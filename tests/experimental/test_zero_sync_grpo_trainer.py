@@ -1219,8 +1219,9 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        reason="The engine decodes through the mixed-precision forward, whose keys and values do not match a KV cache "
-        "in another dtype than the training precision",
+        raises=ValueError,
+        reason="The weights must be in the training precision, which is bf16 here: the engine decodes through the "
+        "mixed-precision forward and keeps its KV cache in the weights' dtype",
         strict=True,
     )
     def test_train_model_dtype(self):
@@ -1259,8 +1260,8 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.xfail(
-        reason="The engine decodes through the mixed-precision forward, whose keys and values do not match a KV cache "
-        "in another dtype than the training precision",
+        raises=ValueError,
+        reason="fp16 needs loss scaling, which the optimizer that steps fp32 copies of the parameters does not do",
         strict=True,
     )
     def test_train_with_fp16(self):

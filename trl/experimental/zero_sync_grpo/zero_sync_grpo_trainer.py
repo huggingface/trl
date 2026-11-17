@@ -1555,8 +1555,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-            # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
-            model_init_kwargs.setdefault("dtype", "auto")
+            # The same weights both generate and train, so they are loaded in the training precision rather than fp32
+            # (see the check below), and in the checkpoint dtype without mixed precision
+            model_init_kwargs.setdefault("dtype", "bfloat16" if args.bf16 else "auto")
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -1586,6 +1587,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     "You passed `model_init_kwargs` to the `ZeroSyncGRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+
+        # The engine decodes through the training forward and keeps its KV cache in the weights' dtype. bf16 mixed
+        # precision computes that forward in bf16, so the weights have to be in it, or the cache rejects the keys and
+        # values. The optimizer keeps fp32 copies of the parameters, see `create_optimizer`.
+        if args.bf16 and model.dtype != torch.bfloat16:
+            raise ValueError(
+                f"The model is in {model.dtype}, but training runs in bf16. ZeroSyncGRPOTrainer generates from the "
+                "weights it trains, so they must be in bf16: load the model in bf16, or train with `bf16=False`."
+            )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")

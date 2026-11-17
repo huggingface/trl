@@ -51,6 +51,7 @@ Some argument combinations are intentionally restricted in the current [`experim
 - Prompts from the dataset must be in [conversational](dataset_formats#conversational) format. With an `environment_factory`, the dataset may have no `prompt` column, and `reset()` provides it.
 - Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
 - The trainer needs `transformers>=5.19.0`.
+- The model generates and trains in one dtype. With `bf16=True`, the default, a model id is loaded in bf16, and a model passed as an instance must already be in bf16. The optimizer keeps fp32 copies of the parameters, see [Configuring the generation engine](#configuring-the-generation-engine). `fp16=True` is not supported.
 - Every process holds the whole model, or its share of it with `tp_size`, see [Scaling](#scaling). FSDP and DeepSpeed are not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
 - `use_liger_kernel=True` is not supported.
 - PEFT is not supported.
