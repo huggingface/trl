@@ -49,7 +49,7 @@ config = Qwen3MoeConfig(
     bos_token_id=151643,
     eos_token_id=151645,
     # Forwarded via kwargs (not Qwen3MoeConfig fields, but PretrainedConfig accepts arbitrary kwargs):
-    head_dim=16,  # the smallest head size vLLM accepts
+    head_dim=16,  # at least 16, as vLLM requires
     max_window_layers=48,
 )
 model = Qwen3MoeForCausalLM(config).to(dtype=torch.bfloat16)
