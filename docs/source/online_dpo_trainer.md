@@ -49,7 +49,7 @@ Execute the script using the following command:
 torchrun --nproc_per_node 8 train_online_dpo.py
 ```
 
-Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the reward graph. An increasing trend in both the reward for rejected and chosen completions indicates that the model is improving and generating better responses over time.
+Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the logged `rewards/chosen` and `rewards/rejected` metrics: an increasing trend in both indicates that the model is improving and generating better responses over time.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-OnlineDPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
