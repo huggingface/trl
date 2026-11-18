@@ -968,13 +968,27 @@ class AsyncRolloutLoop:
             self._loop.close()
 
     async def _check_sampling_replay(self) -> None:
-        """With top-k/top-p, make sure the server returns the candidate set of every sampled token.
+        """Check that the server reports the sampling distribution and supports candidate-set replay.
 
-        That takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and `--enable-scale-out`
-        (the endpoint that returns the set). Checked once up front: without them the first rollout would fail on a
-        route that does not exist, after retrying it for minutes. An older vLLM cannot return the set at all, so it
-        keeps the full-vocabulary normalization, with a warning about the bias.
+        With temperature scaling or top-k/top-p filtering, score centering needs processed log-probabilities: raw
+        log-probabilities describe the unmodified policy, so they give the wrong importance ratios and centering
+        weights.
+
+        With top-k/top-p, replay takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and
+        `--enable-scale-out` (the endpoint that returns the set). Checked once up front: without them the first rollout
+        would fail on a route that does not exist, after retrying it for minutes. An older vLLM cannot return the set
+        at all, so it keeps the full-vocabulary normalization, with a warning about the bias.
         """
+        if self.config.score_centering and (self.config.temperature != 1.0 or self.sampling_replay):
+            async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
+                r.raise_for_status()
+                model_config = (await r.json())["vllm_config"]["model_config"]
+            if model_config["logprobs_mode"] != "processed_logprobs":
+                raise RuntimeError(
+                    "Score centering with temperature scaling or top-k/top-p filtering requires sampler "
+                    "log-probabilities after those transformations. Start the vLLM server with "
+                    "`--logprobs-mode processed_logprobs`."
+                )
         if not self.sampling_replay:
             return
         async with self.session.get(f"{self.vllm_server_url}/version") as r:
@@ -3467,7 +3481,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 q = sampler_log_probs.exp()
                 p = score_log_probs.exp() * (q > 0)
                 head = torch.where((p >= low * q) & (p <= high * q), p, 0.0)
-                tail_ratio = (1 - p.sum(-1)).clamp(min=1e-6) / (1 - q.sum(-1)).clamp(min=1e-6)
+                # Flooring positive tail masses can move their ratio inside the IS bounds and retain a filtered tail.
+                # Only guard a zero denominator; keep small positive masses intact on both sides of the ratio.
+                tail_ratio = (1 - p.sum(-1)).clamp(min=0.0) / (1 - q.sum(-1)).clamp(min=torch.finfo(q.dtype).tiny)
                 tail = ((tail_ratio >= low) & (tail_ratio <= high)).float()
                 residual = head - tail.unsqueeze(-1) * p
                 weight = torch.where(is_masked, 0.0, coef_1)

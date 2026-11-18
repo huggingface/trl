@@ -1754,7 +1754,7 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1785,19 +1785,9 @@ class TestGetTrainingChatTemplate:
 
     @pytest.mark.parametrize("enable_thinking", [None, False, True])
     def test_assistant_masks_exclude_generation_prompt(self, tokenizer_name, enable_thinking, request):
-        # The enable_thinking values for which the training template trains tokens the generation prompt ends with
-        trains_generation_prompt = [
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
-            (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
-        ]
-        if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
-            reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
-            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1846,7 +1836,7 @@ class TestGetTrainingChatTemplate:
     ):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1854,14 +1844,6 @@ class TestGetTrainingChatTemplate:
                     strict=True,
                 )
             )
-        # The enable_thinking values for which the training template trains tokens the generation prompt ends with
-        trains_generation_prompt = [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
-            (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
-        ]
-        if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
-            reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
-            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         tokenizer = self._load(tokenizer_name)
         if enable_thinking is not None and "enable_thinking" not in tokenizer.chat_template:
             pytest.skip("This chat template doesn't use enable_thinking.")
@@ -1900,7 +1882,7 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "

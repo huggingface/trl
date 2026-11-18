@@ -41,12 +41,14 @@ if __name__ == "__main__":  # the rollout worker is a spawned process that re-im
 Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
     --max-model-len 4096
 ```
+
+With score centering enabled and either `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
 
 Then execute the script on GPU 1 using the following command:
 
@@ -256,7 +258,7 @@ Units:
 The trainer generates with a vLLM server, which it reaches at `vllm_server_base_url` (`http://localhost:8000` by default):
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -397,7 +399,7 @@ The batch metrics compose: one step holds `gradient_accumulation_steps × num_pr
 Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -443,7 +445,7 @@ if __name__ == "__main__":
 Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \

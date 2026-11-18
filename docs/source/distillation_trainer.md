@@ -72,7 +72,7 @@ In practice, the projection to vocabulary logits and the divergence are computed
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
+The dataset should be a [prompt-only](dataset_formats#prompt-only) dataset, in either [standard](dataset_formats#standard) or [conversational](dataset_formats#conversational) format. The student generates its own completions on-policy, so only the prompt is needed:
 
 ```python
 {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
@@ -127,7 +127,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
        --weight-transfer-config '{"backend": "nccl"}' \
        --logprobs-mode processed_logprobs \
        --max-logprobs -1
