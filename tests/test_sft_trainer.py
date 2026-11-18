@@ -2399,9 +2399,7 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 marks=[
@@ -2412,9 +2410,7 @@ class TestSFTTrainer(TrlTestCase):
                     _HEAD_SIZE_NOT_MULTIPLE_OF_8,
                 ],
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
