@@ -616,29 +616,34 @@ To create your own environment, check out the guide on [Building Your Own Enviro
 
 ## Server concurrency
 
-When using `environment_factory`, the trainer creates N environment instances (one per generation), each opening a WebSocket connection to the server. By default, OpenEnv servers allow only 1 concurrent session, which will cause failures during training.
+When using `environment_factory`, the trainer creates one environment instance per rollout in the generation batch, and each instance typically opens its own WebSocket session on the server. Instances are pooled and reused (via `reset()`) for the whole run, so these sessions stay open between steps. With [`GRPOTrainer`], the server must therefore accept `generation_batch_size` concurrent sessions: each process holds `per_device_train_batch_size × steps_per_generation` instances (more if `per_device_eval_batch_size` is larger), and `generation_batch_size` (default `per_device_train_batch_size × num_processes × gradient_accumulation_steps`) is the sum over processes. With [`AsyncGRPOTrainer`], up to `max_concurrent_rollouts` rollouts, and so environment instances, can run at once.
 
-To support parallel training, configure the server for concurrency:
+By default, OpenEnv servers allow only 1 concurrent session. When the trainer opens more sessions than the server allows, the extra ones are refused with a `CAPACITY_REACHED` error.
 
-1. In your environment file, declare concurrent session support:
+To accept more sessions, both of these must hold on the server:
+
+1. The environment supports concurrent sessions. It declares it with:
 
 ```python
 SUPPORTS_CONCURRENT_SESSIONS: bool = True
 ```
 
-2. In your server app, set the concurrency limit:
+2. The server app sets the session limit. Most environments in the OpenEnv repository read it from the `MAX_CONCURRENT_ENVS` environment variable, so you can set it when you start the server (for example `MAX_CONCURRENT_ENVS=64`) or as a variable of the Hugging Face Space. In your own server app:
 
 ```python
 app = create_app(
     create_my_environment,
     MyAction,
     MyObservation,
-    max_concurrent_envs=64,  # match or exceed generation_batch_size
+    max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "64")),  # >= generation_batch_size
 )
 ```
 
+> [!WARNING]
+> Only declare `SUPPORTS_CONCURRENT_SESSIONS = True` for an environment whose sessions are isolated from each other. All sessions run in the same server process, so module-level globals, shared files or temporary directories, a shared interpreter or subprocess, or environment variables let one episode, or code written by the model, affect another. If an environment does not support concurrent sessions, run several server instances instead (for example one per rollout) and spread the environment instances across them.
+
 > [!TIP]
-> `max_concurrent_envs` should be ≥ `generation_batch_size` (which defaults to `per_device_train_batch_size × gradient_accumulation_steps`). For example, with `gradient_accumulation_steps=64` and batch size 1, you need at least 64 concurrent sessions.
+> For example, with `per_device_train_batch_size=1`, `gradient_accumulation_steps=64` and a single process, the server needs at least 64 concurrent sessions.
 
 ## `environment_factory` vs `rollout_func`
 
