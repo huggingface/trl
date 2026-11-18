@@ -68,13 +68,33 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("config", ["ddp", "fsdp2", "zero2"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_distillation_multi_teacher(self, config, lazy_shared_datadir):
         config_kwargs = {}
         if config == "fsdp2":
             config_kwargs = {"fsdp": True, "fsdp_config": str(lazy_shared_datadir / "fsdp2.json")}
-        elif config == "zero2":
-            config_kwargs = {"deepspeed": str(lazy_shared_datadir / "zero2.json")}
+        elif config in ("zero2", "zero3"):
+            config_kwargs = {"deepspeed": str(lazy_shared_datadir / f"{config}.json")}
         run_command(
             [
                 "torchrun",
