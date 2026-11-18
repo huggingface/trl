@@ -366,6 +366,8 @@ Close each assistant turn inside the generation block with the role marker that 
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
+Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
+
 ### `gptoss_training.jinja`
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
