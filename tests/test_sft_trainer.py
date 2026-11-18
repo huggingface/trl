@@ -1135,10 +1135,11 @@ class TestSFTTrainer(TrlTestCase):
         not is_deepspeed_available() or Version(version("deepspeed")) >= Version("0.19.3"),
         reason="The trainer forces reentrant checkpointing for PEFT + ZeRO-3 only on DeepSpeed < 0.19.3",
     )
-    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch):
+    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch, request):
         # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
         # reach the checkpoint function whichever name transformers reads the kwargs from.
         monkeypatch.setenv("ACCELERATE_USE_DEEPSPEED", "false")  # `TrainingArguments` sets it, restore it after
+        request.addfinalizer(unset_hf_deepspeed_config)  # the ZeRO-3 config is process-global, don't leak it (#8447)
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -1157,7 +1158,6 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
         if Version(transformers.__version__) >= Version("5.23.0"):
             assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
-        unset_hf_deepspeed_config()  # the ZeRO-3 config is process-global, don't leak it into later tests (#8447)
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
