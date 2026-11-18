@@ -1377,8 +1377,33 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with pytest.raises(RuntimeError, match=f"The last {len(dataset)} groups were all dropped"):
+        with pytest.raises(RuntimeError, match="Rollout worker child has failed") as excinfo:
             trainer.train()
+        assert f"The last {len(dataset)} generated groups were all dropped" in str(excinfo.value.__cause__)
+
+    def test_train_with_a_filter_rejecting_most_prompts(self, make_vllm_server):
+        # Prompts rejected by `filter_prompt` are not dropped groups (#8423)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=2,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
+            report_to="none",
+        )
+        trainer = _FirstRowOnlyTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.global_step == 2
 
     @require_peft
     def test_peft_init_is_seeded(self, make_vllm_server):
@@ -5099,6 +5124,15 @@ class _EvenRowsLoop(_FixedRolloutLoop):
 class _RejectAllLoop(_FixedRolloutLoop):
     def filter_prompt(self, row_index, row, epoch):
         return False
+
+
+class _FirstRowOnlyLoop(AsyncRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return row_index == 0
+
+
+class _FirstRowOnlyTrainer(AsyncGRPOTrainer):
+    loop_cls = _FirstRowOnlyLoop
 
 
 class _SelfScoredLoop(_FixedRolloutLoop):

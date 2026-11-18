@@ -792,8 +792,11 @@ class AsyncRolloutLoop:
         score_queue_maxsize: int = 16,
         lora_name: str | None = None,
         dataset_start_index: int = 0,
+        max_dropped_groups: int | None = None,
     ):
         self.config = config
+        self._max_dropped_groups = max_dropped_groups
+        self._dropped_in_a_row = 0
         self.model_name = model_name
         self.lora_name = lora_name
         self.dataset = dataset
@@ -1393,6 +1396,15 @@ class AsyncRolloutLoop:
                     num_samples=self.config.num_completions_to_print,
                 )
             self._total_groups_scored += 1
+
+            # No weight update while every group is dropped: raise instead of waiting forever (#8423)
+            self._dropped_in_a_row = 0 if samples else self._dropped_in_a_row + 1
+            if self._max_dropped_groups is not None and self._dropped_in_a_row >= self._max_dropped_groups:
+                raise RuntimeError(
+                    f"The last {self._dropped_in_a_row} generated groups were all dropped, because the rewards of each "
+                    "group were equal, so no batch can reach the trainer. Check that the reward functions return "
+                    "different rewards for different completions."
+                )
 
             for item in samples or [group.group_id]:
                 self._put_in_buffer(item)
@@ -2252,13 +2264,11 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         metrics,
         dropped_groups,
         token_allowance,
-        max_dropped_in_a_row=None,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
     ):
         self.queue = rollout_queue
-        self.max_dropped_in_a_row = max_dropped_in_a_row
         self.token_allowance = token_allowance
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
@@ -2300,7 +2310,6 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             ctx.run(log_rollout_traces, samples, step=step, report_to=self.report_to)
 
     def __iter__(self):
-        dropped_in_a_row = 0
         while True:
             t0 = time.time()
             while True:
@@ -2318,16 +2327,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
 
             if isinstance(sample, int):
                 self.dropped_groups.add(sample)
-                dropped_in_a_row += 1
-                # No weight update while every group is dropped: raise instead of waiting forever (#8423)
-                if self.max_dropped_in_a_row is not None and dropped_in_a_row >= self.max_dropped_in_a_row:
-                    raise RuntimeError(
-                        f"The last {dropped_in_a_row} groups were all dropped, because the rewards of each group were "
-                        "equal, or rejected by `filter_prompt`, so no batch can reach the trainer. Check that the "
-                        "reward functions return different rewards for different completions."
-                    )
                 continue
-            dropped_in_a_row = 0
             self.consumed_tokens += len(sample.input_ids)
             self.step_tokens += len(sample.input_ids)
             self.token_allowance.value = self.consumed_tokens + self.lookahead_tokens
@@ -3360,6 +3360,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 eos_token_ids=self.eos_token_ids,
                 tools=tools,
                 environment_factory=environment_factory,
+                max_dropped_groups=self._num_prompts,
                 **self._rollout_loop_kwargs,
             )
             self.rollout_queue = self.rollout_worker.rollout_buffer
@@ -3398,7 +3399,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
                 token_allowance=self.rollout_worker.token_allowance,
-                max_dropped_in_a_row=self._num_prompts,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
