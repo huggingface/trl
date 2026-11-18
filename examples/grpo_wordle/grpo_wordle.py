@@ -42,7 +42,7 @@ python examples/grpo_wordle/grpo_wordle.py --vllm-mode colocate --env-url https:
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -200,7 +200,7 @@ def main() -> None:
             num_generations=16,
             per_device_train_batch_size=8,
             gradient_accumulation_steps=8,
-            gradient_checkpointing=True,
+            activation_checkpointing=True,
             bf16=True,
             chat_template_kwargs={"enable_thinking": True},
             max_completion_length=4096,

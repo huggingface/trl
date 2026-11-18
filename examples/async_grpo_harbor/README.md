@@ -69,5 +69,5 @@ Run the packaged contract and reconciliation tests with this checkout on `PYTHON
 
 ```sh
 python -m pytest tests/experimental/test_openenv_tito.py \
-    tests/experimental/test_async_grpo_trainer.py::TestReconciler -q
+    tests/test_async_grpo_trainer.py::TestReconciler -q
 ```
