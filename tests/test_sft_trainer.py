@@ -2344,9 +2344,7 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 marks=[
