@@ -221,6 +221,18 @@ Original Phi-3 chat template.
 
 Original Phi-3.5 chat template.
 
+### `phi4.jinja`
+
+Original Phi-4 chat template (`microsoft/phi-4`). Does not support tool calling.
+
+### `phi4_mini.jinja`
+
+Original Phi-4-mini chat template (`microsoft/Phi-4-mini-instruct`, `microsoft/Phi-4-mini-flash-reasoning`). Tools are passed as a string in the system message, not through the `tools` argument.
+
+### `phi4_mini_reasoning.jinja`
+
+Original Phi-4-mini-reasoning chat template (`microsoft/Phi-4-mini-reasoning`). Same format as `phi4_mini.jinja`, with a fixed system prompt that any system message is appended to.
+
 ### `qwen2_5.jinja`
 
 Original Qwen2.5 chat template.
@@ -453,6 +465,24 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `phi3_5_training.jinja`
 
 Patched Phi-3.5 template. Diff vs `phi3.5.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_training.jinja`
+
+Patched Phi-4 template. Diff vs `phi4.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_training.jinja`
+
+Patched Phi-4-mini template. Diff vs `phi4_mini.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_reasoning_training.jinja`
+
+Patched Phi-4-mini-reasoning template. Diff vs `phi4_mini_reasoning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 

@@ -58,6 +58,9 @@ from trl.chat_template_utils import (
     lfm2_v2_chat_template,
     muse_spark_v2_chat_template,
     parse_response,
+    phi4_chat_template,
+    phi4_mini_chat_template,
+    phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
     qwen3_8_v2_chat_template,
@@ -1382,6 +1385,13 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+        # phi-4 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has and the tiny Phi-3 one doesn't
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", phi4_chat_template), id="phi4"),
+        pytest.param(("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_chat_template), id="phi4_mini"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_reasoning_chat_template),
+            id="phi4_mini_reasoning",
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param(
