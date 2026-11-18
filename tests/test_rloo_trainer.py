@@ -1438,10 +1438,6 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.skipif(
-        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
-        reason="`ensure_weight_tying` requires PEFT >= 0.18",
-    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         # Tied embeddings, which vLLM holds as one tensor
