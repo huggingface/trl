@@ -284,6 +284,10 @@ Original Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Inst
 
 Qwen3-Coder-Next chat template (as shipped by `Qwen/Qwen3-Coder-Next`). Same as `qwen3_coder.jinja`, except that non-string tool-call arguments render as JSON and tool responses are wrapped with different newlines. Response parsing reuses `qwen3_5_template`.
 
+### `smollm2.jinja`
+
+Original SmolLM2 chat template (`HuggingFaceTB/SmolLM2-135M-Instruct`, `HuggingFaceTB/SmolLM2-360M-Instruct`, `HuggingFaceTB/SmolLM2-1.7B-Instruct`). Does not support tool calling.
+
 ### `smolvlm.jinja`
 
 Original SmolVLM chat template. Also matches SmolVLM2 (as shipped by `HuggingFaceTB/SmolVLM2-2.2B-Instruct` before [be92141](https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct/commit/be92141c8d) and `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` before [4cde9d2](https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/commit/4cde9d208e)), which shipped a byte-identical template. Does not support tool calling.
@@ -524,6 +528,12 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (drop the `loop.in
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss, with the part of the thinking block that the generation prompt pre-fills left outside them.
+
+### `smollm2_training.jinja`
+
+Patched SmolLM2 template. Diff vs `smollm2.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ### `smolvlm_training.jinja`
 
