@@ -970,22 +970,24 @@ class AsyncRolloutLoop:
     async def _check_sampling_replay(self) -> None:
         """Check that the server reports the sampling distribution and supports candidate-set replay.
 
-        At non-unit temperature, score centering needs processed log-probabilities: raw log-probabilities describe the
-        policy before temperature scaling, so they give the wrong importance ratios and centering weights.
+        With temperature scaling or top-k/top-p filtering, score centering needs processed log-probabilities: raw
+        log-probabilities describe the unmodified policy, so they give the wrong importance ratios and centering
+        weights.
 
         With top-k/top-p, replay takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and
         `--enable-scale-out` (the endpoint that returns the set). Checked once up front: without them the first rollout
         would fail on a route that does not exist, after retrying it for minutes. An older vLLM cannot return the set
         at all, so it keeps the full-vocabulary normalization, with a warning about the bias.
         """
-        if self.config.score_centering and self.config.temperature != 1.0:
+        if self.config.score_centering and (self.config.temperature != 1.0 or self.sampling_replay):
             async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
                 r.raise_for_status()
                 model_config = (await r.json())["vllm_config"]["model_config"]
             if model_config["logprobs_mode"] != "processed_logprobs":
                 raise RuntimeError(
-                    "Score centering with `temperature != 1.0` requires sampler log-probabilities after temperature "
-                    "scaling. Start the vLLM server with `--logprobs-mode processed_logprobs`."
+                    "Score centering with temperature scaling or top-k/top-p filtering requires sampler "
+                    "log-probabilities after those transformations. Start the vLLM server with "
+                    "`--logprobs-mode processed_logprobs`."
                 )
         if not self.sampling_replay:
             return
