@@ -35,7 +35,7 @@ Original DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-R1`). Re
 
 ### `deepseekv3_v2.jinja`
 
-Later DeepSeek-R1 chat template (as shipped by `deepseek-ai/DeepSeek-R1-0528` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`). Unlike `deepseekv3.jinja`, it closes each user turn with `<｜Assistant｜>`, so the generation prompt adds nothing after a user message, and it renders `<｜tool▁outputs▁end｜>` at the start of the assistant turn that follows tool outputs. Tool-call arguments are still rendered only as strings.
+Later DeepSeek-R1 chat template (as shipped by `deepseek-ai/DeepSeek-R1-0528` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`). Unlike `deepseekv3.jinja`, it closes each user turn with `<｜Assistant｜>`, so the generation prompt adds nothing after a user message, and it renders `<｜tool▁outputs▁end｜>` at the start of the assistant turn that follows tool outputs. Tool-call arguments are still rendered only as strings, so trainers swap in `deepseekv3_v2_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `deepseekv3_v3.jinja`
 
@@ -43,7 +43,7 @@ DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-V3`). Same as `de
 
 ### `deepseekv3_v4.jinja`
 
-DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings.
+DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings, so trainers swap in `deepseekv3_v4_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `diffusion_gemma.jinja`
 

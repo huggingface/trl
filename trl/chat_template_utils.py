@@ -616,8 +616,9 @@ gemma4_template = {
 }
 
 deepseekv3_template = {
-    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
-    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
+    # DeepSeek-R1's generation prompt pre-fills `<think>\n` (R1-0528 and V3-0324's don't), and after tool outputs the
+    # model continues without a new `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and
+    # the reasoning field the tag.
     "defaults": {"role": "assistant"},
     "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
     "fields": {
@@ -851,7 +852,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template in [deepseekv3_chat_template, deepseekv3_training_chat_template]:
+    if chat_template in [
+        deepseekv3_chat_template,
+        deepseekv3_training_chat_template,
+        deepseekv3_v2_chat_template,
+        deepseekv3_v2_training_chat_template,
+        deepseekv3_v4_chat_template,
+        deepseekv3_v4_training_chat_template,
+    ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseekv3_template

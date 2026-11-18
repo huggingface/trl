@@ -578,6 +578,57 @@ class TestAddResponseSchema:
         assert parse_response(tokenizer, response, prefix=prefix) == expected
 
     @pytest.mark.parametrize(
+        "tokenizer_name",
+        [
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("12<｜end▁of▁sentence｜>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "<think>\nHmmm.\n</think>\n\n12<｜end▁of▁sentence｜>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+            pytest.param(
+                "<think>\nHmmm.\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n"
+                '```json\n{"city": "Paris"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>'
+                'get_weather\n```json\n{"city": "Lyon"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>',
+                {
+                    "role": "assistant",
+                    "reasoning_content": "Hmmm.",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}},
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Lyon"}}},
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_deepseekv3_without_think_prefill(self, tokenizer_name, completion, expected):
+        # The prompt ends with `<｜Assistant｜>`, so the model opens the reasoning block itself
+        tokenizer_name, chat_template = tokenizer_name if isinstance(tokenizer_name, tuple) else (tokenizer_name, None)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:  # DeepSeek-V3-0324 has no tiny model of its own
+            tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is the weather in Paris and Lyon?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
+
+    @pytest.mark.parametrize(
         "completion, expected",
         [
             pytest.param("\n</think>\n\n12<|im_end|>", {"role": "assistant", "content": "12"}, id="content"),
