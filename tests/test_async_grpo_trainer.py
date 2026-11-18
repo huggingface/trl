@@ -647,7 +647,7 @@ class TransformersVLLMServer:
         if path in ("/v1/completions", "/inference/v1/generate"):
             self.generation_requests += 1
         if path == "/v1/completions":
-            completion_ids, logprobs = self.generate(body["prompt"], body)
+            completion_ids, logprobs, _ = self.generate(body["prompt"], body)
             top = logprobs.topk(body["logprobs"])
             return 200, {
                 "choices": [
@@ -664,7 +664,7 @@ class TransformersVLLMServer:
                 ]
             }
         if path == "/inference/v1/generate":
-            completion_ids, logprobs = self.generate(body["token_ids"], body["sampling_params"])
+            completion_ids, logprobs, sampling_logprobs = self.generate(body["token_ids"], body["sampling_params"])
             top = logprobs.topk(body["sampling_params"]["logprobs"])
             return 200, {
                 "choices": [
@@ -689,7 +689,7 @@ class TransformersVLLMServer:
                             ]
                         },
                         # The candidate set of each token: the ids the truncation kept
-                        "sampling_mask": [row.isfinite().nonzero().squeeze(-1).tolist() for row in logprobs],
+                        "sampling_mask": [row.isfinite().nonzero().squeeze(-1).tolist() for row in sampling_logprobs],
                     }
                 ]
             }
@@ -730,13 +730,15 @@ class TransformersVLLMServer:
             self.on_load(name, path)
         return 200, f"Success: LoRA adapter '{name}' added successfully."
 
-    def generate(self, prompt_ids: list[int], sampling_params: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    def generate(
+        self, prompt_ids: list[int], sampling_params: dict
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample a completion of `prompt_ids`.
 
         Returns:
-            `tuple[torch.Tensor, torch.Tensor]`:
+            `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`:
                 The completion's token ids and per-position vocabulary log-probabilities, before or after sampling
-                transformations according to `logprobs_mode`.
+                transformations according to `logprobs_mode`, and the log-probabilities of the sampling distribution.
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
         if self.script is not None:
@@ -746,7 +748,8 @@ class TransformersVLLMServer:
                     0, prompt_ids.shape[1] - 1 : -1
                 ]
             temperature = sampling_params["temperature"] if self.logprobs_mode == "processed_logprobs" else 1.0
-            return completion_ids, (logits.float() / temperature).log_softmax(-1)
+            logprobs = (logits.float() / temperature).log_softmax(-1)
+            return completion_ids, logprobs, logprobs
         output = self.model.generate(
             prompt_ids,
             attention_mask=torch.ones_like(prompt_ids),
@@ -761,12 +764,13 @@ class TransformersVLLMServer:
             return_dict_in_generate=True,
         )
         completion_ids = output.sequences[0, prompt_ids.shape[1] :]
+        logprobs = torch.cat(output.scores).float().log_softmax(-1)
         if self.logprobs_mode == "raw_logprobs":
             # Sampling still uses temperature, but a raw-logprobs server reports the unmodified policy distribution.
             with torch.no_grad():
                 logits = self.model(output.sequences).logits[0, prompt_ids.shape[1] - 1 : -1]
-            return completion_ids, logits.float().log_softmax(-1)
-        return completion_ids, torch.cat(output.scores).float().log_softmax(-1)
+            return completion_ids, logits.float().log_softmax(-1), logprobs
+        return completion_ids, logprobs, logprobs
 
     def _handler(self):
         server = self
@@ -2784,10 +2788,16 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
     @pytest.mark.parametrize(
-        ("temperature", "logprobs_mode"),
-        [(0.7, "processed_logprobs"), (0.7, "raw_logprobs"), (1.0, "raw_logprobs")],
+        ("temperature", "logprobs_mode", "top_k"),
+        [
+            (0.7, "processed_logprobs", 0),
+            (0.7, "raw_logprobs", 0),
+            (1.0, "raw_logprobs", 0),
+            (1.0, "processed_logprobs", 3),
+            (1.0, "raw_logprobs", 3),
+        ],
     )
-    def test_score_centering_checks_sampler_logprobs(self, temperature, logprobs_mode, make_vllm_server):
+    def test_score_centering_checks_sampler_logprobs(self, temperature, logprobs_mode, top_k, make_vllm_server):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         server = make_vllm_server(model_id, logprobs_mode=logprobs_mode)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -2798,6 +2808,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 output_dir=self.tmp_dir,
                 dtype="bfloat16",
                 temperature=temperature,
+                top_k=top_k,
                 num_generations=2,
                 max_concurrent_rollouts=2,
                 max_completion_length=8,
@@ -2809,7 +2820,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             train_dataset=dataset,
         )
-        if temperature != 1.0 and logprobs_mode == "raw_logprobs":
+        if (temperature != 1.0 or top_k > 0) and logprobs_mode == "raw_logprobs":
             # The server reports a different distribution from the one it samples; reject it before collecting data.
             with pytest.raises(RuntimeError, match="Rollout worker child") as excinfo:
                 trainer.train()

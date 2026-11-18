@@ -1058,12 +1058,12 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncDistil
 
 class AsyncDistillationTrainer(_BaseTrainer):
     """
-    Async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected exactly like
-    [`AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy completions and scores them
-    against a teacher server while training proceeds concurrently, decoupling rollout from the gradient-update loop.
-    Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this trainer's `compute_loss` reads a
-    sparse per-position teacher distribution and minimizes a generalized JSD against it (see
-    `AsyncDistillationConfig.beta`), always on-policy: the student generates every completion it trains on.
+    Async counterpart to [`DistillationTrainer`], architected exactly like [`AsyncGRPOTrainer`]: a background rollout
+    worker generates the student's on-policy completions and scores them against a teacher server while training
+    proceeds concurrently, decoupling rollout from the gradient-update loop. Where GRPO's clipped policy-gradient loss
+    reads a group-relative advantage, this trainer's `compute_loss` reads a sparse per-position teacher distribution
+    and minimizes a generalized JSD against it (see `AsyncDistillationConfig.beta`), always on-policy: the student
+    generates every completion it trains on.
 
     Unlike the synchronous `DistillationTrainer`, this trainer only supports scoring against a teacher served over HTTP
     (an external vLLM server). A local (in-process, GPU) teacher forward pass cannot run inside the rollout worker's
