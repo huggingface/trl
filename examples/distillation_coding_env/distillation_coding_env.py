@@ -23,26 +23,18 @@
 
 
 """
-On-policy distillation of a coding agent with OpenEnv's coding environment.
-
-The student (Qwen3-1.7B) solves MBPP problems in a Python session: it writes the function, runs it and tests it through
-the `run_python` tool, over several turns, and the session keeps what it defines between calls. The teacher (Qwen3-8B)
-scores every token the student wrote, with the tool results as context, and the tool results themselves are left out
-of the loss. Distillation needs no reward: `get_reward` runs the MBPP tests in the student's session and is only logged
-(`rewards/CodingSession/mean`), to follow how often the student ends with a correct function.
-
-By default the script starts the coding environment server on this machine, in its own process and without the
-tokens of this one, since it runs code written by the model. Pass `--env-url` to use a server you host instead; it must
-accept one session per episode (32 per step).
+On-policy distillation of a coding agent with OpenEnv's coding environment: the student (Qwen3-1.7B) solves MBPP
+problems over several turns with a `run_python` tool, and the teacher (Qwen3-8B) scores every token the student wrote.
+See README.md for details and results.
 
 ```sh
 python examples/distillation_coding_env/distillation_coding_env.py
 ```
 
-On Hugging Face Jobs (1x A100, about 40 minutes for the 30 default steps):
+On Hugging Face Jobs:
 
 ```sh
-hf jobs uv run --flavor a100-large --timeout 90m examples/distillation_coding_env/distillation_coding_env.py
+hf jobs uv run --flavor a100-large --timeout 2h examples/distillation_coding_env/distillation_coding_env.py
 ```
 """
 
@@ -67,15 +59,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--env-url", type=str, default=None, help="Coding environment server. Default: start one here."
     )
-    parser.add_argument("--max-steps", type=int, default=30, help="Number of training steps.")
+    parser.add_argument("--max-steps", type=int, default=100, help="Number of training steps.")
     parser.add_argument("--output-dir", type=str, default=None, help="Where to store outputs and checkpoints.")
     parser.add_argument("--report-to", type=str, default="trackio", help="Where to log metrics, e.g. `none`.")
     parser.add_argument("--push-to-hub", action="store_true", help="Push the trained model to the Hub.")
     return parser.parse_args()
 
 
-# The coding environment server, with one Python session per connection and up to 64 at once: OpenEnv's server allows a
-# single session unless the environment is marked as safe to run several.
+# One Python session per connection, up to 64 at once
 SERVER = """
 import sys
 
@@ -86,10 +77,9 @@ from openenv.core.env_server import create_app
 
 
 class PythonSession(PythonCodeActEnv):
-    SUPPORTS_CONCURRENT_SESSIONS = True  # each session has its own Python executor
+    SUPPORTS_CONCURRENT_SESSIONS = True
 
     def __init__(self):
-        # MBPP's reference solutions import these, which the default allowlist leaves out
         super().__init__(additional_imports=["bisect", "cmath", "heapq", "operator"])
 
 
@@ -99,7 +89,7 @@ uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
 
 
 def start_env_server(port: int = 8001) -> str:
-    # The server runs code written by the model, so it gets none of the tokens and keys of this process
+    # The server runs model-written code, so it gets no tokens or keys
     env = {k: v for k, v in os.environ.items() if not re.search("TOKEN|KEY|SECRET|PASSWORD", k, re.IGNORECASE)}
     subprocess.Popen([sys.executable, "-c", SERVER, str(port)], env=env)
     url = f"http://127.0.0.1:{port}"
@@ -127,11 +117,10 @@ def main() -> None:
 
     class CodingSession:
         def __init__(self):
-            # No keepalive pings: the connection idles while the GPU generates, and nothing answers pings then
             self.client = CodingEnv(base_url=env_url, message_timeout_s=300, websocket_ping_interval_s=None)
 
         def reset(self, test_list: list[str], test_setup_code: str, **kwargs) -> None:
-            self.client.reset()  # fresh Python session for this episode
+            self.client.reset()
             self.tests = test_list
             self.test_setup_code = test_setup_code
 
@@ -149,7 +138,7 @@ def main() -> None:
             return (observation.stdout + observation.stderr) or f"(no output, exit code {observation.exit_code})"
 
         def get_reward(self) -> float:
-            # Logged only: the fraction of the MBPP tests that pass in the session the student left behind
+            # Logged only, not used in the loss
             self.client.step(CodeAction(code=self.test_setup_code))
             passed = [self.client.step(CodeAction(code=test)).observation.exit_code == 0 for test in self.tests]
             return sum(passed) / len(passed)
@@ -172,12 +161,11 @@ def main() -> None:
             vllm_mode="colocate",
             vllm_gpu_memory_utilization=0.25,
             chat_template_kwargs={"enable_thinking": False},
-            # The budget covers the whole episode: every model turn and every tool result
             max_completion_length=4096,
             max_tool_calling_iterations=6,
             per_device_train_batch_size=8,
             gradient_accumulation_steps=4,
-            learning_rate=2e-6,
+            learning_rate=1e-5,
             max_steps=args.max_steps,
             logging_steps=1,
             log_completions=True,
