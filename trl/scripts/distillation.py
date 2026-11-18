@@ -89,13 +89,12 @@ def main(script_args, training_args, model_args, dataset_args):
         dtype=model_args.dtype,
     )
     if isinstance(training_args.teacher_model_name_or_path, dict):
+        # With several teachers, the per-teacher kwargs override the defaults above. Unknown IDs are kept, so that the
+        # trainer reports them.
         per_teacher_kwargs = training_args.teacher_model_init_kwargs or {}
-        unknown = set(per_teacher_kwargs) - set(training_args.teacher_model_name_or_path)
-        if unknown:
-            raise ValueError(f"Unknown teacher IDs in `teacher_model_init_kwargs`: {sorted(unknown)}.")
         training_args.teacher_model_init_kwargs = {
             teacher_id: {**teacher_model_init_kwargs, **per_teacher_kwargs.get(teacher_id, {})}
-            for teacher_id in training_args.teacher_model_name_or_path
+            for teacher_id in {**training_args.teacher_model_name_or_path, **per_teacher_kwargs}
         }
     else:
         if training_args.teacher_model_init_kwargs is not None:

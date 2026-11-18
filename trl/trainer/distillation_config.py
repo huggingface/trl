@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,17 +41,15 @@ class DistillationConfig(_BaseConfig):
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
             for both the student and teacher.
         teacher_model_name_or_path (`str` or `dict[str, str]`, *optional*):
-            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from routing
-            ID to model name or path instead selects multi-teacher distillation, where each dataset row's `teacher_id`
-            column names the teacher that scores it. On the command line, the mapping is given as a JSON object, e.g.
-            `--teacher_model_name_or_path '{"math": "org/math-expert", "code": "org/code-expert"}'`.
+            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from teacher ID
+            to model name or path uses several teachers, where the `teacher_id` column of each row selects its teacher.
         teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string. When `teacher_model` is a mapping, provide a mapping from teacher ID to loading kwargs
-            instead, e.g. `{"math": {"dtype": "bfloat16"}, "code": {"revision": "main"}}`. Omitted teachers use the
-            default loading kwargs.
+            from a string. When `teacher_model_name_or_path` is a mapping, provide a mapping from teacher ID to loading
+            kwargs instead, e.g. `{"math": {"dtype": "bfloat16"}, "code": {"revision": "main"}}`. Omitted teachers use
+            the default loading kwargs.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
@@ -171,6 +168,7 @@ class DistillationConfig(_BaseConfig):
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
+        "teacher_model_name_or_path",
         "teacher_model_init_kwargs",
         "generation_kwargs",
         "chat_template_kwargs",
@@ -202,8 +200,7 @@ class DistillationConfig(_BaseConfig):
     teacher_model_name_or_path: dict[str, str] | str | None = field(
         default=None,
         metadata={
-            "help": "Model name or path for the teacher model, or a JSON object mapping a routing ID to a model "
-            "name or path for multi-teacher distillation."
+            "help": "Model name or path for the teacher model, or a mapping from teacher ID to model name or path."
         },
     )
     teacher_model_revision: str | None = field(
@@ -213,8 +210,8 @@ class DistillationConfig(_BaseConfig):
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher, "
-            "or a mapping from teacher ID to loading kwargs for multi-teacher distillation."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher, or "
+            "a mapping from teacher ID to such kwargs."
         },
     )
     disable_dropout: bool = field(
@@ -418,12 +415,6 @@ class DistillationConfig(_BaseConfig):
         if self.pad_to_multiple_of == "auto":
             # Neuron compiles once per input shape, so padding bounds the number of compilations
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
-
-        # Not a `_VALID_DICT_FIELDS` entry: that machinery JSON-parses every string it is given, while a plain model
-        # id is a perfectly valid value here. Only the object form, which argparse can only pass as a string, is
-        # parsed.
-        if isinstance(self.teacher_model_name_or_path, str) and self.teacher_model_name_or_path.startswith("{"):
-            self.teacher_model_name_or_path = json.loads(self.teacher_model_name_or_path)
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
