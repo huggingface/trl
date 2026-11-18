@@ -314,11 +314,10 @@ class DistillationTrainer(_BaseTrainer):
             Each method should comply with the same requirements as the `tools` described above. The environment must
             also implement a callable `reset` method that can be used to reset state between generations. The `reset`
             method should return either `None` or a string: when it returns a string, that string is appended to the
-            last user message before generation. The student runs a multi-turn episode against its own instance, the
-            teacher scores every token the student generated given the full episode as context, and the tool-result
-            tokens are excluded from the loss. Distillation has no reward: if the environment defines a `get_reward`
-            method taking no argument and returning a `float`, it is called once per completed rollout and its value
-            is only logged (under the environment's class name), never used in the loss.
+            last user message before generation. Tool-result tokens are excluded from the loss, but they count toward
+            `max_completion_length`, which is the budget for the whole episode. If the environment defines a
+            `get_reward` method taking no argument and returning a `float`, it is called once per rollout and only
+            logged, never used in the loss, so an expensive `get_reward` adds to the time of every step.
 
             With a single callable, every example uses the same environment, with one instance per rollout so their
             interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
@@ -528,8 +527,7 @@ class DistillationTrainer(_BaseTrainer):
         else:
             self.environment_factories = {None: environment_factory}
 
-        # Environment classes that define `get_reward`. Distillation has no reward, so `get_reward` is only called to
-        # log the environment's score after each rollout (see `_generate_and_score_completions`), never in the loss.
+        # Environment classes that define `get_reward`, only logged after each rollout
         self._env_reward_types = []
         if self.environment_factories is not None:
             # The environment an example uses is only known at batch time (it depends on the data). Here we just probe
@@ -564,7 +562,7 @@ class DistillationTrainer(_BaseTrainer):
                 self._env_tools[name] = tools + methods
                 self._environment_pool[name] = [instance]
                 self.tools += [method for method in methods if method not in self.tools]
-                # One entry per env class (deduplicated, since a dict factory may map several names to the same class)
+                # One entry per env class, since a dict factory may map several names to the same class
                 if has_reward and type(instance) not in self._env_reward_types:
                     if inspect.iscoroutinefunction(instance.get_reward):
                         raise ValueError(
@@ -1834,9 +1832,7 @@ class DistillationTrainer(_BaseTrainer):
 
         prompt_ids_list, completion_ids_list, tool_mask_list, images, tool_images = self._generate(prompts)
 
-        # Environments that define `get_reward` are scored once per completed rollout. Distillation has no reward, so
-        # the score is only logged (under the environment's class name, like GRPO's reward metrics), never used in the
-        # loss. Calling it also lets environments that release per-episode resources in `get_reward` clean up.
+        # Distillation has no reward: `get_reward` is logged under the environment's class name, never used in the loss
         for env_type in self._env_reward_types:
             env_rewards = [e.get_reward() if type(e) is env_type else None for e in self.environments]
             env_rewards = torch.tensor(

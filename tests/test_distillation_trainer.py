@@ -1747,9 +1747,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_factory(self):
-        # In this test, we define a simple tool that increments an internal counter. The model generates 3 completions
-        # of the same prompt, 2 of which are tool calls. Among the 2 tool calls, one succeeds and the other fails
-        # (because `reset` is not exposed as a tool).
+        # 3 completions per step: a valid tool call, a call to `reset` (not exposed as a tool, so it fails), no call
         dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
 
         training_args = DistillationConfig(
@@ -1809,10 +1807,8 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_stateful_environment(self):
-        # Each rollout gets its own instance, reset with the dataset row (`start` column), whose observation is
-        # appended to the prompt. The model calls `increment` on every turn, and 2 tool-calling iterations are allowed:
-        # the counter goes start -> start + 1 -> start + 3, and the third call is generated but not run. `get_reward`
-        # returns the final counter, so the rollouts starting at 0, 10 and 20 log a mean score of 13.
+        # Each rollout is reset with its `start` column and calls `increment` every turn: start -> +1 -> +3, and the
+        # third call is cut by `max_tool_calling_iterations=2`
         dataset = Dataset.from_dict(
             {"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 10, 20]},
         )
@@ -1860,8 +1856,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_and_tools(self):
-        # Standalone `tools` are exposed next to the environment's methods. Of the 3 rollouts, one calls the standalone
-        # tool, one calls `increment` with a step the environment rejects (it raises), and one calls `increment`.
+        # Rollouts call the standalone tool, `increment` with a rejected step, and `increment`
         dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 0, 0]})
 
         training_args = DistillationConfig(
@@ -1909,8 +1904,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_episode_capped_by_max_completion_length(self):
-        # `max_completion_length` caps the whole episode (model turns and tool results). A tool result that would
-        # overflow it is dropped and the episode ends; a later model turn that would overflow it is truncated.
+        # `max_completion_length` caps the whole episode: an overflowing tool result is dropped, a model turn truncated
         dataset = Dataset.from_dict(
             {"prompt": [[{"role": "user", "content": "Read."}]] * 3, "length": [1000, 1, 1000]},
         )
@@ -1954,10 +1948,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_multiple_environments(self):
-        # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
-        # only that environment's tools are exposed. A tool call from a "counter" example dispatches to the
-        # CounterEnvironment's `increment`, while a tool call from an "echo" example dispatches to the
-        # EchoEnvironment's `shout`.
+        # With a dict `environment_factory`, each rollout gets the environment named in its `environment` field
         RECORDS.clear()
         dataset = Dataset.from_dict(
             {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["counter", "echo"] * 2}
@@ -2022,8 +2013,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_multiple_environments_same_tool_name(self):
-        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
-        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        # Two environments expose `submit` with different argument types, each call is parsed with its own schema
         RECORDS.clear()
         dataset = Dataset.from_dict(
             {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["zip", "count"] * 2}
@@ -2066,8 +2056,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
-        # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
-        # environment should fail with a clear error rather than a bare KeyError mid-rollout.
+        # An unknown `environment` field fails with a clear error, not a bare KeyError mid-rollout
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         dataset = dataset.map(lambda example: {"environment": "unknown"})
 
@@ -2095,9 +2084,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_tool_discovery_does_not_evaluate_environment_properties(self):
-        # Tool discovery must list the environment's methods on its class: listing the instance evaluates its
-        # properties, which may be expensive or have side effects. Here `reward` raises once the environment has been
-        # reset: the first batch resets the pooled instances, so a second batch that listed the instance would raise.
+        # Tools are listed on the class: `reward` raises once reset, so listing the instance would raise in batch 2
         dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
 
         training_args = DistillationConfig(
@@ -2129,9 +2116,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_environment_reward_mixed_environments(self):
-        # With a dict `environment_factory`, only some environments may define `get_reward`. Each such env *class* is
-        # logged once (named after its class), from the rollouts bound to that class only, so mixing a scored env with
-        # a plain one must not raise. Two names mapping to the same class share a single metric.
+        # Only some environments define `get_reward`, and two names mapping to the same class share one metric
         dataset = Dataset.from_dict(
             {"prompt": [[{"role": "user", "content": "Play."}]] * 3, "environment": ["scored", "scored2", "plain"]}
         )
@@ -2173,8 +2158,7 @@ class TestDistillationTrainer(TrlTestCase):
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_async_environment_raises(self):
-        # Async tools are not yet supported by `DistillationTrainer`, so async environment methods (tools or
-        # `get_reward`) are rejected at init rather than failing in the rollout.
+        # Async environment methods (tools or `get_reward`) are rejected at init
         class AsyncToolEnvironment(IncrementEnvironment):
             async def decrement(self, step: int) -> int:
                 """

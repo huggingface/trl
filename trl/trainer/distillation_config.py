@@ -56,7 +56,8 @@ class DistillationConfig(_BaseConfig):
             Whether to only keep the column `"prompt"` in the dataset. The trainer consumes the raw prompt column and
             generates completions on-policy, so it defaults to `False`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation.
+            Maximum number of tokens to generate per completion during on-policy generation. With `tools` or
+            `environment_factory`, this is the budget for the whole episode: every model turn plus every tool result.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -224,7 +225,10 @@ class DistillationConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+        metadata={
+            "help": "Maximum number of tokens to generate per completion. With `tools` or `environment_factory`, this is "
+            "the budget for the whole episode: every model turn plus every tool result."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
