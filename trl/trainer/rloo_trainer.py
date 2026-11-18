@@ -87,7 +87,7 @@ from .utils import (
 )
 
 
-# peft maps LoRA `target_modules` onto the fused MoE experts only for models mapped to mixtral or qwen2_moe (#8427)
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
 if Version(transformers.__version__) >= Version("5.0.0"):
     from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
 
@@ -406,8 +406,10 @@ class RLOOTrainer(_BaseTrainer):
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type, model.config.model_type)
-                in ("mixtral", "qwen2_moe")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -427,8 +429,10 @@ class RLOOTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
-                and _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type, model.config.model_type)
-                in ("mixtral", "qwen2_moe")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
