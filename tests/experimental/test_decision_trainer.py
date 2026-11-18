@@ -20,7 +20,9 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+import transformers
 from datasets import Dataset
+from packaging.version import Version
 
 
 pytest.importorskip("transformers.decision")
@@ -51,6 +53,12 @@ HAS_JEV_LOSS = "JevForDecision" in LOSS_MAPPING
 if HAS_JEVA:
     from transformers import AutoModelForDecision, JevaForDecision
     from transformers import JevaConfig as JevaModelConfig
+
+
+# Transformers 5.23 renamed the TrainingArguments checkpointing fields.
+CHECKPOINTING_ARG = (
+    "activation_checkpointing" if Version(transformers.__version__) >= Version("5.23.0") else "gradient_checkpointing"
+)
 
 
 MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -226,11 +234,11 @@ class TestDecisionTrainerJeva(TrlTestCase):
                 output_dir=self.tmp_dir,
                 use_cpu=True,
                 bf16=False,
-                gradient_checkpointing=mode != "head",
                 max_steps=2,
                 per_device_train_batch_size=2,
                 logging_steps=1,
                 report_to="none",
+                **{CHECKPOINTING_ARG: mode != "head"},
             ),
             train_dataset=dataset,
             processing_class=tokenizer,
@@ -242,7 +250,9 @@ class TestDecisionTrainerJeva(TrlTestCase):
         logs = trainer.state.log_history[0]
         assert logs["loss"] == pytest.approx(logs["candidate_loss"] + logs["coverage_loss"], abs=1e-4)
         changed = {name for name, p in model.named_parameters() if not torch.equal(p, before[name])}
-        assert any("core." in name for name in changed)
+        for component in ("context_proj", "option_proj", "core"):
+            assert any(f"{component}." in name for name in changed)
+        assert all(parameter.requires_grad for name, parameter in model.named_parameters() if name in changed)
         if mode == "head":
             assert not any(name.startswith("model.") for name in changed)
         elif mode == "lora":
@@ -385,13 +395,13 @@ class TestDecisionTrainerJeva(TrlTestCase):
                     output_dir=self.tmp_dir,
                     use_cpu=True,
                     bf16=False,
-                    gradient_checkpointing=False,
                     max_steps=1,
                     per_device_train_batch_size=batch_size,
                     gradient_accumulation_steps=accumulation,
                     max_grad_norm=0,
                     lr_scheduler_type="constant",
                     report_to="none",
+                    **{CHECKPOINTING_ARG: False},
                 ),
                 train_dataset=dataset,
                 processing_class=tokenizer,
@@ -409,10 +419,10 @@ class TestDecisionTrainerJeva(TrlTestCase):
             output_dir=self.tmp_dir,
             use_cpu=True,
             bf16=False,
-            gradient_checkpointing=False,
             max_steps=2,
             save_steps=1,
             report_to="none",
+            **{CHECKPOINTING_ARG: False},
         )
         trainer = DecisionTrainer(
             make_model(mode="lora", base_path=os.path.join(self.tmp_dir, "base_model")),
@@ -464,10 +474,10 @@ class TestDecisionTrainerJeva(TrlTestCase):
                 output_dir=self.tmp_dir,
                 use_cpu=True,
                 bf16=False,
-                gradient_checkpointing=False,
                 max_steps=1,
                 logging_steps=1,
                 report_to="none",
+                **{CHECKPOINTING_ARG: False},
             ),
             train_dataset=dataset,
             processing_class=tokenizer,
@@ -598,7 +608,9 @@ class TestDataCollatorForClm(TrlTestCase):
         reverse = targets.T / targets.sum(0)[:, None]
         expected = (F.cross_entropy(output.logits, targets) + F.cross_entropy(output.logits.T, reverse)) / 2
         torch.testing.assert_close(output.loss, expected)
-        before = model.state_head.input_projection.weight.detach().clone()
+        before = {name: parameter.detach().clone() for name, parameter in model.base_model.named_parameters()}
+        state_head_before = model.state_head.input_projection.weight.detach().clone()
+        action_head_before = model.action_head.input_projection.weight.detach().clone()
         trainer = DecisionTrainer(
             model,
             args=DecisionConfig(
@@ -617,10 +629,13 @@ class TestDataCollatorForClm(TrlTestCase):
         )
         result = trainer.train()
         assert np.isfinite(result.training_loss)
-        assert not torch.equal(before, model.state_head.input_projection.weight)
-        assert all(parameter.grad is None for parameter in model.base_model.parameters())
+        assert not torch.equal(state_head_before, model.state_head.input_projection.weight)
+        assert not torch.equal(action_head_before, model.action_head.input_projection.weight)
+        for name, parameter in model.base_model.named_parameters():
+            torch.testing.assert_close(parameter, before[name], rtol=0, atol=0)
         prediction = trainer.predict(prepared)
         assert prediction.predictions.shape == (3, 3)
+        np.testing.assert_array_equal(prediction.predictions == -100, ~batch["option_mask"].numpy())
         np.testing.assert_allclose(
             np.where(prediction.predictions == -100, 0, prediction.predictions).sum(-1), 1, atol=1e-6
         )
@@ -666,11 +681,11 @@ class TestDecisionTrainerJev(TrlTestCase):
                 output_dir=self.tmp_dir,
                 use_cpu=True,
                 bf16=False,
-                gradient_checkpointing=False,
                 max_steps=2,
                 per_device_train_batch_size=1,
                 per_device_eval_batch_size=1,
                 report_to="none",
+                **{CHECKPOINTING_ARG: False},
             ),
             train_dataset=prepared,
             eval_dataset=prepared,
