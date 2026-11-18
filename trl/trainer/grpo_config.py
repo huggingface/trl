@@ -68,7 +68,8 @@ class GRPOConfig(_BaseConfig):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the generated completion.
+            Maximum length of the generated completion. With `tools` or `environment_factory`, this is the budget for
+            the whole episode: every model turn plus every tool result.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -501,7 +502,10 @@ class GRPOConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={
+            "help": "Maximum length of the generated completion. With `tools` or `environment_factory`, this is the "
+            "budget for the whole episode: every model turn plus every tool result."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
