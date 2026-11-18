@@ -1058,12 +1058,12 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncDistil
 
 class AsyncDistillationTrainer(_BaseTrainer):
     """
-    Async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected exactly like
-    [`AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy completions and scores them
-    against a teacher server while training proceeds concurrently, decoupling rollout from the gradient-update loop.
-    Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this trainer's `compute_loss` reads a
-    sparse per-position teacher distribution and minimizes a generalized JSD against it (see
-    `AsyncDistillationConfig.beta`), always on-policy: the student generates every completion it trains on.
+    Async counterpart to [`DistillationTrainer`], architected exactly like [`AsyncGRPOTrainer`]: a background rollout
+    worker generates the student's on-policy completions and scores them against a teacher server while training
+    proceeds concurrently, decoupling rollout from the gradient-update loop. Where GRPO's clipped policy-gradient loss
+    reads a group-relative advantage, this trainer's `compute_loss` reads a sparse per-position teacher distribution
+    and minimizes a generalized JSD against it (see `AsyncDistillationConfig.beta`), always on-policy: the student
+    generates every completion it trains on.
 
     Unlike the synchronous `DistillationTrainer`, this trainer only supports scoring against a teacher served over HTTP
     (an external vLLM server). A local (in-process, GPU) teacher forward pass cannot run inside the rollout worker's
@@ -1172,17 +1172,18 @@ class AsyncDistillationTrainer(_BaseTrainer):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
-            model_init_kwargs.setdefault("attn_implementation", attn_implementation)
+            attn_implementation = model_init_kwargs.pop("attn_implementation", attn_implementation)
             model_revision = model_init_kwargs.get("revision")
             model = AutoModelForCausalLM.from_pretrained(model, device_map=None, **model_init_kwargs)
         else:
             model_revision = None
-            model.set_attn_implementation(attn_implementation)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `AsyncDistillationConfig`, but your model is already "
                     "instantiated. The `model_init_kwargs` will be ignored."
                 )
+        # Models that refuse FlashAttention take it on their language model (#8400)
+        (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(attn_implementation)
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")

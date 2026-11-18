@@ -1134,6 +1134,36 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_vlm(self):
+        # Gemma3 refuses FlashAttention, which its language model takes instead (#8400)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            token_budget=160,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        language_model = trainer.model.get_decoder()
+        assert language_model.config._attn_implementation.startswith("kernels-community/")
+        previous_trainable_params = {n: param.clone() for n, param in language_model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = language_model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("4.57.0"),
         reason="Qwen3-VL series were introduced in transformers-4.57.0",
