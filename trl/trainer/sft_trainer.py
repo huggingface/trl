@@ -801,7 +801,7 @@ class SFTTrainer(_BaseTrainer):
         if (
             self._is_vision_dataset
             and args.assistant_only_loss
-            and Version(transformers.__version__) < Version("5.18.0.dev0")
+            and Version(transformers.__version__) < Version("5.18.0")
         ):
             raise ValueError(
                 "Assistant-only loss for vision datasets requires transformers>=5.18.0. Please upgrade transformers "

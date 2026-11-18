@@ -404,6 +404,9 @@ class VLLMGeneration:
                 trust_remote_code=self.trust_remote_code,
                 # Not passed otherwise: vLLM < 0.28 doesn't accept it
                 **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
+                # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
+                # while asleep, so the colocated trainer could not use the memory that sleep frees.
+                **({"enable_extensible_kv_cache": False} if is_vllm_available(min_version="0.34.0") else {}),
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
