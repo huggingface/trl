@@ -730,7 +730,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 - **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
 - **[TRL Examples Directory](https://github.com/huggingface/trl/tree/main/examples)** - Collection of training scripts demonstrating PEFT with different trainers
-- **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/transformers)** - Step-by-step guides for common PEFT training scenarios
+- **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/en)** - Step-by-step guides for common PEFT training scenarios
 
 ### Documentation
 
