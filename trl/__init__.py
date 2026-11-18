@@ -48,6 +48,8 @@ _import_structure = {
     "models": ["create_reference_model"],
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "trainer": [
+        "AsyncGRPOConfig",
+        "AsyncGRPOTrainer",
         "BEMACallback",
         "DistillationConfig",
         "DistillationTrainer",
@@ -96,6 +98,8 @@ if TYPE_CHECKING:
     from .models import create_reference_model
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
+        AsyncGRPOConfig,
+        AsyncGRPOTrainer,
         BEMACallback,
         DistillationConfig,
         DistillationTrainer,
