@@ -28,7 +28,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.integrations import is_deepspeed_available
+from transformers.integrations import is_deepspeed_available, unset_hf_deepspeed_config
 from transformers.testing_utils import torch_device
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
@@ -1157,6 +1157,7 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
         if Version(transformers.__version__) >= Version("5.23.0"):
             assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
+        unset_hf_deepspeed_config()  # the ZeRO-3 config is process-global, don't leak it into later tests (#8447)
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
