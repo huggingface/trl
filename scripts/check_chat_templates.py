@@ -69,6 +69,7 @@ REPOS = [
     "meta-llama/Llama-3.2-1B-Instruct",
     "meta-llama/Meta-Llama-3-8B-Instruct",
     "meta-models/Muse-Glimmer-30B",
+    "meta-models/Muse-Spark-Open-816B-A42B",
     "microsoft/Phi-3-mini-4k-instruct",
     "microsoft/Phi-3.5-mini-instruct",
     "mistralai/Mistral-Large-4-1T-A52B",

@@ -37,6 +37,7 @@ if is_wandb_available():
 # an explicit entry here and in `_TELEMETRY_TRAINER_NAMES`.
 _TELEMETRY_TRAINERS = {
     # Stable
+    "AsyncGRPOTrainer",
     "DistillationTrainer",
     "DPOTrainer",
     "GRPOTrainer",
@@ -47,7 +48,6 @@ _TELEMETRY_TRAINERS = {
     # Experimental
     "A2POTrainer",
     "AsyncDistillationTrainer",
-    "AsyncGRPOTrainer",
     "CPOTrainer",
     "DecisionTrainer",
     "GKDTrainer",
@@ -65,6 +65,7 @@ _TELEMETRY_TRAINERS = {
 # code, such as Unsloth's `UnslothSFTTrainer`. `GMPOTrainer` inherits GRPO's `_name`, so it has no entry of its own.
 _TELEMETRY_TRAINER_NAMES = {
     # Stable
+    "AsyncGRPO": "AsyncGRPOTrainer",
     "Distillation": "DistillationTrainer",
     "DPO": "DPOTrainer",
     "GRPO": "GRPOTrainer",
@@ -75,7 +76,6 @@ _TELEMETRY_TRAINER_NAMES = {
     # Experimental
     "A2PO": "A2POTrainer",
     "AsyncDistillation": "AsyncDistillationTrainer",
-    "AsyncGRPO": "AsyncGRPOTrainer",
     "CPO": "CPOTrainer",
     "GKD": "GKDTrainer",
     "GOLD": "GOLDTrainer",
