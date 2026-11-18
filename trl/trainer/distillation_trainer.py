@@ -531,8 +531,6 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
-            # peft <= 0.17.1 (peft#2821).
             if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
                     "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
