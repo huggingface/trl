@@ -240,7 +240,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
        --weight-transfer-config '{"backend": "nccl"}' \
        --logprobs-mode processed_logprobs \
        --max-logprobs -1
@@ -370,7 +370,7 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" torchrun \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --gpu-memory-utilization 0.9 --tensor-parallel-size 8 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1 &
