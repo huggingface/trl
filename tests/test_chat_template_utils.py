@@ -33,6 +33,7 @@ from trl.chat_template_utils import (
     cohere_training_chat_template,
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
+    deepseekv3_v5_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
@@ -1282,6 +1283,9 @@ class TestIsChatTemplateStopTokenTrained:
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
             id="diffusion_gemma",
             marks=[
@@ -1638,6 +1642,10 @@ class TestGetTrainingChatTemplate:
             # assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
+        elif tokenizer_name == ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template):
+            # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
+            reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
+            assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
         else:
             assert before == after
 
@@ -1656,6 +1664,7 @@ class TestGetTrainingChatTemplate:
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
         ):
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
             # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
@@ -1934,6 +1943,9 @@ class TestDeepseekTrainingChatTemplates:
             pytest.param(
                 ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
             ),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
+            ),
         ],
     )
     def test_assistant_masks_exclude_turn_openers(self, tokenizer_name):
@@ -1965,6 +1977,33 @@ class TestDeepseekTrainingChatTemplates:
         assert "It is 12." in trained and "You are welcome." in trained
         assert "<｜Assistant｜>" not in trained
         assert "<｜tool▁outputs▁end｜>" not in trained
+
+    def test_deepseekv3_v5_thinking_trains_reasoning(self):
+        # With `thinking=True`, the DeepSeek-V3.1 generation prompt ends with `<think>`, so the training template must
+        # open the assistant turn the same way and train the reasoning that follows
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        tokenizer.chat_template = deepseekv3_v5_chat_template
+        chat_template = get_training_chat_template(tokenizer)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "The sky scatters shorter wavelengths.</think>It is blue."},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages[:1], chat_template=chat_template, add_generation_prompt=True, tokenize=False, thinking=True
+        )
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            thinking=True,
+        )
+        assert tokenizer.decode(result["input_ids"]).startswith(prompt)
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained == "The sky scatters shorter wavelengths.</think>It is blue.<｜end▁of▁sentence｜>"
 
 
 class TestNamedChatTemplateVariants:

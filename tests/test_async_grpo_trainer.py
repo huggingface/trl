@@ -812,7 +812,7 @@ class TransformersVLLMServer:
                 ]
             }
         if path == "/inference/v1/generate":
-            completion_ids, logprobs, sampling_mask = self.generate(body["token_ids"], body["sampling_params"])
+            completion_ids, logprobs, sampling_logprobs = self.generate(body["token_ids"], body["sampling_params"])
             top = logprobs.topk(body["sampling_params"]["logprobs"])
             return {
                 "choices": [
@@ -837,7 +837,7 @@ class TransformersVLLMServer:
                             ]
                         },
                         # The candidate set of each token: the ids the truncation kept
-                        "sampling_mask": sampling_mask,
+                        "sampling_mask": [row.isfinite().nonzero().squeeze(-1).tolist() for row in sampling_logprobs],
                     }
                 ]
             }
@@ -845,13 +845,13 @@ class TransformersVLLMServer:
 
     def generate(
         self, prompt_ids: list[int], sampling_params: dict
-    ) -> tuple[torch.Tensor, torch.Tensor, list[list[int]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample a completion of `prompt_ids`.
 
         Returns:
-            `tuple[torch.Tensor, torch.Tensor, list[list[int]]]`:
+            `tuple[torch.Tensor, torch.Tensor, torch.Tensor]`:
                 The completion's token ids and per-position vocabulary log-probabilities, before or after sampling
-                transformations according to `logprobs_mode`, and the candidate set each token was sampled from.
+                transformations according to `logprobs_mode`, and the log-probabilities of the sampling distribution.
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
         if self.script is not None:
@@ -862,7 +862,7 @@ class TransformersVLLMServer:
                 ]
             temperature = sampling_params["temperature"] if self.logprobs_mode == "processed_logprobs" else 1.0
             logprobs = (logits.float() / temperature).log_softmax(-1)
-            return completion_ids, logprobs, [row.isfinite().nonzero().squeeze(-1).tolist() for row in logprobs]
+            return completion_ids, logprobs, logprobs
         output = self.model.generate(
             prompt_ids,
             attention_mask=torch.ones_like(prompt_ids),
@@ -878,14 +878,12 @@ class TransformersVLLMServer:
         )
         completion_ids = output.sequences[0, prompt_ids.shape[1] :]
         logprobs = torch.cat(output.scores).float().log_softmax(-1)
-        # The kept set belongs to the sampling distribution, even when the server reports unfiltered log-probabilities.
-        sampling_mask = [row.isfinite().nonzero().squeeze(-1).tolist() for row in logprobs]
         if self.logprobs_mode == "raw_logprobs":
             # Sampling still uses temperature, but a raw-logprobs server reports the unmodified policy distribution.
             with torch.no_grad():
                 logits = self.model(output.sequences).logits[0, prompt_ids.shape[1] - 1 : -1]
-            return completion_ids, logits.float().log_softmax(-1), sampling_mask
-        return completion_ids, logprobs, sampling_mask
+            return completion_ids, logits.float().log_softmax(-1), logprobs
+        return completion_ids, logprobs, logprobs
 
     def _handler(self):
         server = self
@@ -4483,13 +4481,7 @@ _FA2_AVAILABLE = pytest.mark.skipif(not is_flash_attn_2_available(), reason="Fla
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, None, id="qwen36-moe-gdn"
         ),
-        pytest.param(
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            {},
-            None,
-            id="qwen2-vl",
-            marks=_VLM_TEXT_HEAD_DIM_4,
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, None, id="qwen2-vl"),
         pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, None, id="qwen25-vl"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, None, id="llama31"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, None, id="llama32"),

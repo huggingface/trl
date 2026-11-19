@@ -1,6 +1,6 @@
 # DPO Trainer
 
-[![All_models-DPO-blue](https://img.shields.io/badge/All_models-DPO-blue)](https://huggingface.co/models?other=dpo,trl) [![smol_course-Chapter_2-yellow](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
+[![All_models-DPO-blue](https://img.shields.io/badge/All_models-DPO-blue)](https://huggingface.co/models?other=dpo,trl) [![smol_course-Chapter_2-yellow](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://huggingface.co/learn/smol-course/unit2/1)
 
 ## Overview
 
