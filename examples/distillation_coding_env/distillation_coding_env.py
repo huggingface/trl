@@ -138,9 +138,12 @@ def main() -> None:
             return (observation.stdout + observation.stderr) or f"(no output, exit code {observation.exit_code})"
 
         def get_reward(self) -> float:
-            # Logged only, not used in the loss
-            self.client.step(CodeAction(code=self.test_setup_code))
-            passed = [self.client.step(CodeAction(code=test)).observation.exit_code == 0 for test in self.tests]
+            # Logged only, not used in the loss. A lost session logs 0 instead of stopping the training.
+            try:
+                self.client.step(CodeAction(code=self.test_setup_code))
+                passed = [self.client.step(CodeAction(code=test)).observation.exit_code == 0 for test in self.tests]
+            except Exception:
+                return 0.0
             return sum(passed) / len(passed)
 
     dataset = load_dataset("google-research-datasets/mbpp", "full", split="train")
