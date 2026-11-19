@@ -187,7 +187,11 @@ Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medi
 
 ### `muse_glimmer.jinja`
 
-Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B` before [1297fd7](https://huggingface.co/meta-models/Muse-Glimmer-30B/commit/1297fd7dfe)). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+
+### `muse_glimmer_v2.jinja`
+
+Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B` since [1297fd7](https://huggingface.co/meta-models/Muse-Glimmer-30B/commit/1297fd7dfe)). Same as `muse_glimmer.jinja`, plus a system message line stating the JSON schema when `response_format` is a `json_schema`.
 
 ### `muse_spark.jinja`
 
@@ -411,6 +415,10 @@ Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the ori
 Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`:
 
 Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
+
+### `muse_glimmer_v2_training.jinja`
+
+Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, applied to `muse_glimmer_v2.jinja`.
 
 ### `muse_spark_training.jinja`
 
