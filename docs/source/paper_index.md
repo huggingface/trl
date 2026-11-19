@@ -751,6 +751,16 @@ training_args = AsyncGRPOConfig(
 )
 ```
 
+### s3: Simple Scaling of Swarms via Cooperative Multi-agent RL
+
+**📜 Paper**: https://huggingface.co/papers/2611.08615
+
+s3 trains a team of agents that share one model and talk through a message board. A whole team episode gets one reward, \\( R = S \left(1 - \lambda \min\left(1, \frac{\sum_i |\tau_i|}{N L}\right)\right) \\), with  \\( S \\) the team's success and a token cost  \\( \lambda = 0.25 \\). Advantages are standardized over  \\( G \\) team attempts at the same problem, and every agent's tokens get its team's advantage. The [`async_grpo_s3_aggregation`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_s3_aggregation) example reproduces the paper's information aggregation task with the [`AsyncGRPOTrainer`]: one rollout is one team episode, and each micro-batch is one team, so the loss is a mean over teams of per-team token means.
+
+```sh
+python examples/async_grpo_s3_aggregation/async_grpo_s3_aggregation.py --vllm-url http://127.0.0.1:8000
+```
+
 ## Optimal Advantage Regression
 
 Papers relating to the [`experimental.a2po.A2POTrainer`].
