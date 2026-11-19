@@ -31,7 +31,7 @@ call = {"role": "assistant", "tool_calls": [{"type": "function", "function": {"n
 
 ## Chat template
 
-TRL recognizes a template by exact match (it then knows its parser and training template), so check every checkpoint's template, not one:
+A model that ships `{% generation %}` markers, a prefix-preserving template and a native `response_template` needs nothing stored in TRL. Otherwise TRL falls back to its stored copies, matched by exact text, so every checkpoint's template has to match one:
 
 ```python
 from pathlib import Path
