@@ -69,9 +69,6 @@ from ..testing_utils import TrlTestCase, is_ampere_or_newer, is_bf16_supported, 
 
 TEACHER_TOP_K = 4
 
-# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
-# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
-
 
 def _make_teacher_topk(
     vocab_size: int, actual_token_ids: list[int], top_k: int, seed: int
@@ -486,7 +483,7 @@ class TestParseTeacherLogprobs:
 def _rollout_loop(**kwargs):
     # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM or teacher connection happens here).
     tokenizer = kwargs.get("processing_class") or AutoTokenizer.from_pretrained(
-        "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     )
     kwargs = {
         "model_name": "test",
@@ -656,7 +653,7 @@ class TestMultiTeacherRouting:
 
     def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_lens=None):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens)
         requests = []
 
@@ -693,7 +690,7 @@ class TestMultiTeacherRouting:
         assert [sample.teacher_id for sample in samples] == ["code", "math"]
 
     def test_only_the_student_request_is_salted_by_model_version(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         loop = _scoring_loop(tokenizer, ONE_TEACHER)
         loop._model_version_value.value = 3
         requests = []
@@ -1035,7 +1032,7 @@ class TestPerTeacherStats:
 )
 class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         AsyncDistillationTrainer(
             model=model_id,
@@ -1043,7 +1040,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         )
 
     def _train_one_step_and_save(self, fsdp=False):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncDistillationConfig(
@@ -1086,8 +1083,8 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "instantiated"),
         [
-            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", False),
-            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False),
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
         ],
     )
@@ -1207,7 +1204,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_router_aux_loss_coef_on_a_dense_model_raises(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
             AsyncDistillationTrainer(
@@ -1219,8 +1216,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
-        # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
-        # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
         model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -1257,7 +1252,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
         # training run through the narrow top-1 + actual-token support path (including the beta==1.0 special case),
         # checking grad_norm/loss stay finite throughout, not just that training completes.
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncDistillationConfig(
@@ -1286,7 +1281,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
 
 
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
     trainer = AsyncDistillationTrainer(
         model=model_id,
@@ -1459,7 +1454,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
     does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`, `fake.paused`.
     """
 
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
     def _lora_config(self, **kwargs):
         from peft import LoraConfig
