@@ -5,43 +5,169 @@ description: Check that a newly released model, or a new revision of its Hub fil
 
 # Check a new model against TRL
 
-Launch support usually covers "loads, trains a step, template recognized". The items below are what past releases got wrong anyway, often for months. Check them on the real tokenizer and config, and on a tiny random-weight model built from the real config (same class, layer types, experts, vision tower), so most of it runs before the weights are public. Check every checkpoint of the release, not only one.
+Launch support usually covers "loads, trains a step, template recognized". The checks below are what past releases got wrong anyway, often for months. Most run on the tokenizer and config alone, or on a tiny random-weight model built from the real config, so they work before the weights are public. Run them on every checkpoint of the release (sizes, base and instruct, quantized mirrors), not only one. The snippets are starting points: adapt them to the model (its template kwargs, its tool-call format).
+
+```python
+import torch, transformers
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig
+from trl.chat_template_utils import (
+    add_response_schema, get_training_chat_template, has_generation_markers, is_chat_template_prefix_preserving,
+    is_chat_template_stop_token_trained, parse_response, supports_tool_calling,
+)
+
+tok = AutoTokenizer.from_pretrained(model_id, revision=sha)  # for a VLM, AutoProcessor, and its .tokenizer for ids
+config = AutoConfig.from_pretrained(model_id, revision=sha)
+gen = GenerationConfig.from_pretrained(model_id, revision=sha)
+eos = gen.eos_token_id if isinstance(gen.eos_token_id, list) else [gen.eos_token_id]
+render = lambda msgs, **kw: tok.apply_chat_template(msgs, tokenize=False, **kw)
+ids = lambda text: tok(text, add_special_tokens=False)["input_ids"]
+
+user = [{"role": "user", "content": "Hi"}]
+turn = user + [{"role": "assistant", "content": "Hello", "reasoning_content": "Greet."}]
+tools = [{"type": "function", "function": {"name": "lookup", "description": "Look up a zip code", "parameters": {
+    "type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}}}]
+call = {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "lookup", "arguments": {"zip": "75001"}}}]}
+```
 
 ## Chat template
 
-- Every size and variant (base, instruct, thinking, quantized mirrors) ships the same template. TRL recognizes templates by exact match, so a one-byte difference loses the response parser and the training template.
-- The generation prompt is a token prefix of the rendered assistant turn, for every thinking and reasoning-effort setting.
-- Appending a user or tool turn leaves the earlier tokens unchanged. Dropping reasoning from history breaks this.
-- With `{% generation %}` markers (or TRL's training template), the mask starts right after the generation prompt, so a prefilled `<think>` is not trained, and it includes the end-of-turn token.
-- `tools=[]` renders like no tools.
-- A tool-call turn renders the same with `content` missing, `None` or `""`.
-- Tool-call arguments given as a dict render, and parsing types them through the tool schema (`"75001"` stays a string).
-- String content and a list of text parts render identically: TRL sends parts to processors.
-- No date in the default system prompt.
+TRL recognizes a template by exact match (it then knows its parser and training template), so check every checkpoint's template, not one:
+
+```python
+from pathlib import Path
+known = {p.read_text(): p.name for p in Path("trl/chat_templates").glob("*.jinja")}
+print(known.get(tok.chat_template, "not stored"))
+```
+
+The generation prompt is a token prefix of the rendered turn, for every setting the template reads (`enable_thinking`, `reasoning_effort`, ...), with and without reasoning:
+
+```python
+for kw in ({}, {"enable_thinking": False}):
+    for msgs in (turn, [*user, {"role": "assistant", "content": "Hello"}]):
+        prompt = ids(render(user, add_generation_prompt=True, **kw))
+        assert ids(render(msgs, **kw))[: len(prompt)] == prompt, kw
+```
+
+Appending a turn leaves the earlier ones unchanged (dropping reasoning from history breaks it):
+
+```python
+assert render([*turn, {"role": "user", "content": "And?"}]).startswith(render(turn))
+assert is_chat_template_prefix_preserving(tok)  # the same after a tool turn, which GRPO's tool loop needs
+```
+
+The assistant mask starts right after the generation prompt (a prefilled `<think>` is not trained) and ends on the end-of-turn token. `get_training_chat_template` raising means `assistant_only_loss=True` fails:
+
+```python
+template = tok.chat_template if has_generation_markers(tok.chat_template) else get_training_chat_template(tok)
+out = tok.apply_chat_template(turn, chat_template=template, return_dict=True, return_assistant_tokens_mask=True)
+print(tok.decode([t for t, m in zip(out["input_ids"], out["assistant_masks"]) if m]))
+assert is_chat_template_stop_token_trained(tok, template)
+```
+
+Small things that break rendering in training but not in a chat demo:
+
+```python
+assert render(user, tools=[]) == render(user)
+assert len({render([*user, {**call, "content": c}]) for c in (None, "")} | {render([*user, call])}) == 1
+assert render([{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]) == render(user)  # TRL sends parts to processors
+assert "SYSTEM_SENTINEL" in render([{"role": "system", "content": "SYSTEM_SENTINEL"}, *user])
+assert supports_tool_calling(tok)
+calls = [{"type": "function", "function": {"name": n, "arguments": {"zip": "75001"}}} for n in ("lookup_a", "lookup_b")]
+assert all(n in render([*user, {"role": "assistant", "tool_calls": calls}]) for n in ("lookup_a", "lookup_b"))
+json_args = {"type": "function", "function": {"name": "lookup", "arguments": '{"zip": "75001"}'}}
+assert render([*user, {**call, "tool_calls": [json_args]}]) == render([*user, call])  # some callers send JSON strings
+text_ids = ids(render(turn))
+assert ids(tok.decode(text_ids)) == text_ids  # decode then encode gives the same ids
+```
 
 ## Parsing and stopping
 
-- The token that ends an assistant turn is a stop id. Compare ids, not strings, against `generation_config.eos_token_id`: a template that ends a turn with the next role marker runs past it.
-- `parse_response` puts reasoning in `reasoning_content`, separate from `content`.
-- A completion that ends on a stop token or on the next role marker still parses as a tool call, and a truncated tool call is not executed.
-- In GRPO with tools, the stop token is not doubled where the tool result is appended.
+The token that ends an assistant turn is a stop id. Compare ids: a template that ends a turn with the next role marker, or a model that samples a different token than the template renders, runs past the turn:
+
+```python
+print(tok.convert_ids_to_tokens(ids(render(turn))[-3:]), tok.convert_ids_to_tokens(eos))
+```
+
+Parsing returns what the template rendered, with reasoning in `reasoning_content` and arguments typed by the tool schema:
+
+```python
+tok = add_response_schema(tok)  # raises when TRL doesn't know the template and the tokenizer ships no response template
+prompt = ids(render(user, add_generation_prompt=True))
+assert parse_response(tok, ids(render(turn))[len(prompt):], prefix=prompt) == turn[-1]
+prompt = ids(render(user, tools=tools, add_generation_prompt=True))
+completion = ids(render([*user, call], tools=tools))[len(prompt):]
+assert parse_response(tok, completion, prefix=prompt, tools=tools)["tool_calls"] == call["tool_calls"]
+assert "tool_calls" not in parse_response(tok, completion[:-4], prefix=prompt, tools=tools)  # truncated: not executed
+```
+
+In GRPO with tools, look at the completion ids of an episode: the stop token must not appear twice where the tool result is appended.
 
 ## Config and loading
 
-- `architectures[0]` in `config.json` is the class of its `model_type`: TRL loads a model id with that class.
-- `generation_config.json` exists, and the pad, EOS and BOS ids agree between it, `config.json` and the tokenizer. The pad token is distinct from EOS.
-- TRL's fused LM head (`add_fused_lm_head`) reads the logit scaling and final softcap under their field names on the text config. Random tiny weights never reach a softcap, so a passing test proves nothing here.
-- `AutoModelForSequenceClassification` exists for the config, else the Reward trainer fails.
-- A quantized release loads dequantized by name and trains, and dequantize, save, reload gives the same logits.
+TRL loads a model id with `config.architectures[0]`, so it must be the class of the `model_type`:
+
+```python
+assert getattr(transformers, config.architectures[0]).config_class.model_type == config.model_type
+```
+
+`generation_config.json` exists, ids agree across files, and pad is not an EOS (else padding is trained as a stop or masked as one):
+
+```python
+text = config.get_text_config()
+print(text.eos_token_id, gen.eos_token_id, tok.eos_token_id, tok.pad_token_id, tok.bos_token_id)
+```
+
+TRL's fused LM head (`add_fused_lm_head` in `trl/trainer/utils.py`) must read the logit scaling and softcap fields. Random tiny weights never reach a softcap, so compare names, not outputs:
+
+```python
+print({k: v for k, v in text.to_dict().items() if any(s in k for s in ("softcap", "logit", "scale", "multiplier"))})
+```
+
+The Reward trainer needs `AutoModelForSequenceClassification.from_config(config)` to work. A quantized release must load by name dequantized (`SFTTrainer(model=model_id)`) and survive `save_pretrained` then reload with the same logits.
 
 ## Architecture
 
-- MoE: the model returns router logits and a non-zero aux loss when `router_aux_loss_coef` > 0, and LoRA reaches the routed experts.
-- Packing: a document's log-probs don't depend on the document packed before it, through attention, conv and recurrent layers. `layer_types` declares every non-attention layer (AsyncGRPO tree packing reads it).
-- The fast kernels for linear attention and conv layers are installed and used: the PyTorch fallback is silent and about 10x slower.
-- A `head_dim` above 256 rules out Flash Attention 3, so padding-free training and AsyncGRPO. Tiny models hide it.
-- VLM: `config.image_token_id` matches the processor's, the checkpoint also trains text-only through `AutoModelForCausalLM`, and every processor output key reaches the model.
-- vLLM in TRL's supported range serves the architecture, and weight sync maps every parameter name.
+Build a tiny model from the real config: small widths, one layer of each `layer_types` entry, a few experts. Shrink every field that mirrors a text size (a vision config's `text_hidden_size`, `out_hidden_size`):
+
+```python
+text.update({"hidden_size": 64, "intermediate_size": 128, "num_attention_heads": 4, "num_key_value_heads": 2,
+             "head_dim": 16, "layer_types": list(dict.fromkeys(text.to_dict().get("layer_types") or ["full_attention"]))})
+text.num_hidden_layers = len(text.layer_types)
+model = getattr(transformers, config.architectures[0])(config).to("cuda", torch.bfloat16)
+```
+
+MoE returns router logits and a non-zero aux loss, and LoRA reaches the routed experts:
+
+```python
+x = torch.randint(0, 100, (1, 16), device="cuda")
+assert model(x, labels=x, output_router_logits=True).aux_loss > 0
+print([n for n, _ in peft_model.named_parameters() if "lora" in n and "expert" in n][:3])
+```
+
+Packing doesn't leak across documents, through attention, conv and recurrent layers (run with the flash attention path TRL's padding-free uses; noise stays under 1e-2, a leak is largest on the first tokens):
+
+```python
+def logps(before, doc):
+    x = torch.cat([before, doc])[None]
+    pos = torch.cat([torch.arange(len(before)), torch.arange(len(doc))])[None].cuda()
+    return model(input_ids=x, position_ids=pos).logits[0, len(before):].float().log_softmax(-1)
+print((logps(doc_a, doc) - logps(doc_b, doc)).abs().amax(-1))
+```
+
+Also:
+- `layer_types` declares every non-attention layer: AsyncGRPO tree packing reads it.
+- The fast kernels for linear attention and conv layers are installed: the PyTorch fallback is silent and about 10x slower, so grep the logs for "falling back".
+- A `head_dim` above 256 (`print({k: v for k, v in text.to_dict().items() if "head_dim" in k})`) rules out Flash Attention 3, so padding-free and AsyncGRPO. Tiny models hide it.
+- VLM: `config.image_token_id` is the processor's image token, the checkpoint also trains text-only through `AutoModelForCausalLM`, and every processor output key reaches the model.
+- vLLM in TRL's range serves it (`trl vllm-serve --model <id> --revision <sha>`), and one GRPO step with `use_vllm=True` syncs every weight.
+
+## What providers usually miss
+
+Two things are missing in most compatibility requests:
+- a response template, without which TRL can't parse completions, so GRPO, AsyncGRPO and Distillation with tools fail at init;
+- `{% generation %}` markers, without which `assistant_only_loss=True` fails.
+
+Recommend adding them, and send the fix: the new chat template with the markers, or the response template. Test it extensively before sending: add the model to the `pytest.param` lists of `tests/test_chat_template_utils.py` (`TestAddResponseSchema`, `TestSupportsToolCalling`, `TestIsChatTemplatePrefixPreserving`, `TestIsChatTemplateStopTokenTrained`, `TestGetTrainingChatTemplate`, `TestParseResponse`) and run them with `tests/test_data_utils.py`.
 
 ## Report
 
