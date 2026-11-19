@@ -37,6 +37,9 @@ from huggingface_hub import HfApi, hf_hub_download
 
 
 REPOS = [
+    "allenai/Olmo-3-7B-Instruct",
+    "allenai/Olmo-3-7B-Instruct-SFT",
+    "allenai/Olmo-3.1-32B-Instruct",
     "CohereLabs/aya-expanse-8b",
     "CohereLabs/tiny-aya-earth",
     "deepseek-ai/DeepSeek-R1",

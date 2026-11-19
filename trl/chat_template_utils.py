@@ -766,6 +766,12 @@ nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_ligh
     encoding="utf-8"
 )
 
+olmo3_instruct_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct.jinja").read_text(encoding="utf-8")
+
+olmo3_instruct_v2_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct_v2.jinja").read_text(encoding="utf-8")
+
+olmo3_instruct_v3_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct_v3.jinja").read_text(encoding="utf-8")
+
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
@@ -1248,6 +1254,18 @@ nemotron_3_5_lightning_training_chat_template = (
     _CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning_training.jinja"
 ).read_text(encoding="utf-8")
 
+olmo3_instruct_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+olmo3_instruct_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+olmo3_instruct_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_instruct_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -1450,6 +1468,15 @@ def get_training_chat_template(
 
     if chat_template == nemotron_3_5_lightning_chat_template:
         return nemotron_3_5_lightning_training_chat_template
+
+    if chat_template == olmo3_instruct_chat_template:
+        return olmo3_instruct_training_chat_template
+
+    if chat_template == olmo3_instruct_v2_chat_template:
+        return olmo3_instruct_v2_training_chat_template
+
+    if chat_template == olmo3_instruct_v3_chat_template:
+        return olmo3_instruct_v3_training_chat_template
 
     if chat_template == phi3_chat_template:
         return phi3_training_chat_template
