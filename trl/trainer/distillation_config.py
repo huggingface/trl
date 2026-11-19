@@ -141,7 +141,8 @@ class DistillationConfig(_BaseConfig):
             stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
             results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
             length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
-            otherwise).
+            otherwise). When the limit is reached, the tool calls of the last generated turn are not executed and the
+            completion ends with that turn, so a final tool call (for example one that submits an answer) is lost.
 
         > Parameters that control the logging
 
@@ -373,7 +374,9 @@ class DistillationConfig(_BaseConfig):
             "generation stops when the model generates a response turn with no tool calls, when the completion "
             "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
             "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
-            "`max_position_embeddings` otherwise)."
+            "`max_position_embeddings` otherwise). When the limit is reached, the tool calls of the last generated "
+            "turn are not executed and the completion ends with that turn, so a final tool call (for example one "
+            "that submits an answer) is lost."
         },
     )
 
