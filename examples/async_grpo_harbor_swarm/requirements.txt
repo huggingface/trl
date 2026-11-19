@@ -1,0 +1,7 @@
+harbor==0.25.0
+podman-compose==1.5.0
+msgboard @ git+https://github.com/huggingface/msgboard.git@563911d586e3435f2aadb25d7a8f565cce828406
+openenv @ git+https://github.com/openenv/OpenEnv.git@f7acf879c2cd7d2cb90aea27fc31ae3220dd9a50
+exceptiongroup>=1.3
+httpx==0.28.1
+peft>=0.18.0
