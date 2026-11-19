@@ -1234,6 +1234,10 @@ muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_train
 
 muse_spark_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_training.jinja").read_text(encoding="utf-8")
 
+muse_spark_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1442,7 +1446,7 @@ def get_training_chat_template(
         return muse_spark_training_chat_template
 
     if chat_template == muse_spark_v3_chat_template:
-        return muse_spark_training_chat_template
+        return muse_spark_v3_training_chat_template
 
     if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
