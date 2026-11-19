@@ -728,11 +728,6 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if Version(peft.__version__) <= Version("0.17.1"):
-                pytest.xfail(
-                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
-                    "https://github.com/huggingface/peft/issues/2821"
-                )
             peft_config = PrefixTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
@@ -2399,9 +2394,7 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 marks=[
@@ -2412,9 +2405,7 @@ class TestSFTTrainer(TrlTestCase):
                     _HEAD_SIZE_NOT_MULTIPLE_OF_8,
                 ],
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",

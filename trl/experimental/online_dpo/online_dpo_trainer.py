@@ -490,6 +490,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
+                # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
+                # while asleep, so the colocated trainer could not use the memory that sleep frees.
+                if is_vllm_available(min_version="0.34.0"):
+                    vllm_kwargs["enable_extensible_kv_cache"] = False
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)

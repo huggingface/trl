@@ -41,14 +41,14 @@ if __name__ == "__main__":  # the rollout worker is a spawned process that re-im
 Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
     --max-model-len 4096
 ```
 
-With score centering enabled and `temperature != 1.0`, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
+With score centering enabled and either `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
 
 Then execute the script on GPU 1 using the following command:
 
@@ -258,7 +258,7 @@ Units:
 The trainer generates with a vLLM server, which it reaches at `vllm_server_base_url` (`http://localhost:8000` by default):
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -399,7 +399,7 @@ The batch metrics compose: one step holds `gradient_accumulation_steps × num_pr
 Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -445,10 +445,9 @@ if __name__ == "__main__":
 Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
-    --api-server-count 8 \
     --max-model-len 4096 \
     --enable-lora \
     --max-lora-rank 32 \
@@ -456,6 +455,8 @@ VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name
 ```
 
 `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Keep `--weight-transfer-config` even with `--enable-lora`: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+
+vLLM doesn't start when `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` is combined with more than one API server, so leave `--api-server-count 8` out of this command. With a single API server, the top log-probabilities requested by score centering halve generation throughput (see [Configuring the vLLM server](#configuring-the-vllm-server)). To avoid that, train with `score_centering=False` or use merged sync, which works with `--api-server-count 8`.
 
 `--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
