@@ -1869,9 +1869,12 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             "b": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
         }
         dataset = self._dataset(["a", "b"])
-        trainer = self._run(teacher_model, dataset, per_device_train_batch_size=4, shuffle_dataset=False)
+        trainer = self._run(
+            teacher_model, dataset, per_device_train_batch_size=4, shuffle_dataset=False, remove_unused_columns=True
+        )
 
         step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
+        assert step_logs
         for entry in step_logs:
             assert entry["teacher/a/token_frac"] + entry["teacher/b/token_frac"] == pytest.approx(1.0)
             assert entry["teacher/a/jsd"] > 0 and entry["teacher/b/jsd"] > 0
