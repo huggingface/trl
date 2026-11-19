@@ -202,3 +202,19 @@ def test_team_mean_advantages_weigh_each_team_by_its_tokens():
     assert [r.advantage for r in rows] == [2 / 40, 2 / 40, -2 / 20, -2 / 20]
     # compute_loss sums token terms and divides by agent rows: a team of N rows contributes its advantage once
     assert sum(r.advantage * r.completion_mask[1:].sum() for r in rows[:2]) / 2 == 1.0
+
+
+def test_an_agent_shares_its_number_only_as_a_whole_word():
+    from analyze_episodes import sent_own
+
+    def agent(number, *texts):
+        return {"number": number, "events": [{"kind": "message", "ok": True, "text": t} for t in texts]}
+
+    assert sent_own(agent(4, "My number is four."))
+    assert sent_own(agent(21, "mine is twenty-one (21)"))
+    assert sent_own(agent(3, "I have 3"))
+    assert sent_own(agent(3, "It is 3."))
+    assert not sent_own(agent(3, "maybe 3.5"))
+    assert not sent_own(agent(4, "Is yours fourteen?"))
+    assert not sent_own(agent(1, "none yet; twenty-one is agent_1's"))
+    assert not sent_own(agent(3, "agent_3, what is yours?"))

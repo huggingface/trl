@@ -33,7 +33,10 @@ def sent_own(agent: dict) -> bool:
     for e in agent["events"]:
         if e["kind"] == "message" and e.get("ok"):
             t = e["text"].lower()
-            if words in t or re.search(rf"(?<!\d){digits}(?!\d)", t):
+            # whole words only: "four" not in "fourteen", "one" not in "none" or "twenty-one", "3" not in "agent_3"
+            if re.search(rf"(?<![\w-]){re.escape(words)}(?![\w-])", t) or re.search(
+                rf"(?<![\w.]){digits}(?!\w|\.\d)", t
+            ):
                 return True
     return False
 
