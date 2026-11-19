@@ -40,6 +40,9 @@ def print_env():
         devices = ["MPS"]
     elif torch.xpu.is_available():
         devices = [torch.xpu.get_device_name(i) for i in range(torch.xpu.device_count())]
+    elif torch.accelerator.is_available() and torch.accelerator.current_accelerator().type == "neuron":
+        # `get_device_name` returns "neuron:<index>"; the properties name the chip (e.g. "trn2")
+        devices = [torch.neuron.get_device_properties(i).name for i in range(torch.neuron.device_count())]
 
     accelerate_config = accelerate_config_str = "not found"
 

@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
+import torch.nn.functional as F
+from accelerate import PartialState
 from torch import nn
+from torch.backends.cuda import SDPAParams, can_use_efficient_attention
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -29,6 +34,10 @@ if is_peft_available():
 
 
 class TestActivationOffloading(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self) -> None:
@@ -161,6 +170,84 @@ class TestActivationOffloading(TrlTestCase):
         torch.testing.assert_close(out1, out2)
         for g1, g2 in zip(grads1, grads2, strict=True):
             torch.testing.assert_close(g1, g2)
+
+    @require_torch_accelerator
+    @pytest.mark.parametrize("use_streams", [False, True])
+    @pytest.mark.parametrize(
+        ("view", "dense"),
+        [
+            (lambda t: t.transpose(1, 2), True),
+            (lambda t: t[1:], True),  # storage offset
+            (lambda t: t[:, :-1], False),  # gaps between rows
+            (lambda t: t[1:, 1:], False),  # storage offset and gaps
+            (lambda t: t[1:].transpose(1, 2), True),
+        ],
+        ids=["transposed", "offset", "gaps", "offset_and_gaps", "transposed_offset"],
+    )
+    def test_saved_views_are_restored(self, use_streams, view, dense):
+        """Backward gets a saved view's values back, and a dense view also its strides."""
+        restored = []
+
+        class SavesView(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x):
+                # A tensor saved after the view evicts it from the forward stash, so even with streams it is
+                # restored from the CPU copy.
+                ctx.save_for_backward(view(x), x.new_ones(64))
+                ctx.input_shape = x.shape
+                return x.sum()
+
+            @staticmethod
+            def backward(ctx, grad):
+                saved, _ = ctx.saved_tensors
+                restored.append((saved.detach().clone(), saved.stride()))
+                return grad.expand(ctx.input_shape)
+
+        x = torch.randn(4, 6, 8, device=torch_device, requires_grad=True)
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0, max_fwd_stash_size=1):
+            SavesView.apply(x).backward()
+
+        ((values, stride),) = restored
+        torch.testing.assert_close(values, view(x).detach(), rtol=0, atol=0)
+        if dense:
+            assert stride == view(x).stride()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="SDPA memory-efficient attention requires CUDA")
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_sdpa_efficient_attention_gradients(self, use_streams):
+        """SDPA's memory-efficient attention backward depends on the layout of the transposed query and output it saves."""
+        torch.manual_seed(0)
+        batch, heads, seq, head_dim = 2, 4, 64, 32
+        # half precision: the float32 kernel does not depend on the saved layout
+        q, k, v = (
+            torch.randn(batch, seq, heads, head_dim, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+            for _ in range(3)
+        )
+        mask = torch.ones(batch, 1, seq, seq, device="cuda", dtype=torch.bool).tril()
+        mask[1, :, :, seq // 2 :] = False  # padding: a mask routes SDPA to memory-efficient attention
+        weight = torch.randn(batch, heads, seq, head_dim, device="cuda", dtype=torch.bfloat16)
+
+        with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+            params = SDPAParams(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), mask, 0.0, False, False)
+            if not can_use_efficient_attention(params):
+                pytest.skip("Memory-efficient SDPA is unavailable for these inputs")
+
+        def grads():
+            for t in (q, k, v):
+                t.grad = None
+            with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask
+                )
+                (out * weight).sum().backward()
+            return [t.grad.clone() for t in (q, k, v)]
+
+        expected = grads()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = grads()
+
+        for a, e in zip(actual, expected, strict=True):
+            torch.testing.assert_close(a, e)
 
     @require_torch_accelerator
     def test_tensor_deduplication(self):

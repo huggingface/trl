@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**⚡ Up to 6.9× longer sequences on the same GPU:** SFT, DPO, KTO, GRPO and RLOO now score tokens with a [fused LM head](reducing_memory_usage) **by default**. At 8k tokens that is 52% to 82% less peak VRAM.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`] graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Taxonomy
 
@@ -23,6 +23,7 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 
 #### Online methods
 
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GRPOTrainer`](grpo_trainer)
 - [`RLOOTrainer`](rloo_trainer)
 
@@ -54,7 +55,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Online methods
 
 - [`A2POTrainer`](a2po_trainer)
-- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 
@@ -66,7 +66,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [BEMA for Reference Model](bema_for_reference_model)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 
@@ -76,7 +75,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`IWOPDTrainer`](iw_opd_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
-- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>

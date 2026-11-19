@@ -73,7 +73,7 @@ def _outcome_only_reward_func(environments, **_) -> list[float | None]:
     passing a different callable to ``reward_funcs=``. Returns `None` when no non-null reward was observed, so an
     unscored rollout is not treated as a scored zero.
     """
-    return [env.reward if any(reward is not None for reward in env.rewards) else None for env in environments]
+    return [env.reward for env in environments]
 
 
 class OpenRewardSpec:

@@ -302,7 +302,7 @@ def _run_tooluse_eval(
 
     sample_path = os.path.join(trainer.args.output_dir, f"{metric_prefix}_samples.json")
     os.makedirs(trainer.args.output_dir, exist_ok=True)
-    with open(sample_path, "w") as f:
+    with open(sample_path, "w", encoding="utf-8") as f:
         json.dump(records[: min(20, len(records))], f, indent=2)
 
     return metrics
@@ -363,7 +363,7 @@ if __name__ == "__main__":
         eval_dataset = _prepare_split(raw_eval_dataset, script_args)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-    model.config.use_cache = False if training_args.gradient_checkpointing else True
+    model.config.use_cache = False if training_args.activation_checkpointing else True
 
     trainer = SDFTTrainer(
         model=model,

@@ -19,12 +19,13 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
+from accelerate.utils.fsdp_utils import get_parameters_from_modules
 from packaging.version import Version
+from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
 
@@ -34,14 +35,6 @@ from ..import_utils import suppress_experimental_warning
 with suppress_experimental_warning():
     from ..experimental.utils import create_reference_model as _create_reference_model
 
-
-if Version(torch.__version__) >= Version("2.6.0"):
-    from torch.distributed.fsdp import FSDPModule
-else:  # the FSDP2 API was public only from torch 2.6
-    from torch.distributed._composable.fsdp import FSDPModule
-
-if Version(accelerate.__version__) >= Version("1.11.0"):
-    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
@@ -107,6 +100,7 @@ def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -119,6 +113,8 @@ def _unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
 
     Yields:
         Unwrapped model.
@@ -130,9 +126,17 @@ def _unwrap_model_for_generation(
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        is_gradient_checkpointing = unwrapped_model.is_activation_checkpointing
+        disable_checkpointing = unwrapped_model.activation_checkpointing_disable
+        enable_checkpointing = unwrapped_model.activation_checkpointing_enable
+    else:
+        is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+        disable_checkpointing = unwrapped_model.gradient_checkpointing_disable
+        enable_checkpointing = unwrapped_model.gradient_checkpointing_enable
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_disable()
+        disable_checkpointing()
     from ..distributed import DistributedBackend
 
     if DistributedBackend(accelerator).is_zero3:
@@ -148,7 +152,7 @@ def _unwrap_model_for_generation(
     else:
         yield unwrapped_model
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable()
+        enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 @contextmanager
@@ -201,6 +205,7 @@ def unwrap_model_for_generation(
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
     generation_kwargs: dict | None = None,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -221,13 +226,18 @@ def unwrap_model_for_generation(
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
 
     Yields:
         Unwrapped model with optionally overridden generation_config.
     """
     with (
         _unwrap_model_for_generation(
-            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+            model,
+            accelerator,
+            gather_deepspeed3_params=gather_deepspeed3_params,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         ) as unwrapped_model,
         _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
     ):
@@ -302,20 +312,10 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             }
             model = FSDP(model, **kwargs)
         elif fsdp_plugin.fsdp_version == 2:
-            if Version(torch.__version__) >= Version("2.6.0"):
-                from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
-            else:
-                from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
             mesh = getattr(accelerator, "torch_device_mesh", None)
-            if Version(accelerate.__version__) >= Version("1.11.0"):
-                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
-            else:
-                warnings.warn(
-                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
-                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
-                )
-                ignored_params = None
+            ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             fsdp2_kwargs = {
                 "reshard_after_forward": fsdp_plugin.reshard_after_forward,
                 "offload_policy": fsdp_plugin.cpu_offload,
@@ -395,14 +395,22 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
         gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
-    was_enabled = model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        was_enabled = model.is_activation_checkpointing
+        disable_checkpointing = model.activation_checkpointing_disable
+        enable_checkpointing = model.activation_checkpointing_enable
+    else:
+        was_enabled = model.is_gradient_checkpointing
+        disable_checkpointing = model.gradient_checkpointing_disable
+        enable_checkpointing = model.gradient_checkpointing_enable
     if was_enabled:
-        model.gradient_checkpointing_disable()
+        disable_checkpointing()
     try:
         yield
     finally:
         if was_enabled:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+            enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 def create_reference_model(
