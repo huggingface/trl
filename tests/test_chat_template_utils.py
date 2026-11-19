@@ -58,6 +58,9 @@ from trl.chat_template_utils import (
     lfm2_chat_template,
     lfm2_v2_chat_template,
     muse_spark_v2_chat_template,
+    olmo3_think_chat_template,
+    olmo3_think_v2_chat_template,
+    olmo3_think_v3_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
@@ -1384,6 +1387,30 @@ class TestIsChatTemplateStopTokenTrained:
                 reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_chat_template),
+            id="olmo3_think",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_v2_chat_template),
+            id="olmo3_think_v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_v3_chat_template),
+            id="olmo3_think_v3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
@@ -1818,9 +1845,11 @@ class TestGetTrainingChatTemplate:
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
         if prompt.rstrip().endswith("</think>"):
             assistant = {"role": "assistant", "content": "It is blue."}
-        # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
-        elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
-            assistant = {"role": "assistant", "content": "<think>\nRayleigh scattering.\n</think>\n\nIt is blue."}
+        # Templates without a reasoning field (DeepSeek, OLMo 3 Think) read the reasoning inline in the content, opened
+        # as the generation prompt opens it
+        elif prompt.endswith(("<think>", "<think>\n")) and "reasoning_content" not in tokenizer.chat_template:
+            opener = prompt[prompt.rindex("<think>") :]
+            assistant = {"role": "assistant", "content": f"{opener}Rayleigh scattering.\n</think>\n\nIt is blue."}
         else:
             assistant = {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
         messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
