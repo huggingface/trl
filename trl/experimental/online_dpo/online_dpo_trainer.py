@@ -490,6 +490,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                     "quantization": vllm_quantization,
                 }
+                # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
+                # while asleep, so the colocated trainer could not use the memory that sleep frees.
+                if is_vllm_available(min_version="0.34.0"):
+                    vllm_kwargs["enable_extensible_kv_cache"] = False
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)
@@ -621,14 +625,17 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Ensure use_cache is disabled
         model.config.use_cache = False
 
-        # Enable gradient checkpointing on the base model for PEFT
-        if is_peft_model(model):
-            model.base_model.gradient_checkpointing_enable()
-        # Enable gradient checkpointing for non-PEFT models
+        # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
+        checkpointed_model = model.base_model if is_peft_model(model) else model
+        # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointed_model.activation_checkpointing_enable()
         else:
-            model.gradient_checkpointing_enable()
+            checkpointed_model.gradient_checkpointing_enable()
 
-        model.enable_input_require_grads()
+        # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if Version(transformers.__version__) < Version("5.0.0"):
+            model.enable_input_require_grads()
         return model
 
     def _generate_vllm(self, prompts, images=None):

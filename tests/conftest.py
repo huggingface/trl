@@ -22,8 +22,6 @@ import pytest
 import torch
 from transformers.utils import is_peft_available, is_torch_xpu_available
 
-# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
-import trl  # noqa: F401
 from trl.import_utils import is_vllm_available
 
 
@@ -92,9 +90,6 @@ def pytest_runtest_makereport(item, call):
 
 MODEL_REVISIONS = {
     # Add model_id: revision mappings here to test PRs
-    "trl-internal-testing/tiny-DeepseekV3ForCausalLM": "refs/pr/5",
-    "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528": "refs/pr/6",
-    "trl-internal-testing/tiny-GptOssForCausalLM": "refs/pr/5",
 }
 
 

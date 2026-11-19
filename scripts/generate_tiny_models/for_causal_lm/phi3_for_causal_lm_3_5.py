@@ -36,15 +36,19 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Phi3Config(
     vocab_size=32064,
-    hidden_size=8,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
     max_position_embeddings=131072,
     sliding_window=262144,
-    # One value per frequency band: length is `head_dim // 2`, values are the reference's first band.
-    rope_scaling={"type": "longrope", "short_factor": [1.0], "long_factor": [1.0800000429153442]},
+    # One value per frequency band: length is `head_dim // 2`, values are the reference's first bands.
+    rope_scaling={
+        "type": "longrope",
+        "short_factor": [1.0, 1.0199999809265137, 1.0299999713897705, 1.0299999713897705],
+        "long_factor": [1.0800000429153442, 1.1100000143051147, 1.1399999856948853, 1.340000033378601],
+    },
     attention_bias=False,
 )
 model = Phi3ForCausalLM(config).to(dtype=torch.bfloat16)

@@ -82,8 +82,8 @@ class DPOConfig(_BaseConfig):
         loss_type (`list[str]`, *optional*, defaults to `["sigmoid"]`):
             Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, `'nca_pair'`,
             `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, `'apo_down'`,
-            `'discopop'`, `'sft'`, `'sigmoid_norm'`. If multiple loss types are provided, they will be combined using
-            the weights specified in `loss_weights`.
+            `'discopop'`, `'sft'`, `'sigmoid_norm'`, `'udpo'`. If multiple loss types are provided, they will be
+            combined using the weights specified in `loss_weights`.
         loss_weights (`list[float]`, *optional*):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss types.
@@ -96,15 +96,16 @@ class DPOConfig(_BaseConfig):
             f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
             (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on the
             chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, `'hinge'`,
-            `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid f-divergence
-            generalization and are rejected with a non-default value.
+            `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`, `'udpo'`. The other loss types have no valid
+            f-divergence generalization and are rejected with a non-default value.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
             α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Label smoothing parameter used in Robust DPO and EXO. In Robust DPO, it is interpreted as the probability
-            that a preference label is flipped and must lie in [0.0, 0.5); a typical value recommended by the Robust
-            DPO paper is 0.1. In EXO, it corresponds to the ε label smoothing parameter, for which the paper recommends
-            a typical value of 1e-3.
+            Label smoothing parameter used in Robust DPO, UDPO and EXO. In Robust DPO and UDPO, it is interpreted as
+            the probability ε that a preference label is flipped and must lie in [0.0, 0.5); a typical value
+            recommended by the Robust DPO paper is 0.1. UDPO uses it to set a = ε / (1 - ε), and the UDPO paper
+            recommends a = 0.8, that is ε = 4/9. In EXO, it corresponds to the ε label smoothing parameter, for which
+            the paper recommends a typical value of 1e-3.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
@@ -247,8 +248,8 @@ class DPOConfig(_BaseConfig):
         metadata={
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_unpaired'`, `'apo_zero'`, "
-            "`'apo_down'`, `'discopop'`, `'sft'`, `'sigmoid_norm'`. If multiple loss types are provided, they will be "
-            "combined using the weights specified in `loss_weights`.",
+            "`'apo_down'`, `'discopop'`, `'sft'`, `'sigmoid_norm'`, `'udpo'`. If multiple loss types are provided, "
+            "they will be combined using the weights specified in `loss_weights`.",
         },
     )
     loss_weights: list[float] | None = field(
@@ -274,8 +275,8 @@ class DPOConfig(_BaseConfig):
             "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
             "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on "
             "the chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, "
-            "`'hinge'`, `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid "
-            "f-divergence generalization and are rejected with a non-default value.",
+            "`'hinge'`, `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`, `'udpo'`. The other loss types have "
+            "no valid f-divergence generalization and are rejected with a non-default value.",
         },
     )
     f_alpha_divergence_coef: float = field(
@@ -288,10 +289,11 @@ class DPOConfig(_BaseConfig):
     label_smoothing: float = field(
         default=0.0,
         metadata={
-            "help": "Label smoothing parameter used in Robust DPO and EXO. In Robust DPO, it is interpreted as the "
-            "probability that a preference label is flipped and must lie in [0.0, 0.5); a typical value recommended "
-            "by the Robust DPO paper is 0.1. In EXO, it corresponds to the ε label smoothing parameter, for which the "
-            "paper recommends a typical value of 1e-3."
+            "help": "Label smoothing parameter used in Robust DPO, UDPO and EXO. In Robust DPO and UDPO, it is "
+            "interpreted as the probability ε that a preference label is flipped and must lie in [0.0, 0.5); a typical "
+            "value recommended by the Robust DPO paper is 0.1. UDPO uses it to set a = ε / (1 - ε), and the UDPO paper "
+            "recommends a = 0.8, that is ε = 4/9. In EXO, it corresponds to the ε label smoothing parameter, for which "
+            "the paper recommends a typical value of 1e-3."
         },
     )
     beta: float = field(

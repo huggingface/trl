@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
 import os
 import tempfile
 
@@ -42,7 +41,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
     vocab_size=129280,
-    hidden_size=128,
+    hidden_size=32,
     # DeepSeek-V3 uses MLA, not GQA: kv_b_proj always reconstructs K/V with the full
     # num_attention_heads, so num_key_value_heads must equal num_attention_heads (i.e.
     # num_key_value_groups == 1). A mismatch (e.g. 4/2) is silently ignored by the KV
@@ -51,7 +50,7 @@ config = DeepseekV3Config(
     num_attention_heads=2,
     num_key_value_heads=2,
     num_hidden_layers=2,
-    intermediate_size=128,
+    intermediate_size=32,
     max_position_embeddings=163840,
     rope_scaling={
         "beta_fast": 32.0,
@@ -71,14 +70,14 @@ config = DeepseekV3Config(
 model = DeepseekV3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 
-# FP8 weights, like the reference checkpoint: quantize every linear but lm_head in 128x128 blocks, each block scaled to
-# the e4m3 range, with the scale of each block stored in `weight_scale_inv`. Without a GPU with FP8 support,
-# transformers dequantizes them to bf16 on load
+# FP8 weights, like the reference checkpoint: quantize every linear but lm_head in blocks scaled down from the
+# reference's 128x128 to 32x32, each block scaled to the e4m3 range, with the scale of each block stored in
+# `weight_scale_inv`. Without a GPU with FP8 support, transformers dequantizes them to bf16 on load
 config.quantization_config = {
     "activation_scheme": "dynamic",
     "fmt": "e4m3",
     "quant_method": "fp8",
-    "weight_block_size": [128, 128],
+    "weight_block_size": [32, 32],
 }
 config.architectures = [model.__class__.__name__]
 config.dtype = torch.bfloat16
@@ -87,13 +86,9 @@ for name, module in model.named_modules():
     if isinstance(module, nn.Linear) and name != "lm_head":
         weight = module.weight.float()
         rows, cols = weight.shape
-        # The last blocks are partial where a dimension is not a multiple of 128 (kv_a_proj_with_mqa's 576 rows)
-        padded = torch.zeros(math.ceil(rows / 128) * 128, math.ceil(cols / 128) * 128)
-        padded[:rows, :cols] = weight
-        blocks = padded.view(padded.shape[0] // 128, 128, padded.shape[1] // 128, 128)
+        blocks = weight.view(rows // 32, 32, cols // 32, 32)
         scale = blocks.abs().amax(dim=(1, 3)) / torch.finfo(torch.float8_e4m3fn).max
-        quantized = (blocks / scale[:, None, :, None]).view(padded.shape)[:rows, :cols]
-        state_dict[f"{name}.weight"] = quantized.to(torch.float8_e4m3fn).contiguous()
+        state_dict[f"{name}.weight"] = (blocks / scale[:, None, :, None]).view(rows, cols).to(torch.float8_e4m3fn)
         state_dict[f"{name}.weight_scale_inv"] = scale
 
 check_dtype_pattern(MODEL_ID, state_dict)

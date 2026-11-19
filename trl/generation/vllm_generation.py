@@ -218,7 +218,8 @@ class VLLMGeneration:
             override them.
         return_sampling_mask (`bool`, *optional*, defaults to `False`):
             Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k, top-p
-            and min-p filtering. Colocate mode only. Requires vLLM >= 0.28 and `top_k > 0`.
+            and min-p filtering. Requires vLLM >= 0.28 and `top_k > 0`, and in server mode a server started with
+            `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30).
 
     """
 
@@ -403,6 +404,9 @@ class VLLMGeneration:
                 trust_remote_code=self.trust_remote_code,
                 # Not passed otherwise: vLLM < 0.28 doesn't accept it
                 **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
+                # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
+                # while asleep, so the colocated trainer could not use the memory that sleep frees.
+                **({"enable_extensible_kv_cache": False} if is_vllm_available(min_version="0.34.0") else {}),
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -673,6 +677,7 @@ class VLLMGeneration:
                     "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
                     "generation_kwargs": self.generation_kwargs,
+                    "return_sampling_mask": self.return_sampling_mask,
                 }
                 with profiler:
                     output = self.vllm_client.generate(
@@ -683,6 +688,7 @@ class VLLMGeneration:
                         output["completion_ids"],
                         output["logprobs"],
                         output.get("logprob_token_ids"),
+                        output.get("sampling_mask"),
                     )
             else:
                 payload = None
@@ -690,7 +696,7 @@ class VLLMGeneration:
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
             obj_list = [payload]
             broadcast_object_list(obj_list, from_process=0)
-            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids = obj_list[0]
+            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids, all_sampling_mask = obj_list[0]
 
             # vllm_client.generate(n=num_generations) returns num_generations completions per prompt.
             # Duplicate prompt_ids to align with per-completion entries.
@@ -704,7 +710,7 @@ class VLLMGeneration:
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
             logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
-            sampling_mask = None
+            sampling_mask = all_sampling_mask[process_slice] if all_sampling_mask is not None else None
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
