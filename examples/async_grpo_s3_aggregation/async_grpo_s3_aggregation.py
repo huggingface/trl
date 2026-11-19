@@ -23,10 +23,11 @@
 """Multi-agent team RL with `AsyncGRPOTrainer`: information aggregation with Qwen3-0.6B, a replication of s3
 (https://huggingface.co/papers/2611.08615).
 
-One TRL rollout is one whole team episode: `generate_one` awaits `harness.run_team` (N token-level agents talking to
-the vLLM server, with an in-memory message board) on the rollout loop's event loop, and returns every agent's sampled
-stretches as token turns. Each agent's turns chain into one training row, so a team gives N rows, all with the
-team's advantage.
+One TRL rollout is one whole team episode: `generate_one` awaits `harness.run_team` (N token-level agents with an
+in-memory message board) on the rollout loop's event loop, and returns every agent's sampled stretches as token turns.
+The agents sample through the loop's own `generate_one_turn` (so model versions, LoRA adapters, retries and the
+prefix-cache salt behave as in any TRL rollout) and render prompts with the loop's tokenizer and chat template. Each
+agent's turns chain into one training row, so a team gives N rows, all with the team's advantage.
 
 The paper's objective for information aggregation:
 - Team reward (Eq. 1): R = S * (1 - 0.25 * min(1, sum_i |tau_i| / (N L))), S = any agent's final list is correct,
@@ -67,7 +68,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from datasets import Dataset
-from harness import Settings, VLLMSampler, run_team
+from harness import Chat, Settings, run_team
 
 from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.trainer import async_grpo_trainer
@@ -89,7 +90,47 @@ class TeamConfig(AsyncGRPOConfig):
     team_agents: int = field(default=4, metadata={"help": "agents per team (N)"})
     team_work_tokens: int = field(default=8192, metadata={"help": "per-agent work-phase token allowance"})
     team_final_tokens: int = field(default=1024, metadata={"help": "per-agent final-answer token allowance"})
-    team_model: str = field(default="Qwen/Qwen3-0.6B", metadata={"help": "served model name on the vLLM server"})
+
+
+def team_metrics(ep) -> dict[str, float]:
+    """Per-episode team metrics, averaged over the episodes of a logging step: counts are per team, `frac` ones are
+    over the team's agents."""
+    events = [e for st in ep.agents for e in st.events]
+    sent = [e for e in events if e["kind"] == "message"]
+    ends = [e["reason"] for e in events if e["kind"] == "work_end"]
+    n = len(ep.agents)
+    return {
+        "team/success": float(ep.success),
+        "team/reward": ep.reward,
+        "team/tokens": float(ep.tokens),
+        "team/final_tokens": float(sum(st.final_generated for st in ep.agents)),
+        "team/messages": float(len(sent)),
+        "team/broadcasts": float(sum(e["to"].lower() == "all" for e in sent)),
+        "team/bad_recipients": float(sum(not e["ok"] for e in sent)),
+        "team/reads": float(sum(e["kind"] == "read" for e in events)),
+        "team/notifications": float(sum(e["kind"] == "notified" for e in events)),
+        "team/silent_agent_frac": sum(not any(e["kind"] == "message" for e in st.events) for st in ep.agents) / n,
+        "team/correct_agent_frac": sum(st.answer == ep.problem.target for st in ep.agents) / n,
+        **{f"team/work_end_{r}_frac": ends.count(r) / n for r in ("answered", "idle", "allowance", "context")},
+    }
+
+
+class LoopSampler:
+    """The harness's sampler on `AsyncRolloutLoop.generate_one_turn`, which samples up to `max_completion_length`
+    (the harness's request size) with the config's sampling settings. A request for fewer tokens (the end of an
+    agent's allowance) keeps the first `max_tokens`: a sample cut short is a sample with a smaller limit."""
+
+    def __init__(self, loop: AsyncRolloutLoop):
+        self.loop = loop
+
+    async def generate(self, prompt_ids, max_tokens):
+        turn = await self.loop.generate_one_turn(prompt_ids)
+        ids, lps = list(turn.output_ids), list(turn.output_log_probs)
+        cut = len(ids) > max_tokens
+        ids, lps = ids[:max_tokens], lps[:max_tokens]
+        # vLLM stopped by itself when it returned fewer than max_completion_length tokens or ended on an EOS token
+        stopped = not cut and (len(ids) < self.loop.config.max_completion_length or ids[-1] in self.loop.eos_token_ids)
+        return ids, lps, "stop" if stopped else "length"
 
 
 class TeamRolloutLoop(AsyncRolloutLoop):
@@ -97,8 +138,16 @@ class TeamRolloutLoop(AsyncRolloutLoop):
 
     async def setup(self) -> None:
         c = self.config
-        self._sampler = VLLMSampler(c.vllm_server_base_url, c.team_model)
-        self._settings = Settings(work_tokens=c.team_work_tokens, final_tokens=c.team_final_tokens)
+        if self.sampling_replay:
+            raise ValueError("the team harness keeps no sampling masks: use top_p=1.0 and top_k=0")
+        if c.team_final_tokens > c.max_completion_length:
+            raise ValueError("team_final_tokens must fit in one request of max_completion_length tokens")
+        self._sampler = LoopSampler(self)
+        self._settings = Settings(
+            work_tokens=c.team_work_tokens, final_tokens=c.team_final_tokens, chunk=c.max_completion_length
+        )
+        kwargs = {"enable_thinking": self._settings.enable_thinking, **self.chat_template_kwargs}
+        self._chat = Chat(self.tokenizer, chat_template=self.chat_template, **kwargs)
         self._rng = random.Random(os.getpid())
 
     async def _init_kv_cap(self) -> None:
@@ -107,14 +156,11 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         time. The control loop still lowers the cap when KV cache usage passes 0.8."""
         self._kv_cap = max(1, self.config.max_concurrent_rollouts)
 
-    async def close(self) -> None:
-        await self._sampler.aclose()
-
     async def generate_one(self, prompt, tools, group_id: int = 0) -> Rollout:
         problem = int(prompt[-1]["content"].split("problem:", 1)[1])
         n = self.config.team_agents
         try:
-            ep = await run_team(self._sampler, problem, self._rng.randrange(1 << 31), n, self._settings)
+            ep = await run_team(self._sampler, self._chat, problem, self._rng.randrange(1 << 31), n, self._settings)
         except Exception as e:  # an infrastructure failure: return it unscored, so it gives no rows
             logger.warning("team episode for problem %d failed: %s: %s", problem, type(e).__name__, e)
             self._push_metrics({"team/episode_errors": 1.0})
@@ -140,10 +186,7 @@ class TeamRolloutLoop(AsyncRolloutLoop):
                     )
                 i += k
         completion_ids = [x for tr in turns for x in tr.output_ids]
-        msgs = sum(e["kind"] == "message" for st in ep.agents for e in st.events)
-        self._push_metrics(
-            {"team/success": float(ep.success), "team/tokens": float(ep.tokens), "team/messages": float(msgs)}
-        )
+        self._push_metrics(team_metrics(ep))
         summary = [
             f"problem {problem} seed {ep.problem.seed} target {ep.problem.target} success {ep.success} "
             f"reward {ep.reward:.3f}"
@@ -246,8 +289,8 @@ def main() -> None:
     config = TeamConfig(
         output_dir=a.output_dir,
         team_agents=a.agents,
-        team_model=a.model,
         num_generations=8,  # G team attempts per problem
+        max_completion_length=1024,  # tokens per generation request, so the harness's chunk between notifications
         # TeamBatcher forms one-team micro-batches; the token budget only sizes how far generation may run ahead
         token_budget=a.agents * 40960,
         gradient_accumulation_steps=a.teams_per_update,
