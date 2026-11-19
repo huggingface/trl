@@ -78,6 +78,7 @@ if is_peft_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.model_executor.model_loader.reload import finalize_layerwise_reload, initialize_layerwise_reload
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -813,6 +814,13 @@ class OnlineDPOTrainer(_BaseTrainer):
             # the parameter gathers below.
             with self.vllm_client.weight_update():
                 self._move_model_to_vllm_inner()
+        elif self.vllm_mode == "colocate":
+            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+            # Some vLLM kernels repack the weights after loading them (e.g. FlashInfer TRT-LLM MoE on Blackwell). The
+            # layerwise reload redoes that processing once the new weights are in, as vLLM's own weight transfer does
+            initialize_layerwise_reload(llm_model)
+            self._move_model_to_vllm_inner()
+            finalize_layerwise_reload(llm_model, self.llm.llm_engine.model_config)
         else:
             self._move_model_to_vllm_inner()
 
