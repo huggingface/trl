@@ -20,12 +20,38 @@ import asyncio
 import json
 import re
 
-from harness import Board, Problem, Settings, parse_answer, run_team, team_reward
-from harness.task import after_thinking
+import pytest
+from harness import Board, Chat, Problem, Settings, parse_answer, run_team, team_reward
+from harness.task import TOOLS, after_thinking
 
 
-END_ID = 1
+SPECIAL = {"<|im_end|>": 1, "<|im_start|>": 2}
 READ = r'"from": "agent_\d+", "text": "number (\d+)"'  # a read result, not our own sent text
+
+
+class CharTokenizer:
+    """Characters as tokens, two special tokens, and a ChatML template that renders tool outputs like Qwen3's."""
+
+    def apply_chat_template(self, messages, tools=None, chat_template=None, add_generation_prompt=False, **kwargs):
+        out = ""
+        for i, m in enumerate(messages):
+            if m["role"] != "tool":
+                out += f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n"
+                continue
+            if i == 0 or messages[i - 1]["role"] != "tool":
+                out += "<|im_start|>user"
+            out += f"\n<tool_response>\n{m['content']}\n</tool_response>"
+            if i == len(messages) - 1 or messages[i + 1]["role"] != "tool":
+                out += "<|im_end|>\n"
+        return out + ("<|im_start|>assistant\n" if add_generation_prompt else "")
+
+    def encode(self, text, add_special_tokens=False):
+        parts = re.split(r"(<\|im_end\|>|<\|im_start\|>)", text)
+        return [i for p in parts for i in ([SPECIAL[p]] if p in SPECIAL else [ord(c) for c in p])]
+
+    def decode(self, ids, skip_special_tokens=False):
+        names = {v: k for k, v in SPECIAL.items()}
+        return "".join(names.get(t, chr(t)) for t in ids)
 
 
 class FakeSampler:
@@ -36,14 +62,9 @@ class FakeSampler:
         self.silent = silent
         self.pending: dict[str, str] = {}
 
-    async def chat_prompt(self, messages, tools, enable_thinking):
-        return [ord(c) for c in messages[0]["content"] + "\n" + messages[1]["content"] + "\n"]
-
-    async def encode(self, text):
-        return [END_ID] if text == "<|im_end|>" else [ord(c) for c in text]
-
-    async def generate(self, prompt, max_tokens, temperature):
-        ctx = "".join(chr(t) if t > 1 else "<|im_end|>" for t in prompt)
+    async def generate(self, prompt, max_tokens):
+        tok = CharTokenizer()
+        ctx = tok.decode(prompt)
         name = re.search(r"Your name is (agent_\d+)", ctx).group(1)
         n = len(re.search(r"Your teammates: (.*)\.", ctx).group(1).split(", ")) + 1
         await asyncio.sleep(0)  # let teammates interleave
@@ -67,10 +88,11 @@ class FakeSampler:
             text = '<think>notified</think><tool_call>\n{"name": "read_messages", "arguments": {}}\n</tool_call>'
         else:
             text = "<think>nothing to do; wait</think>ok"
-        out, rest = text[:max_tokens], text[max_tokens:]
+        ids = tok.encode(text + "<|im_end|>")
+        out, rest = ids[:max_tokens], ids[max_tokens:]
         if rest:
-            self.pending[name] = (len(prompt) + len(out), rest)
-        return [ord(c) for c in out], [-0.5] * len(out), out, "length" if rest else "stop"
+            self.pending[name] = (len(prompt) + len(out), tok.decode(rest)[: -len("<|im_end|>")])
+        return out, [-0.5] * len(out), "length" if rest else "stop"
 
 
 def team(silent=frozenset(), chunk=40, n=4):
@@ -78,7 +100,41 @@ def team(silent=frozenset(), chunk=40, n=4):
     fake = FakeSampler(silent=frozenset(p.names[i] for i in silent))
     fake.own = dict(zip(p.names, p.numbers, strict=True))
     s = Settings(chunk=chunk, work_tokens=4000, final_tokens=200)
-    return p, asyncio.run(run_team(fake, 3, 11, n, s)), s
+    return p, asyncio.run(run_team(fake, Chat(CharTokenizer()), 3, 11, n, s)), s
+
+
+def test_chat_appends_what_the_template_renders_after_an_assistant_turn():
+    chat = Chat(CharTokenizer())
+    assert chat.decode(chat.close) == "<|im_end|>\n"
+    two = chat.then([{"role": "tool", "content": "a"}, {"role": "tool", "content": "b"}])
+    assert chat.decode(two) == (
+        "<|im_end|>\n<|im_start|>user\n<tool_response>\na\n</tool_response>\n<tool_response>\nb\n"
+        "</tool_response><|im_end|>\n<|im_start|>assistant\n"
+    )
+
+
+def test_chat_matches_the_qwen3_chat_template():
+    """With Qwen3's template, `Chat` appends exactly the ChatML text that the harness used to write by hand."""
+    transformers = pytest.importorskip("transformers")
+    try:
+        tok = transformers.AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    except OSError:
+        pytest.skip("Qwen/Qwen3-0.6B tokenizer not available")
+    chat = Chat(tok, enable_thinking=True)
+    enc = lambda text: tok.encode(text, add_special_tokens=False)  # noqa: E731
+    assert chat.close == enc("<|im_end|>") + enc("\n")
+    results = ['{"status": "sent", "to": "all"}', '{"unread_by_sender": {"agent_3": 1}}']
+    by_hand = "\n".join(f"<tool_response>\n{r}\n</tool_response>" for r in results)
+    assert chat.then([{"role": "tool", "content": r} for r in results]) == chat.close + enc(
+        f"<|im_start|>user\n{by_hand}<|im_end|>\n<|im_start|>assistant\n"
+    )
+    final = "Submit the sorted list now."
+    assert chat.then([{"role": "user", "content": final}]) == chat.close + enc(
+        f"<|im_start|>user\n{final}<|im_end|>\n<|im_start|>assistant\n"
+    )
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    rendered = tok.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True, enable_thinking=True)
+    assert chat.prompt(messages) == list(rendered if isinstance(rendered, list) else rendered["input_ids"])
 
 
 def test_scripted_team_shares_reads_and_answers_through_chunks_and_notifications():

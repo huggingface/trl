@@ -30,7 +30,8 @@ import math
 import time
 from pathlib import Path
 
-from harness import Settings, VLLMSampler, run_team
+from harness import Chat, Settings, VLLMSampler, run_team
+from transformers import AutoTokenizer
 
 
 HELD_OUT = 1_000_000
@@ -40,6 +41,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--tokenizer", help="defaults to --model")
     ap.add_argument("--name", required=True)
     ap.add_argument("--out")
     ap.add_argument("--n", type=int, default=4)
@@ -52,15 +54,16 @@ async def main() -> None:
 
     out = Path(a.out or f"runs/{a.name}.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
-    sampler = VLLMSampler(a.url, a.model)
     s = Settings(work_tokens=a.work_tokens, final_tokens=a.final_tokens)
+    sampler = VLLMSampler(a.url, a.model, s.temperature)
+    chat = Chat(AutoTokenizer.from_pretrained(a.tokenizer or a.model), enable_thinking=s.enable_thinking)
     sem = asyncio.Semaphore(a.concurrency)
     done, ok, t0 = 0, 0, time.monotonic()
 
     async def one(i: int, f) -> None:
         nonlocal done, ok
         async with sem:
-            ep = await run_team(sampler, HELD_OUT + i, i, a.n, s)
+            ep = await run_team(sampler, chat, HELD_OUT + i, i, a.n, s)
         f.write(json.dumps({"model": a.model, **ep.summary(with_tokens=a.save_tokens)}) + "\n")
         f.flush()
         done, ok = done + 1, ok + ep.success

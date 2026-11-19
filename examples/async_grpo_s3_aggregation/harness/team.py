@@ -14,18 +14,17 @@
 
 """The s3 harness (§3.1, Appendix F): N asynchronous token-level agents, an in-memory board, one team episode.
 
-Each agent works against a vLLM server token by token, so the exact sampled tokens and their sampling logprobs are
-kept for training:
-- The first prompt is the system prompt and first user turn, rendered with the chat template and the paper's tools
-  by the server's `/tokenize`. From then on the context only grows: tool results, notifications and the final
-  request are appended as tokens, never re-rendered.
-- Generation runs in requests of at most `chunk` (1,024) new tokens on the token ids. At a request boundary a new
-  message arrival is delivered as a notification, appended as a tool output (App. F: "the sampled prefix is kept
-  unchanged, a notification is appended as a tool output, and the agent continues"); with the chat template that
-  closes the assistant message in progress.
-- A complete response with tool calls runs them and appends their results (plus a notification if messages arrived).
-  A response with neither a tool call nor an answer makes the agent idle until a message it has not been told about
-  arrives. When every agent is idle or finished, the work phase ends.
+Each agent works on token ids, so the exact sampled tokens and their sampling logprobs are kept for training:
+- `Chat` renders text with the tokenizer's chat template. The first prompt is the system prompt and first user turn
+  with the paper's tools. From then on the context only grows: the template's rendering of each new message (tool
+  results, notifications, the final request) is appended as tokens, and earlier turns are never re-rendered.
+- A sampler generates at most `chunk` (1,024) new tokens per request. At a request boundary a new message arrival is
+  delivered as a notification, appended as a tool output (App. F: "the sampled prefix is kept unchanged, a
+  notification is appended as a tool output, and the agent continues"); with the chat template that closes the
+  assistant message in progress.
+- A complete response with tool calls runs them on the agent's `AgentTools` and appends their results (plus a
+  notification if messages arrived). A response with neither a tool call nor an answer makes the agent idle until a
+  message it has not been told about arrives. When every agent is idle or finished, the work phase ends.
 - An agent that has not answered when its work phase ends (idle with nobody left to wake it, `work_tokens` spent,
   or the context full) is asked once with the final-answer request and gets `final_tokens` more.
 
@@ -38,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import httpx
 
@@ -56,7 +56,6 @@ from .task import (
 
 
 READ_LIMIT = 16
-END = "<|im_end|>"
 
 
 @dataclass
@@ -74,78 +73,92 @@ class Settings:
         return self.work_tokens + self.final_tokens
 
 
+class Sampler(Protocol):
+    async def generate(self, prompt_ids: list[int], max_tokens: int) -> tuple[list[int], list[float], str]:
+        """Sample at most `max_tokens` after `prompt_ids`: the token ids, their sampling logprobs, and the finish
+        reason, `"length"` when cut at `max_tokens` and `"stop"` otherwise."""
+
+
 class VLLMSampler:
-    """`/tokenize` for the chat template, `/v1/completions` on token ids with the sampled ids and logprobs.
+    """`/v1/completions` on token ids, for evaluating a served model outside the trainer (the trainer samples through
+    its rollout loop instead)."""
 
-    The harness only calls `chat_prompt`, `encode` and `generate`, so a test can swap in a scripted fake."""
-
-    def __init__(self, base_url: str, model: str, client: httpx.AsyncClient | None = None, timeout_s: float = 900.0):
-        self.base_url, self.model = base_url.rstrip("/").removesuffix("/v1"), model
+    def __init__(self, base_url: str, model: str, temperature: float = 1.0, timeout_s: float = 900.0):
+        self.base_url, self.model, self.temperature = base_url.rstrip("/").removesuffix("/v1"), model, temperature
         # uvicorn closes idle keep-alive connections after 5 s; idle agents leave pooled ones longer than that, so
         # expire them first (a reused dead connection fails with ReadError)
-        self.client = client or httpx.AsyncClient(
+        self.client = httpx.AsyncClient(
             timeout=timeout_s,
             limits=httpx.Limits(max_connections=None, max_keepalive_connections=512, keepalive_expiry=2.0),
         )
-        self._cache: dict[str, list[int]] = {}
 
-    async def _post(self, path: str, body: dict, attempts: int = 5) -> dict:
-        """Transport errors are retried: nothing is appended to an agent's context until a response arrives."""
-        for k in range(attempts):
+    async def generate(self, prompt_ids, max_tokens):
+        body = {
+            "model": self.model,
+            "prompt": prompt_ids,
+            "max_tokens": max_tokens,
+            "temperature": self.temperature,
+            "top_p": 1.0,
+            "logprobs": 0,
+            "return_token_ids": True,
+        }
+        for k in range(5):  # transport errors are retried: nothing is appended to a context until a response arrives
             try:
-                r = await self.client.post(f"{self.base_url}{path}", json=body)
+                r = await self.client.post(f"{self.base_url}/v1/completions", json=body)
                 r.raise_for_status()
-                return r.json()
+                break
             except (httpx.TransportError, httpx.HTTPStatusError) as e:
-                if k == attempts - 1 or (isinstance(e, httpx.HTTPStatusError) and e.response.status_code < 500):
+                if k == 4 or (isinstance(e, httpx.HTTPStatusError) and e.response.status_code < 500):
                     raise
                 await asyncio.sleep(0.5 * 2**k)
-        raise AssertionError("unreachable")
-
-    async def chat_prompt(self, messages, tools, enable_thinking):
-        out = await self._post(
-            "/tokenize",
-            {
-                "model": self.model,
-                "messages": messages,
-                "tools": tools,
-                "add_generation_prompt": True,
-                "chat_template_kwargs": {"enable_thinking": enable_thinking},
-            },
-        )
-        return list(out["tokens"])
-
-    async def encode(self, text):
-        if text not in self._cache:
-            out = await self._post("/tokenize", {"model": self.model, "prompt": text, "add_special_tokens": False})
-            ids = list(out["tokens"])
-            if len(text) > 64:
-                return ids
-            self._cache[text] = ids
-        return list(self._cache[text])
-
-    async def generate(self, prompt, max_tokens, temperature):
-        out = await self._post(
-            "/v1/completions",
-            {
-                "model": self.model,
-                "prompt": prompt,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "top_p": 1.0,
-                "logprobs": 0,
-                "return_tokens_as_token_ids": True,
-                "skip_special_tokens": False,
-            },
-        )
-        c = out["choices"][0]
-        lp = c.get("logprobs") or {}
-        ids = [int(t.split(":", 1)[1]) for t in lp.get("tokens") or []]
-        lps = [float(x) if x is not None else 0.0 for x in lp.get("token_logprobs") or []]
-        return ids, lps, c.get("text") or "", c.get("finish_reason") or "stop"
+        c = r.json()["choices"][0]
+        lps = [float(x) if x is not None else 0.0 for x in c["logprobs"]["token_logprobs"]]
+        return list(c["token_ids"]), lps, c.get("finish_reason") or "stop"
 
     async def aclose(self):
         await self.client.aclose()
+
+
+class Chat:
+    """The chat template as token ids that only grow.
+
+    `then(messages)` is what the template renders for `messages` after an assistant turn: the turn's close, the
+    messages and the generation prompt, read off a rendering behind a placeholder assistant turn. `close` is the
+    close alone; when the model has already sampled the close's first token (its end-of-turn token), the rest of the
+    close is all that is still missing."""
+
+    _MARK = "\x00assistant turn\x00"
+
+    def __init__(self, tokenizer, tools=TOOLS, chat_template=None, **chat_template_kwargs):
+        self.tok, self.tools, self.template, self.kwargs = tokenizer, tools, chat_template, chat_template_kwargs
+        self._close_text = self._after([], add_generation_prompt=False)
+        self.close = self.tok.encode(self._close_text, add_special_tokens=False)
+
+    def _render(self, messages, add_generation_prompt):
+        return self.tok.apply_chat_template(
+            messages,
+            tools=self.tools,
+            chat_template=self.template,
+            add_generation_prompt=add_generation_prompt,
+            tokenize=False,
+            **self.kwargs,
+        )
+
+    def _after(self, messages, add_generation_prompt=True):
+        turn = [{"role": "user", "content": "."}, {"role": "assistant", "content": self._MARK}]
+        return self._render(turn + messages, add_generation_prompt).split(self._MARK, 1)[1]
+
+    def prompt(self, messages) -> list[int]:
+        return self.tok.encode(self._render(messages, True), add_special_tokens=False)
+
+    def then(self, messages) -> list[int]:
+        text = self._after(messages)
+        if not text.startswith(self._close_text):
+            raise ValueError("the chat template does not render messages after an assistant turn as an append")
+        return self.close + self.tok.encode(text[len(self._close_text) :], add_special_tokens=False)
+
+    def decode(self, ids) -> str:
+        return self.tok.decode(ids, skip_special_tokens=False)
 
 
 @dataclass
@@ -213,6 +226,55 @@ class Board:
             self._idle.clear()
 
 
+class AgentTools:
+    """One agent's tools (Table 2): its public methods are the tools the model can call, on the team's board.
+
+    Their schemas in the prompt are `task.TOOLS`, the paper's Table 2 text."""
+
+    def __init__(self, board: Board, name: str, teammates: list[str], events: list[dict]):
+        self.board, self.name, self.teammates, self.events = board, name, teammates, events
+        self.at = 0  # the agent's context length, for the event log
+
+    def message(self, to: str, text: str) -> str:
+        if not isinstance(to, str) or not isinstance(text, str):
+            return json.dumps({"error": "message needs `to` (a teammate's name or all) and `text`"})
+        to = to.strip()
+        target = "all" if to.lower() == "all" else to
+        ok = target == "all" or target in self.teammates
+        self.events.append({"kind": "message", "at": self.at, "to": to, "text": text, "ok": ok})
+        if not ok:
+            return json.dumps({"error": f"unknown recipient {to!r}; use one of {self.teammates} or all"})
+        self.board.post(self.name, target, text)
+        return json.dumps({"status": "sent", "to": to})
+
+    def read_messages(self) -> str:
+        msgs = [{"from": m.sender, "text": m.text} for m in self.board.read(self.name)]
+        self.events.append({"kind": "read", "at": self.at, "n": len(msgs), "from": [m["from"] for m in msgs]})
+        return json.dumps({"messages": msgs})
+
+    def check_notifications(self) -> str:
+        counts: dict[str, int] = {}
+        for m in self.board.unread(self.name):
+            counts[m.sender] = counts.get(m.sender, 0) + 1
+        return json.dumps({"unread_by_sender": counts})
+
+    def _run(self, call: dict) -> str:
+        """Run one parsed `<tool_call>` body: `{"name": ..., "arguments": {...}}`."""
+        name, args = call.get("name"), call.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                return json.dumps({"error": "arguments are not valid JSON"})
+        if not isinstance(args, dict):
+            return json.dumps({"error": "arguments must be an object"})
+        if name == "message":
+            return self.message(args.get("to"), args.get("text"))
+        if name in ("read_messages", "check_notifications"):
+            return getattr(self, name)()  # no arguments: any given are ignored
+        return json.dumps({"error": f"unknown tool {name!r}"})
+
+
 @dataclass
 class AgentState:
     name: str
@@ -228,36 +290,37 @@ class AgentState:
 
 
 class Agent:
-    def __init__(self, i: int, problem: Problem, board: Board, sampler: VLLMSampler, s: Settings):
-        self.p, self.board, self.sampler, self.s = problem, board, sampler, s
+    def __init__(self, i: int, problem: Problem, board: Board, sampler: Sampler, chat: Chat, s: Settings):
+        self.p, self.board, self.sampler, self.chat, self.s = problem, board, sampler, chat, s
         self.n = len(problem.names)
         self.st = AgentState(problem.names[i], problem.numbers[i])
         self.teammates = problem.teammates[i]
+        self.tools = AgentTools(board, self.st.name, self.teammates, self.st.events)
         self.notified: set[int] = set()
-        self._end: set[int] = set()
+        self._finish = "stop"
 
     # ---- tokens -------------------------------------------------------------------------------------------------
-    async def _env(self, text: str) -> None:
-        ids = await self.sampler.encode(text)
-        self.st.tokens += ids
-        self.st.mask += [0] * len(ids)
-        self.st.logprobs += [0.0] * len(ids)
-
-    async def _gen(self, max_tokens: int) -> tuple[str, str]:
-        ids, lps, text, finish = await self.sampler.generate(self.st.tokens, max_tokens, self.s.temperature)
-        self.st.tokens += ids
-        self.st.mask += [1] * len(ids)
-        self.st.logprobs += lps
-        return text, finish
-
-    async def _close_assistant(self, finish: str) -> None:
+    async def _gen(self, max_tokens: int) -> str:
         st = self.st
-        if not (finish == "stop" and st.mask and st.mask[-1] == 1 and st.tokens[-1] in self._end):
-            await self._env(END)
-        await self._env("\n")
+        ids, lps, self._finish = await self.sampler.generate(st.tokens, max_tokens)
+        st.tokens += ids
+        st.mask += [1] * len(ids)
+        st.logprobs += lps
+        self.tools.at = len(st.tokens)
+        return self.chat.decode(ids)
 
-    async def _user(self, body: str) -> None:
-        await self._env(f"<|im_start|>user\n{body}{END}\n<|im_start|>assistant\n")
+    def _then(self, messages: list[dict]) -> None:
+        """Close the assistant turn in progress and append `messages` with the generation prompt."""
+        st, ids = self.st, self.chat.then(messages)
+        if self._finish == "stop" and st.mask[-1] == 1 and st.tokens[-1] == ids[0]:
+            ids = ids[1:]  # the model ended its turn itself
+        st.tokens += ids
+        st.mask += [0] * len(ids)
+        st.logprobs += [0.0] * len(ids)
+        self.tools.at = len(st.tokens)
+
+    def _tool_results(self, results: list[str]) -> None:
+        self._then([{"role": "tool", "content": r} for r in results])
 
     # ---- board --------------------------------------------------------------------------------------------------
     def _notice(self) -> str | None:
@@ -271,50 +334,11 @@ class Agent:
         self.st.events.append({"kind": "notified", "at": len(self.st.tokens), "unread": counts})
         return notice(counts)
 
-    def _tool(self, call: dict) -> str:
-        name, args = call.get("name"), call.get("arguments") or {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                return json.dumps({"error": "arguments are not valid JSON"})
-        if not isinstance(args, dict):
-            return json.dumps({"error": "arguments must be an object"})
-        if name == "message":
-            to, text = args.get("to"), args.get("text")
-            if not isinstance(to, str) or not isinstance(text, str):
-                return json.dumps({"error": "message needs `to` (a teammate's name or all) and `text`"})
-            to = to.strip()
-            target = "all" if to.lower() == "all" else to
-            ok = target == "all" or target in self.teammates
-            self.st.events.append({"kind": "message", "at": len(self.st.tokens), "to": to, "text": text, "ok": ok})
-            if not ok:
-                return json.dumps({"error": f"unknown recipient {to!r}; use one of {self.teammates} or all"})
-            self.board.post(self.st.name, target, text)
-            return json.dumps({"status": "sent", "to": to})
-        if name == "read_messages":
-            msgs = [{"from": m.sender, "text": m.text} for m in self.board.read(self.st.name)]
-            self.st.events.append(
-                {"kind": "read", "at": len(self.st.tokens), "n": len(msgs), "from": [m["from"] for m in msgs]}
-            )
-            return json.dumps({"messages": msgs})
-        if name == "check_notifications":
-            counts: dict[str, int] = {}
-            for m in self.board.unread(self.st.name):
-                counts[m.sender] = counts.get(m.sender, 0) + 1
-            return json.dumps({"unread_by_sender": counts})
-        return json.dumps({"error": f"unknown tool {name!r}"})
-
     # ---- the episode --------------------------------------------------------------------------------------------
     async def run(self) -> AgentState:
         st, i = self.st, self.p.names.index(self.st.name)
-        st.tokens = await self.sampler.chat_prompt(
-            opening(st.name, self.teammates, self.n, self.p.numbers[i], self.s.token_cost),
-            TOOLS,
-            self.s.enable_thinking,
-        )
+        st.tokens = self.chat.prompt(opening(st.name, self.teammates, self.n, self.p.numbers[i], self.s.token_cost))
         st.mask, st.logprobs, st.prompt_len = [0] * len(st.tokens), [0.0] * len(st.tokens), len(st.tokens)
-        self._end = set(await self.sampler.encode(END))
         s, segment = self.s, ""
         try:
             while True:
@@ -324,17 +348,14 @@ class Agent:
                     reason = "allowance" if st.work_generated >= s.work_tokens else "context"
                     break
                 before = len(st.tokens)
-                text, finish = await self._gen(min(s.chunk, room))
+                segment += await self._gen(min(s.chunk, room))
                 st.work_generated += len(st.tokens) - before
-                segment += text
-                if finish == "length":  # a request boundary: deliver a notification if one is due
+                if self._finish == "length":  # a request boundary: deliver a notification if one is due
                     note = self._notice()
                     if note is not None:
-                        await self._close_assistant(finish)
-                        await self._user(f"<tool_response>\n{note}\n</tool_response>")
+                        self._tool_results([note])
                         segment = ""
                     continue
-                await self._close_assistant(finish)
                 visible = after_thinking(segment)
                 segment = ""
                 calls = []
@@ -346,13 +367,13 @@ class Agent:
                         calls.append({"_bad": raw})
                 if calls:
                     results = [
-                        json.dumps({"error": "tool call is not valid JSON"}) if "_bad" in c else self._tool(c)
+                        json.dumps({"error": "tool call is not valid JSON"}) if "_bad" in c else self.tools._run(c)
                         for c in calls
                     ]
                     note = self._notice()
                     if note is not None:
                         results.append(note)
-                    await self._user("\n".join(f"<tool_response>\n{r}\n</tool_response>" for r in results))
+                    self._tool_results(results)
                     continue
                 answer = parse_answer(visible)
                 if answer is not None:
@@ -366,16 +387,16 @@ class Agent:
                     reason = "idle"
                     break
                 st.events.append({"kind": "woken", "at": len(st.tokens)})
-                await self._user(f"<tool_response>\n{self._notice()}\n</tool_response>")
+                self._tool_results([self._notice()])
         except BaseException:
             if not self.board.stalled:
                 self.board.finish(st.name)  # never leave teammates parked on an agent that died
             raise
         st.events.append({"kind": "work_end", "at": len(st.tokens), "reason": reason})
         if st.answer is None:
-            await self._user(FINAL_REQUEST.format(n=count_words(self.n)))
+            self._then([{"role": "user", "content": FINAL_REQUEST.format(n=count_words(self.n))}])
             before = len(st.tokens)
-            text, _ = await self._gen(self.s.final_tokens)
+            text = await self._gen(self.s.final_tokens)
             st.final_generated = len(st.tokens) - before
             st.answer = parse_answer(after_thinking(text)) or []
             st.events.append({"kind": "submit", "at": len(st.tokens), "phase": "final", "answer": st.answer})
@@ -418,11 +439,13 @@ class Episode:
         return out
 
 
-async def run_team(sampler: VLLMSampler, problem: int, seed: int, n: int = 4, s: Settings | None = None) -> Episode:
+async def run_team(
+    sampler: Sampler, chat: Chat, problem: int, seed: int, n: int = 4, s: Settings | None = None
+) -> Episode:
     s = s or Settings()
     p = Problem.make(problem, seed, n)
     board = Board(p.names)
-    agents = [Agent(i, p, board, sampler, s) for i in range(n)]
+    agents = [Agent(i, p, board, sampler, chat, s) for i in range(n)]
     async with asyncio.TaskGroup() as tg:  # one agent failing cancels the rest (they release the board)
         tasks = [tg.create_task(a.run()) for a in agents]
     states = [t.result() for t in tasks]
