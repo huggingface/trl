@@ -67,7 +67,7 @@ Some argument combinations are intentionally restricted in the current [`AsyncGR
 - Sharded training uses FSDP2. DeepSpeed is not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
 - `use_liger_kernel=True` is not supported.
 - PEFT adapters targeting `lm_head` are not supported.
-- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...), which need `transformers>=5.15.0`.
+- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...) and the Mamba2 layers of Nemotron-H hybrids (Nemotron 3), which need `transformers>=5.15.0`.
 - Images are not supported, see [Training Vision Language Models](#training-vision-language-models).
 
 Training loads its attention kernel from the Hub through the [`kernels`](https://github.com/huggingface/kernels) library: [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) on AMD GPUs (ROCm), [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
@@ -384,6 +384,7 @@ A few consequences:
 - **Nothing shared is plain packing**: every sample is then its own segment, which is ordinary padding-free packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with grouped-query attention.
 - **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, ...): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state.
+- **Mamba2 hybrids are supported** (Nemotron-H, Nemotron 3): like gated DeltaNet, their convolution reads each token's own predecessors, and their chunked scan starts each segment from its parent's final state.
 
 `token_budget` bounds the tokens of a row, counting a shared token once. By default, it is the server's `max_model_len`, so no sample can exceed it. With nothing shared, tree packing runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8 to 3x at a ratio of 3.4 on Qwen3-0.6B and 1.7B, on H100). The ratio is shared prefix times samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`. `batch/row_fill_frac` matters when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the planner often gets two and the row runs about 77% full), while 1k-token samples tile it almost perfectly.
 

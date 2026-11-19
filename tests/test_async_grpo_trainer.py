@@ -898,7 +898,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
                 marks=pytest.mark.xfail(
-                    raises=ValueError, reason="Mamba layers are not supported (#8232)", strict=True
+                    raises=RuntimeError,
+                    reason="Flash Attention rejects the tiny model's head dim of 2 (#8446)",
+                    strict=True,
                 ),
             ),
             "trl-internal-testing/tiny-PhimoeForCausalLM",
@@ -911,12 +913,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                     "within 20 minutes"
                 ),
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
-                marks=pytest.mark.xfail(
-                    raises=ValueError, reason="Mamba layers are not supported (#8233)", strict=True
-                ),
-            ),
+            "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
         ],
     )
     def test_train(self, model_id, make_vllm_server):
@@ -4291,6 +4288,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron-h-mamba2"),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv", marks=_LFM2_CONV_BEFORE_5_22),
         pytest.param(
             "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv", marks=_LFM2_CONV_BEFORE_5_22
@@ -4387,7 +4385,7 @@ class TestTreePackingParity(TrlTestCase):
             train_dataset=dataset,
         )
         trainer.current_gradient_accumulation_steps = 1
-        model = trainer.model.to(torch_device)
+        model = trainer.model.to(torch_device).train()
         for name, param in model.named_parameters():
             if name.endswith(("A_log", "dt_bias")):
                 param.data.fill_(-4.0)
@@ -4435,7 +4433,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "match"),
         [
-            pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
         ],
