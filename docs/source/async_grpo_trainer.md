@@ -448,7 +448,6 @@ Every weight sync has to get the updated policy to the server. By default the tr
 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
-    --api-server-count 8 \
     --max-model-len 4096 \
     --enable-lora \
     --max-lora-rank 32 \
@@ -456,6 +455,8 @@ VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name
 ```
 
 `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Keep `--weight-transfer-config` even with `--enable-lora`: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+
+vLLM doesn't start when `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` is combined with more than one API server, so leave `--api-server-count 8` out of this command. With a single API server, the top log-probabilities requested by score centering halve generation throughput (see [Configuring the vLLM server](#configuring-the-vllm-server)). To avoid that, train with `score_centering=False` or use merged sync, which works with `--api-server-count 8`.
 
 `--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
