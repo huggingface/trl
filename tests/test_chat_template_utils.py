@@ -57,6 +57,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
@@ -1344,6 +1345,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
             id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", muse_glimmer_v2_chat_template),
+            id="muse_glimmer_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
