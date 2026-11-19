@@ -45,6 +45,10 @@ DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-V3`). Same as `de
 
 DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings.
 
+### `deepseekv3_v5.jinja`
+
+DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepseek-ai/DeepSeek-V3.1-Terminus` and `deepseek-ai/DeepSeek-V3.1-Base`). Unlike the earlier DeepSeek templates, it opens each assistant turn with `<｜Assistant｜>` followed by `</think>`, or by `<think>` in the generation prompt when `thinking=True`, and renders tool calls as `name<｜tool▁sep｜>arguments` with no type or JSON fence. It drops the reasoning from assistant content, and renders tool-call arguments only as strings.
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -341,6 +345,10 @@ Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`,
 ### `deepseekv3_v4_training.jinja`
 
 Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v4.jinja` (which has no `'</think>'` split to remove): `| tojson` on tool-call arguments, and `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs left outside them, and `message.get('content')` for the content check.
+
+### `deepseekv3_v5_training.jinja`
+
+Patched DeepSeek-V3.1 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v5.jinja`: `| tojson` on tool-call arguments, the `'</think>'` split removed, `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜Assistant｜>` and the think tag that open an assistant turn left outside them, and `message.get('content')` for the content check. It also opens the assistant turn with `<think>` whenever `thinking=True`, as the generation prompt does, where the original does so only for a prefix message.
 
 ### `diffusion_gemma_training.jinja`
 

@@ -267,7 +267,7 @@ jobs:
             "math-verify==0.8.0" \
             "numpy==1.26.0" \
             "pandas==2.1.1" \
-            "peft==0.17.0" \
+            "peft==0.18.0" \
             "psutil==5.9.4" \
             "pyarrow==21.0.0" \
             "pyyaml==6.0.1" \
