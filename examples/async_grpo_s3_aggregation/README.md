@@ -111,7 +111,7 @@ teams. Add `--save-tokens` to keep each agent's full token context.
 
 ## Results
 
-50 updates of 128 teams on 2 H100s took about 2.9 hours.
+50 updates of about 150 teams on 2 H100s took about 4.9 hours.
 
 ![Training curves](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/s3_aggregation_training.png)
 
@@ -119,26 +119,23 @@ Training success (teams solved, mean over 5-update blocks):
 
 | updates | 1-5 | 6-10 | 11-15 | 16-20 | 21-25 | 26-30 | 31-35 | 36-40 | 41-45 | 46-50 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| success | 5.6% | 7.2% | 7.0% | 8.6% | 12.8% | 15.5% | 21.2% | 25.9% | 36.4% | 34.9% |
+| success | 7.3% | 7.8% | 10.7% | 14.2% | 18.8% | 26.1% | 30.0% | 33.3% | 41.7% | 46.6% |
 
-Messages per team rose from 3.6 to 4.9. Tokens per team stayed at about 13.3k out of a 36.9k team allowance. The
-mean importance ratio stayed at about 0.996.
+Messages per team rose from 4.0 to 6.0, and the share of agents that never sent a message fell from 28% to 13%.
+Tokens per team went from 12.9k to 13.9k out of a 36.9k team allowance. The mean importance ratio stayed at 1.00.
 
 Held-out evaluation (192 problems, 64 teams in flight):
 
-| model | success | messages / team | tokens / team | most common failure |
-| --- | --- | --- | --- | --- |
-| Qwen3-0.6B | 9.4% (SE 2.1) | 3.90 | 13.4k | an agent never messaged (81% of failures) |
-| checkpoint-50 | **49.5%** (SE 3.6) | 5.51 | 13.1k | an agent never messaged (68% of failures) |
+| model | success | messages / team | tokens / team |
+| --- | --- | --- | --- |
+| Qwen3-0.6B | 4.7% (SE 1.5) | 4.14 | 13.1k |
+| checkpoint-50 | **55.2%** (SE 3.6) | 6.55 | 14.4k |
 
-A second base run with 8 teams in flight gave 6.8% (SE 1.8). For comparison, the paper reports 1.6% for the base
-model and 93.2% after 200 updates. Our base is higher, probably because parts of the paper's system prompt are
-unpublished and left out here (marked in `harness/task.py`). At 50 updates the curve is still rising.
+For comparison, the paper reports 1.6% for the base model and 93.2% after 200 updates. At 50 updates the curve is
+still rising.
 
-The training curves above come from an earlier version of this code with the same prompts, tools, reward and
-trainer settings, except that it sampled from the vLLM server directly instead of through `generate_one_turn`, put
-one team in each micro-batch (128 per update) instead of weighting rows by team, and started at 128 teams in
-flight. The checkpoint was then evaluated with the harness in this folder.
+The run used this code except for the loss: it scaled each team's advantage by its group's mean team length over its
+own, which makes TRL's token mean weigh teams about equally, instead of computing Eq. 3 exactly.
 
 ## Deviations from the paper
 
