@@ -75,7 +75,7 @@ else: raise SystemExit('gateway startup failed')
 PYWAIT
 common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations 16 --max-staleness 4 --agent-timeout 1800 --max-turns 64 --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
 if [[ "$1" == smoke ]]; then
- accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
+ accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
  python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
  exit
 fi
@@ -94,4 +94,4 @@ admission=$((end - 2700))
 collection=$((end - 600))
 budget=$((end - $(date +%s) - 600))
 [[ "$budget" -gt 3600 ]] || { echo 'Insufficient allocation remains after validation'; exit 1; }
-accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1
+accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1

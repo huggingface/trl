@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=trl-swarm-full-16agents
 #SBATCH --partition=hopper-prod
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=88
@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 start_server() {
- srun --exclusive -N1 -n1 -w "${nodes[1]}" --gpus=8 --cpus-per-task=88 --container-image=/fsx/anton/shared/images/vllm-openai-v0.32.0.sqsh --no-container-mount-home --container-mounts="/fsx:/fsx" bash "$repo/examples/async_grpo_harbor_swarm/full_server.sh" > "$root/server-$1.log" 2>&1 & server_pid=$!
+ srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=24 --mem=512G --container-image=/fsx/anton/shared/images/vllm-openai-v0.32.0.sqsh --no-container-mount-home --container-mounts="/fsx:/fsx" bash "$repo/examples/async_grpo_harbor_swarm/full_server.sh" > "$root/server-$1.log" 2>&1 & server_pid=$!
  "$repo/.venv/bin/python" - "$root/server-url" <<'PYWAIT'
 import pathlib,time,sys,urllib.request
 for _ in range(240):
@@ -32,10 +32,10 @@ else:raise SystemExit('vLLM startup failed')
 PYWAIT
 }
 start_server smoke
-srun --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=8 --cpus-per-task=88 bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" smoke > "$root/smoke.log" 2>&1
+srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=64 --mem=1400G bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" smoke > "$root/smoke.log" 2>&1
 kill "$server_pid"
 wait "$server_pid" || true
 server_pid=
 rm -f "$root/server-url"
 start_server train
-srun --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=8 --cpus-per-task=88 bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" experiment > "$root/experiment.log" 2>&1
+srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=64 --mem=1400G bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" experiment > "$root/experiment.log" 2>&1

@@ -126,14 +126,16 @@ For the larger experiment, the configuration is:
 - 48 training and 12 held-out scenarios **per difficulty**, selected with
   `--difficulties 10 15`; the two difficulty pools are interleaved.
 - 1,800 seconds and 64 calls/agent; maximum staleness 4; fresh Qwen3.5-4B weights.
-- Eight FSDP2 ranks, each accumulating eight complete teams per optimizer update.
+- Four FSDP2 ranks, each accumulating sixteen complete teams per optimizer update.
   Ragged chunks are padded with zero-gradient work so ranks execute matching collectives.
 - Target 16 concurrent teams (256 agents), validated successively at 4, 8, and 16 teams.
 
 `full_run.sbatch`, `full_server.sh`, and `full_node.sh` provide the cluster launcher.
 Set `SWARM_REPO`, `SWARM_RUN_DIR` (fresh), `SWARM_MODEL_SNAPSHOT`, and
-`SWARM_PODMAN_BUNDLE`. The launcher uses two eight-H100 nodes for eight hours, including
-validation. Its cluster-specific partition and container-image paths must match the
+`SWARM_PODMAN_BUNDLE`. The launcher uses one eight-H100 node for eight hours, including
+validation: four GPUs and 64 CPUs for training/Harbor, and four GPUs and 24 CPUs
+for inference. Exclusive Slurm steps reserve disjoint GPU sets, with 1,400 GiB and
+512 GiB memory limits respectively. Its cluster-specific partition and container-image paths must match the
 installation. It requires two real-token synthetic-reward updates and a full checkpoint
 reload, then native Harbor/Pi concurrency checks. Training starts only after these gates.
 The server restarts after the synthetic smoke so the real experiment starts from base weights.
