@@ -28,7 +28,7 @@ from board import TeamBoard, tool_bundle
 from msgboard.client import BoardError, Client
 from openenv.harbor.models import HarborRolloutResult, HarborTurn
 from runtime import validate_team
-from training import pack_team, score_teams
+from training import SwarmConfig, pack_team, score_teams
 
 from trl.trainer.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -77,6 +77,11 @@ def test_team_advantage_and_unscorable():
     assert all(row["advantage"] == pytest.approx(1) for row in packets[0].rows)
     assert all(row["advantage"] == pytest.approx(-1) for row in packets[1].rows)
     assert all(packet.model_version == 7 for packet in packets)
+
+
+def test_swarm_defaults_disable_token_score_centering(tmp_path):
+    config = SwarmConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, report_to="none")
+    assert config.score_centering is False
 
 
 def test_equal_rewards_are_kept_with_zero_advantage():

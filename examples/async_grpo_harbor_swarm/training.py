@@ -33,6 +33,7 @@ from trl.trainer.async_grpo_trainer import AsyncRolloutLoop, DataCollatorForRoll
 class SwarmConfig(AsyncGRPOConfig):
     swarm_settings: dict | None = None
     max_groups: int = 32
+    score_centering: bool = False
 
 
 @dataclass

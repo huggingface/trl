@@ -19,6 +19,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 def main():
@@ -26,7 +27,7 @@ def main():
     commands = {"build", "up", "down", "exec", "logs", "ps", "config", "stop", "start", "pull", "rm", "kill", "cp"}
     index = next((i for i, arg in enumerate(args) if arg in commands), None)
     if index is None:
-        return subprocess.call([sys.executable, "-m", "podman_compose", *args])
+        return subprocess.call([str(Path(sys.executable).parent / "podman-compose"), *args])
     command = args[index]
     if command == "cp":
         flags, paths = args[:index], args[index + 1 :]
@@ -52,7 +53,7 @@ def main():
         json.dump({"networks": {"default": {}}}, overlay)
         overlay.flush()
         args[index:index] = ["-f", overlay.name]
-        return subprocess.call([sys.executable, "-m", "podman_compose", *args])
+        return subprocess.call([str(Path(sys.executable).parent / "podman-compose"), *args])
 
 
 if __name__ == "__main__":

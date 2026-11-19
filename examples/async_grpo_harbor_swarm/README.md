@@ -87,6 +87,15 @@ Difficulty-5 tasks are sorted and shuffled with seed 42: 48 train, 12 held out.
 `--num-tasks` selects a prefix of the corresponding split; it does not change the split.
 Use a fresh output directory for each run. Resume is not implemented.
 
+For a longer run, increase `--max-steps` and use `--time-limit-seconds` to stop and save
+at the next optimizer step after the training-time budget. Keep a scheduler wall-time
+limit as well, since environment setup and a pending rollout can outlast that budget.
+Add `--report-to trackio --trackio-space-id YOUR_ACCOUNT/YOUR_SPACE --run-name RUN_NAME`
+to log training metrics to a private Trackio Space. `--trackio-project` defaults to
+`trl-harbor-swarm`. Set `TRACKIO_DIR` to node-local storage; SQLite initialization hung
+on the shared cluster filesystem during validation. Keep the local logs with run artifacts
+after shutdown; remote metrics are synced to the Space's bucket.
+
 A smoke only demonstrates a learning update if a naturally mixed-reward group was
 observed and trainable parameters changed. Equal-reward groups are retained with zero advantage. A completed run with no
 mixed group saves its checkpoint and reports that the learning criterion remains unmet.
@@ -155,11 +164,12 @@ equal-team loss/gradient invariance under trajectory forks and chunking. Contain
 validation additionally requires the native oracle, two Pi agents, two training updates,
 adapter reload, and held-out evaluation; CPU tests do not establish those results.
 
-Validation on 2026-11-19: 23 example/reconciler tests passed, and the native Harbor oracle
-earned reward 1 on the pinned skeleton task using the cluster CPU runtime. The GPU smoke
-stopped before training because the allocated GPU node's Podman 3.4.4 rejected the task's
-security options. Pi container execution, optimizer updates, and adapter reload remain
-to be validated together on a GPU host with a compatible container runtime.
+Validation on 2026-11-19: 24 example/reconciler tests passed. The native Harbor oracle
+earned reward 1 on the pinned skeleton task on both CPU and GPU hosts. An isolated
+Podman 5.8.8 installation with slirp rootless networking resolved the GPU host's old
+system runtime limitation. A two-agent, four-call Pi check then passed native grading
+and exact capture validation: 373 supervised tokens, two board messages, and a valid
+unsuccessful team reward of 0. Optimizer updates and adapter reload remain to be validated.
 
 `message_board.py` and `board_server.py` are adapted from
 [`huggingface/flock`](https://github.com/huggingface/flock/tree/d624786949f498b08733eb622a52233e049464c5/src/flock/harbor/builtin)

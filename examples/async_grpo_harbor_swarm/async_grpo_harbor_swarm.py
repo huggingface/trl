@@ -20,6 +20,7 @@ import importlib.metadata
 import json
 import random
 import re
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -109,6 +110,13 @@ def main():
     parser.add_argument("--token-budget", type=int, default=32768)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--report-to", choices=["none", "trackio"], default="none")
+    parser.add_argument("--run-name")
+    parser.add_argument("--trackio-project", default="trl-harbor-swarm")
+    parser.add_argument("--trackio-space-id")
+    parser.add_argument(
+        "--time-limit-seconds", type=float, default=0, help="Stop and save after this training time; 0 disables"
+    )
     args = parser.parse_args()
     for name in (
         "agents",
@@ -127,8 +135,8 @@ def main():
         parser.error("Require at least two generations, positive temperature, and positive agent timeout")
     if args.token_budget < args.max_context or args.max_output_tokens >= args.max_context:
         parser.error("Require token-budget >= max-context > max-output-tokens")
-    if args.num_tasks < 0 or args.max_groups < 0:
-        parser.error("num-tasks and max-groups cannot be negative")
+    if args.num_tasks < 0 or args.max_groups < 0 or args.time_limit_seconds < 0:
+        parser.error("num-tasks, max-groups, and time-limit-seconds cannot be negative")
     if not re.fullmatch(r"[0-9a-fA-F]{40}", args.revision):
         parser.error("--revision must be a full Hub commit SHA")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +187,7 @@ def main():
         gradient_accumulation_steps=args.teams_per_update,
         max_steps=args.max_steps,
         max_staleness=2,
+        score_centering=False,
         temperature=args.temperature,
         top_p=1.0,
         top_k=-1,
@@ -195,7 +204,12 @@ def main():
         activation_checkpointing=True,
         activation_checkpointing_kwargs={"use_reentrant": False},
         optim="adamw_torch",
-        report_to="none",
+        report_to=args.report_to,
+        run_name=args.run_name,
+        project=args.trackio_project,
+        trackio_space_id=args.trackio_space_id,
+        trackio_static_space_id=False,
+        hub_private_repo=True,
         log_completions=False,
         logging_steps=1,
         save_strategy="steps",
@@ -208,7 +222,7 @@ def main():
         model=args.model,
         args=config,
         processing_class=tokenizer,
-        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
+        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear", exclude_modules=r".*visual.*"),
         train_dataset=Dataset.from_list([{"prompt": [{"role": "user", "content": str(task)}]} for task in tasks]),
     )
     import torch
@@ -218,6 +232,20 @@ def main():
         for name, parameter in trainer.model.named_parameters()
         if parameter.requires_grad
     }
+    if args.time_limit_seconds:
+        from transformers import TrainerCallback
+
+        class TimeLimit(TrainerCallback):
+            def on_train_begin(self, args, state, control, **kwargs):
+                self.deadline = time.monotonic() + args_time_limit
+
+            def on_step_end(self, args, state, control, **kwargs):
+                if time.monotonic() >= self.deadline:
+                    control.should_training_stop = True
+                    control.should_save = True
+
+        args_time_limit = args.time_limit_seconds
+        trainer.add_callback(TimeLimit())
     trainer.train()
     trainer.save_model()
     tokenizer.save_pretrained(config.output_dir)

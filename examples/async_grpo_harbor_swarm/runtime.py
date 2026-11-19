@@ -76,6 +76,7 @@ class SwarmPi(InterceptPi):
         self.bundle = None
         self.max_context = 16384
         self.max_output_tokens = 1024
+        self.finished = False
 
     @property
     def extra_env(self):
@@ -113,9 +114,12 @@ class SwarmPi(InterceptPi):
             raise RuntimeError("Cannot set Pi's context/output limits")
 
     async def run(self, instruction, environment, context):
-        await self.ready()
-        prompt = (HERE / "team.md").read_text()
-        await super().run(f"You are {self.team_name}.\n{prompt}\n\n{instruction}", environment, context)
+        try:
+            await self.ready()
+            prompt = (HERE / "team.md").read_text()
+            await super().run(f"You are {self.team_name}.\n{prompt}\n\n{instruction}", environment, context)
+        finally:
+            self.finished = True
 
 
 def pi_kwargs(base_url, session, model):
@@ -241,42 +245,46 @@ class TeamRunner:
                 )
                 while True:
                     for name, trial in list(trials.items()):
-                        if jobs[names.index(name)].done():
+                        if trial.agent.finished or jobs[names.index(name)].done():
                             continue
                         try:
                             result = await trial.agent_environment.service_exec(
                                 command, service="puzzle", timeout_sec=5
                             )
                         except Exception:
-                            if jobs[names.index(name)].done():
+                            if trial.agent.finished or jobs[names.index(name)].done():
                                 continue  # A completed trial can remove its room during the check.
                             raise
                         if result.return_code:
-                            if jobs[names.index(name)].done():
+                            if trial.agent.finished or jobs[names.index(name)].done():
                                 continue
                             raise RuntimeError("Trusted puzzle state check failed")
-                        payload = next(
-                            line.removeprefix("TRL_STATE=")
-                            for line in result.stdout.splitlines()
-                            if line.startswith("TRL_STATE=")
-                        )
-                        evidence = json.loads(payload)
+                        _, marker, payload = (result.stdout or "").partition("TRL_STATE=")
+                        if not marker:
+                            raise RuntimeError(
+                                f"Missing trusted state frame: stdout={result.stdout!r}, stderr={result.stderr!r}"
+                            )
+                        evidence, _ = json.JSONDecoder().raw_decode(payload)
                         if evidence.get("won") is True and evidence.get("scenario_sha256") == scenario:
                             state.update(winner=name, stop_reason="first_success", success_at=time.time())
                             (directory / "success.json").write_text(json.dumps(evidence))
 
                             # Pi's extension calls ctx.abort(), allowing its native run to finish and grade.
                             async def stop_agent(n, t):
-                                if jobs[names.index(n)].done():
+                                if t.agent.finished or jobs[names.index(n)].done():
                                     return
                                 try:
                                     stopped = await t.agent.exec_as_root(
                                         t.agent_environment, f"touch {STOP_FILE}", timeout_sec=5
                                     )
-                                    if stopped.return_code and not jobs[names.index(n)].done():
+                                    if (
+                                        stopped.return_code
+                                        and not t.agent.finished
+                                        and not jobs[names.index(n)].done()
+                                    ):
                                         raise RuntimeError("Cannot signal Pi to stop")
                                 except Exception:
-                                    if not jobs[names.index(n)].done():
+                                    if not t.agent.finished and not jobs[names.index(n)].done():
                                         raise
 
                             await asyncio.gather(*(stop_agent(n, t) for n, t in trials.items()))
@@ -287,8 +295,6 @@ class TeamRunner:
                 "temperature": cfg.temperature,
                 "top_p": 1.0,
                 "top_k": -1,
-                "max_tokens": cfg.max_output_tokens,
-                "chat_template_kwargs": {"enable_thinking": False},
             }
             for name in names:
                 jobs.append(
@@ -324,8 +330,13 @@ class TeamRunner:
                     if monitor in done and monitor.exception():
                         raise monitor.exception()
                     for job in done & pending:
+                        result = job.result()
+                        name = names[jobs.index(job)]
+                        (directory / f"{name}.json").write_text(result.model_dump_json(indent=2))
                         if not barrier.is_set():
-                            raise RuntimeError("A Harbor trial ended before all agents were ready")
+                            raise RuntimeError(
+                                f"{name} ended before all agents were ready: {result.exception_type}: {result.error}"
+                            )
                         pending.remove(job)
             results = [job.result() for job in jobs]
             for name, result in zip(names, results, strict=True):
