@@ -676,6 +676,8 @@ deepseekv3_v3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v3.jinja").read
 
 deepseekv3_v4_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v4.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v5_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v5.jinja").read_text(encoding="utf-8")
+
 diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
@@ -806,6 +808,8 @@ qwen3_8_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_v2.jinja").read_text(
 qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_text(encoding="utf-8")
 
 qwen3_coder_next_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_next.jinja").read_text(encoding="utf-8")
+
+smollm2_chat_template = (_CHAT_TEMPLATES_DIR / "smollm2.jinja").read_text(encoding="utf-8")
 
 # Also matches SmolVLM2-2.2B-Instruct before 2026-11-11 and SmolVLM2-500M-Video-Instruct before 2026-11-13.
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
@@ -1198,6 +1202,10 @@ deepseekv3_v4_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v4_tra
     encoding="utf-8"
 )
 
+deepseekv3_v5_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v5_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1291,6 +1299,8 @@ qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_tra
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text(encoding="utf-8")
 
 qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
+
+smollm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "smollm2_training.jinja").read_text(encoding="utf-8")
 
 smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
 
@@ -1397,6 +1407,9 @@ def get_training_chat_template(
 
     if chat_template == deepseekv3_v4_chat_template:
         return deepseekv3_v4_training_chat_template
+
+    if chat_template == deepseekv3_v5_chat_template:
+        return deepseekv3_v5_training_chat_template
 
     if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
@@ -1512,6 +1525,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_8_v2_chat_template:
         return qwen3_8_training_chat_template
+
+    if chat_template == smollm2_chat_template:
+        return smollm2_training_chat_template
 
     if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
