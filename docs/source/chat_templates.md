@@ -175,7 +175,11 @@ Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the ori
 
 ### `muse_glimmer_training.jinja`
 
-Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it. Also used for `muse_glimmer_v2.jinja`.
+Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it.
+
+### `muse_glimmer_v2_training.jinja`
+
+Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, applied to `muse_glimmer_v2.jinja`.
 
 ### `muse_spark_training.jinja`
 

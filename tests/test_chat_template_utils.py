@@ -1601,6 +1601,33 @@ class TestGetTrainingChatTemplate:
         else:
             assert before == after
 
+    def test_behavior_unchanged_with_response_format(self, tokenizer_name):
+        tokenizer = self._load(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": '{"color": "blue"}'},
+        ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "color",
+                "schema": {"type": "object", "properties": {"color": {"type": "string"}}},
+            },
+        }
+
+        before = tokenizer.apply_chat_template(messages, tokenize=False, response_format=response_format)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages, tokenize=False, chat_template=new_chat_template, response_format=response_format
+        )
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
+
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
         messages = [
