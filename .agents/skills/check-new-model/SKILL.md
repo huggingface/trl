@@ -91,7 +91,8 @@ print(tok.convert_ids_to_tokens(ids(render(turn))[-3:]), tok.convert_ids_to_toke
 Parsing returns what the template rendered, with reasoning in `reasoning_content` and arguments typed by the tool schema:
 
 ```python
-tok = add_response_schema(tok)  # raises when TRL doesn't know the template and the tokenizer ships no response template
+if getattr(tok, "response_template", None) is None:  # what the trainers check before falling back to TRL's copies
+    tok = add_response_schema(tok)  # raises when TRL doesn't know the template
 prompt = ids(render(user, add_generation_prompt=True))
 assert parse_response(tok, ids(render(turn))[len(prompt):], prefix=prompt) == turn[-1]
 prompt = ids(render(user, tools=tools, add_generation_prompt=True))
@@ -127,16 +128,17 @@ The Reward trainer needs `AutoModelForSequenceClassification.from_config(config)
 
 ## Architecture
 
-Build a tiny model from the real config: small widths, one layer of each `layer_types` entry, a few experts. Shrink every field that mirrors a text size (a vision config's `text_hidden_size`, `out_hidden_size`):
+Build a tiny model from the real config: small widths, one layer of each `layer_types` entry, a few experts and at least one MoE layer (`first_k_dense_replace`, `mlp_only_layers`), a small vision tower, no tower you don't test (audio). Shrink every field that mirrors a text size (a vision config's `text_hidden_size`, `out_hidden_size`):
 
 ```python
-text.update({"hidden_size": 64, "intermediate_size": 128, "num_attention_heads": 4, "num_key_value_heads": 2,
+mha = text.num_key_value_heads == text.num_attention_heads  # keep MHA models MHA (MLA needs it)
+text.update({"hidden_size": 64, "intermediate_size": 128, "num_attention_heads": 4, "num_key_value_heads": 4 if mha else 2,
              "head_dim": 16, "layer_types": list(dict.fromkeys(text.to_dict().get("layer_types") or ["full_attention"]))})
 text.num_hidden_layers = len(text.layer_types)
 model = getattr(transformers, config.architectures[0])(config).to("cuda", torch.bfloat16)
 ```
 
-MoE: TRL computes the load-balancing loss itself (`add_fused_lm_head`), from the router logits of the backbone and `num_experts_per_tok`, so the backbone must return one `(tokens, experts)` tensor per MoE layer. LoRA must reach the routed experts:
+MoE: TRL computes the load-balancing loss itself (`add_fused_lm_head`), from the router logits of the backbone and `num_experts_per_tok`, so the backbone must return one `(tokens, experts)` tensor per MoE layer. `LoraConfig(task_type="CAUSAL_LM")` without `target_modules` must work (PEFT knows the `model_type`), and LoRA must reach the routed experts:
 
 ```python
 x = torch.randint(0, 100, (1, 16), device="cuda")
@@ -160,7 +162,7 @@ Also:
 - The fast kernels for linear attention and conv layers are installed: the PyTorch fallback is silent and about 10x slower, so grep the logs for "falling back".
 - A `head_dim` above 256 (`print({k: v for k, v in text.to_dict().items() if "head_dim" in k})`) rules out Flash Attention 3, so padding-free and AsyncGRPO. Tiny models hide it.
 - VLM: `config.image_token_id` is the processor's image token, the checkpoint also trains text-only through `AutoModelForCausalLM`, and every processor output key reaches the model.
-- vLLM in TRL's range serves it (`trl vllm-serve --model <id> --revision <sha>`), and one GRPO step with `use_vllm=True` syncs every weight.
+- vLLM in TRL's range serves it (`trl vllm-serve --model <id> --revision <sha>`), and one GRPO step with `use_vllm=True` and one AsyncGRPO step sync every weight.
 
 ## What providers usually miss
 
