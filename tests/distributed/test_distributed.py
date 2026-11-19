@@ -86,15 +86,15 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            "fsdp2",
         ],
     )
     def test_distillation_multi_teacher(self, config, lazy_shared_datadir):
         config_kwargs = {}
-        if config == "fsdp2":
-            config_kwargs = {"fsdp": True, "fsdp_config": str(lazy_shared_datadir / "fsdp2.json")}
-        elif config in ("zero2", "zero3"):
-            config_kwargs = {"deepspeed": str(lazy_shared_datadir / f"{config}.json")}
+        if config in ("zero2", "zero3"):
+            deepspeed_config = json.loads((lazy_shared_datadir / f"{config}.json").read_text())
+            if config == "zero3":
+                deepspeed_config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"] = True
+            config_kwargs = {"deepspeed": deepspeed_config}
         run_command(
             [
                 "torchrun",

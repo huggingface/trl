@@ -1972,5 +1972,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert one_id.accelerator.num_processes == 2
         one_id_params = one_id.accelerator.get_state_dict(one_id.model_wrapped)
         two_ids_params = two_ids.accelerator.get_state_dict(two_ids.model_wrapped)
-        for name, param in one_id_params.items():
-            torch.testing.assert_close(two_ids_params[name].cpu(), param.cpu(), rtol=1e-5, atol=1e-7, msg=name)
+        assert one_id.state.global_step == two_ids.state.global_step == 2
+        # ZeRO-3 consolidates the weights on rank zero.
+        if one_id.accelerator.is_main_process:
+            for name, param in one_id_params.items():
+                torch.testing.assert_close(two_ids_params[name].cpu(), param.cpu(), rtol=1e-5, atol=1e-7, msg=name)

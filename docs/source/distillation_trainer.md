@@ -180,7 +180,7 @@ trainer.train()
 
 ### Multiple teachers
 
-To distill several frozen domain experts (e.g. a math expert and a code expert) into a single student, as in [MOPD](https://huggingface.co/papers/2606.30406), pass a dictionary mapping teacher IDs to teachers instead of a single teacher. Each example selects its teacher through a `teacher_id` column, and its completion is scored by that teacher only. Every teacher must share the student's vocabulary, and is prepared like a single teacher, so DeepSpeed ZeRO-3 and FSDP shard (and optionally offload) each of them.
+To distill several frozen domain experts (e.g. a math expert and a code expert) into a single student, as in [MOPD](https://huggingface.co/papers/2606.30406), pass a dictionary mapping teacher IDs to teachers instead of a single teacher. Each example selects its teacher through a `teacher_id` column, and its completion is scored by that teacher only. Every teacher must share the student's vocabulary, and is prepared like a single teacher, so DeepSpeed ZeRO-3 shards (and optionally offloads) each of them.
 
 ```python
 from datasets import Dataset

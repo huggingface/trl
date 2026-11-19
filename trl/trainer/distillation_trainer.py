@@ -669,6 +669,8 @@ class DistillationTrainer(_BaseTrainer):
         if teacher_model is None:
             teacher_models, teacher_models_init_kwargs = {}, {}
         elif isinstance(teacher_model, dict):
+            if not teacher_model:
+                raise ValueError("The `teacher_model` mapping must contain at least one teacher.")
             teacher_models, teacher_models_init_kwargs = dict(teacher_model), teacher_model_init_kwargs
             unknown = set(teacher_models_init_kwargs) - set(teacher_models)
             if unknown:
@@ -1992,6 +1994,7 @@ class DistillationTrainer(_BaseTrainer):
         teacher_ids = inputs["teacher_id"] if self._multi_teacher else [None] * input_ids.size(0)
         loss, entropy_sum, n_valid = 0.0, 0.0, 0
         teacher_stats = torch.zeros(2, len(self.teacher_models), device=student_hidden_states.device)
+        zero3 = self.args.deepspeed_plugin is not None and self.args.deepspeed_plugin.zero_stage == 3
         for teacher_index, (teacher_id, teacher_model) in enumerate(self.teacher_models.items()):
             rows = [i for i, t in enumerate(teacher_ids) if t == teacher_id]
             # Every rank calls every teacher, so that a sharded teacher's collectives match; with no rows, it scores
@@ -2026,8 +2029,11 @@ class DistillationTrainer(_BaseTrainer):
                 teacher_lm_head_weight = teacher_lm_head_weight.full_tensor().to(teacher_hidden_states.dtype)
                 if teacher_lm_head_bias is not None:
                     teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
-            if not rows:
+            # ZeRO-3 gathers the output heads in both passes of the chunked loss. Run the loss on every rank,
+            # including ranks without rows for this teacher, where the dummy row contributes zero tokens.
+            if not rows and not zero3:
                 continue
+            teacher_loss_mask = loss_mask[scored] if rows else torch.zeros_like(loss_mask[:1])
             teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
 
             # Read the teacher's logit post-processing the same way as the student's, above
@@ -2044,11 +2050,11 @@ class DistillationTrainer(_BaseTrainer):
                 )
             teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
             teacher_loss, teacher_entropy_sum, teacher_n_valid = _chunked_divergence_loss(
-                student_hidden_states[rows],
+                student_hidden_states[scored],
                 teacher_hidden_states,
                 student_lm_head_weight,
                 teacher_lm_head_weight,
-                loss_mask[rows],
+                teacher_loss_mask,
                 self.beta,
                 num_items_in_batch=denominator,
                 student_lm_head_bias=student_lm_head_bias,
