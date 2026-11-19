@@ -236,3 +236,259 @@ def test_native_success_and_budget_exhaustion():
 def test_infrastructure_and_invalid_capture_are_not_zero_rewards(failure):
     with pytest.raises(ValueError):
         validate_team([captured_result(reward=1), captured_result(**failure)], 16)
+
+
+def test_two_difficulty_split_is_balanced_and_disjoint():
+    from async_grpo_harbor_swarm import split_difficulties
+
+    names = [f"agentescape-{level}-task-{i:03}" for level in (5, 10, 15) for i in range(60)]
+    splits = split_difficulties(names, [10, 15])
+    assert len(splits["train"]) == 96
+    assert len(splits["eval"]) == 24
+    assert not set(splits["train"]) & set(splits["eval"])
+    assert all(name.startswith(f"agentescape-{10 if i % 2 == 0 else 15}-") for i, name in enumerate(splits["train"]))
+    assert splits == split_difficulties(reversed(names), [10, 15])
+
+
+def test_call_gate_drains_and_versions_inflight_requests():
+    from policy_gateway import PolicyGate
+
+    async def run():
+        gate = PolicyGate()
+        entered, release = asyncio.Event(), asyncio.Event()
+        versions = []
+
+        async def first():
+            async with gate.call() as version:
+                versions.append(version)
+                entered.set()
+                await release.wait()
+
+        async def second():
+            async with gate.call() as version:
+                versions.append(version)
+
+        active = asyncio.create_task(first())
+        await entered.wait()
+        drain = asyncio.create_task(gate.drain())
+        await asyncio.sleep(0)
+        queued = asyncio.create_task(second())
+        await asyncio.sleep(0)
+        assert not drain.done() and not queued.done()
+        release.set()
+        await active
+        await drain
+        assert not queued.done()
+        await gate.publish(1)
+        await queued
+        assert versions == [0, 1]
+        await gate.drain()
+        await gate.fail()
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            async with gate.call():
+                pytest.fail("failed policy must not serve")
+        with pytest.raises(HTTPException):
+            await gate.publish(2)
+
+    asyncio.run(run())
+
+
+def test_gateway_preserves_capture_and_rejects_ambiguous_versions(tmp_path):
+    from policy_gateway import create_app, match_versions
+
+    async def upstream(request):
+        body = json.loads(request.content)
+        assert body["cache_salt"] in {"swarm-policy-0", "swarm-policy-1"}
+        return httpx.Response(
+            200,
+            json={
+                "prompt_token_ids": [10, 11],
+                "choices": [{"token_ids": [12, 13], "logprobs": {"content": [{"logprob": -0.1}, {"logprob": -0.2}]}}],
+            },
+        )
+
+    async def run():
+        app = create_app("http://fake", tmp_path, "test-token", httpx.MockTransport(upstream))
+        headers = {"x-swarm-control": "test-token"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway") as client:
+            assert (await client.post("/control/drain")).status_code == 403
+            response = await client.post("/agents/team-agent/v1/chat/completions", json={"stream": False})
+            assert response.json()["choices"][0]["logprobs"]["content"][1]["logprob"] == -0.2
+            records = (await client.get("/records/team-agent", headers=headers)).json()
+            assert match_versions(captured_result().turns, records) == [{"node_id": "call-1", "policy_version": 0}]
+            await client.post("/control/drain", headers=headers)
+            await client.post("/control/publish", headers=headers, json={"version": 1})
+            await client.post("/agents/team-agent/v1/chat/completions", json={})
+            records = (await client.get("/records/team-agent", headers=headers)).json()
+            with pytest.raises(ValueError, match="ambiguous"):
+                match_versions(captured_result().turns, records)
+            await client.delete("/records/team-agent", headers=headers)
+            assert (await client.get("/records/team-agent", headers=headers)).json() == []
+
+    asyncio.run(run())
+
+
+def test_staleness_rejects_whole_team_and_boundary_is_inclusive():
+    import queue
+    from collections import defaultdict
+    from types import SimpleNamespace
+
+    from training import TeamDataset
+
+    packets = score_teams(group_for([1, 0]))
+    packets[0].model_version = 6  # At model 11, even one version-6 call invalidates the entire team.
+    packets[1].model_version = 7
+    q = queue.Queue()
+    for packet in packets:
+        q.put(packet)
+    trainer = SimpleNamespace(
+        args=SimpleNamespace(max_staleness=4, gradient_accumulation_steps=1, token_budget=64, collection_deadline=0),
+        accelerator=SimpleNamespace(num_processes=1),
+        rollout_queue=q,
+        model_version=11,
+        rollout_worker=SimpleNamespace(token_allowance=SimpleNamespace(value=0)),
+        _metrics={"train": defaultdict(list)},
+    )
+    assert next(iter(TeamDataset(trainer))) is packets[1]
+    assert trainer._metrics["train"]["team/dropped_stale"] == [1.0]
+
+
+@pytest.mark.parametrize("budget", [8, 64])
+def test_distributed_padding_preserves_equal_team_gradients(budget):
+    from training import equalize_chunks
+
+    packets = score_teams(group_for([1, 0]))
+    batches = equalize_chunks([pack_team(packet, budget, DataCollatorForRollout(0)) for packet in packets])
+    assert len(batches[0]["chunks"]) == len(batches[1]["chunks"])
+    parameter = torch.tensor(0.13, requires_grad=True)
+    reference = []
+    for packet in packets:
+        tokens = torch.tensor(
+            [token for row in packet.rows for token in row["input_ids"][1:][row["completion_mask"][1:].astype(bool)]]
+        )
+        reference.append((parameter * tokens).square().mean() * packet.rows[0]["advantage"])
+    expected = torch.stack(reference).mean()
+    actual = torch.tensor(0.0)
+    for batch in batches:
+        for chunk in batch["chunks"]:
+            selected = chunk["token_index"] >= 0
+            labels = chunk["shift_labels"][chunk["attention_mask"].bool()]
+            values = labels[chunk["token_index"][selected]]
+            # Mirrors rank averaging, with the denominator passed to TRL's world-scaled loss.
+            global_denominator = chunk["team_tokens"][0] * len(batches)
+            rank_loss = ((parameter * values).square() * chunk["advantages"][selected]).sum()
+            actual += rank_loss / (global_denominator / len(batches)) / len(batches)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(torch.autograd.grad(actual, parameter)[0], torch.autograd.grad(expected, parameter)[0])
+
+
+class ScalarPolicy(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(0.002))
+
+    def forward(self, input_ids, shift_labels, **kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            log_probs=-0.5 + self.scale * shift_labels.float(), entropy=torch.ones_like(input_ids, dtype=torch.float32)
+        )
+
+
+class CPUCollectives:
+    def __init__(self, world=1, rank=0):
+        self.num_processes = world
+        self.is_main_process = rank == 0
+
+    def reduce(self, value, reduction="sum"):
+        value = value.clone()
+        if self.num_processes > 1:
+            torch.distributed.all_reduce(value)
+        return value
+
+    def gather(self, value):
+        if self.num_processes == 1:
+            return value
+        values = [torch.empty_like(value) for _ in range(self.num_processes)]
+        torch.distributed.all_gather(values, value)
+        return torch.cat([item.reshape(-1) for item in values])
+
+
+def loss_trainer(world, rank, rounds):
+    from collections import defaultdict
+    from types import SimpleNamespace
+
+    from training import SwarmTrainer
+
+    trainer = object.__new__(SwarmTrainer)
+    trainer.accelerator = CPUCollectives(world, rank)
+    trainer.args = SimpleNamespace(
+        vllm_importance_sampling_clip_min=0.2,
+        vllm_importance_sampling_clip_max=5.0,
+        score_centering=False,
+        gradient_accumulation_steps=rounds,
+        token_budget=8,
+    )
+    trainer.epsilon_low, trainer.epsilon_high = 1.0, 1e9
+    trainer.aux_loss_enabled = False
+    trainer.current_gradient_accumulation_steps = rounds
+    trainer._metrics = {"train": defaultdict(list)}
+    for name in (
+        "_step_forward_tokens",
+        "_step_trained_tokens",
+        "_step_seq_len_weighted",
+        "_step_samples",
+        "_step_forward_s",
+    ):
+        setattr(trainer, name, 0.0)
+    return trainer
+
+
+def distributed_packets():
+    packets = score_teams(group_for([1, 0, 0, 1], fork=True))
+    for row in packets[2].rows:
+        row["advantage"] = 0.0
+    return packets
+
+
+def distributed_gradient_worker(rank, init_method, expected):
+    from training import DistributedTeams
+
+    torch.distributed.init_process_group("gloo", rank=rank, world_size=2, init_method=init_method)
+    try:
+        trainer = loss_trainer(2, rank, 2)
+        trainer._rollout_dataset = iter(distributed_packets()) if rank == 0 else None
+        trainer.team_collator = DataCollatorForRollout(0)
+        model = ScalarPolicy()
+        rounds = 0
+        for batch in DistributedTeams(trainer):
+            rounds += 1
+            for chunk in batch["chunks"]:
+                trainer.compute_loss(model, chunk).backward()
+        assert rounds == 2
+        torch.distributed.all_reduce(model.scale.grad)
+        model.scale.grad /= 2
+        torch.testing.assert_close(model.scale.grad, torch.tensor(expected))
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+def test_two_process_real_loss_matches_single_process_reference():
+    import tempfile
+    from pathlib import Path
+
+    trainer = loss_trainer(1, 0, 4)
+    model = ScalarPolicy()
+    for packet in distributed_packets():
+        for chunk in pack_team(packet, 8, DataCollatorForRollout(0))["chunks"]:
+            trainer.compute_loss(model, chunk).backward()
+    with tempfile.TemporaryDirectory(prefix="swarm-gloo-test-") as directory:
+        torch.multiprocessing.start_processes(
+            distributed_gradient_worker,
+            args=(f"file://{Path(directory) / 'rendezvous'}", model.scale.grad.item()),
+            nprocs=2,
+            join=True,
+            start_method="fork",
+        )

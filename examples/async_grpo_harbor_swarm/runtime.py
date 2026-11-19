@@ -63,6 +63,8 @@ class Settings:
     max_output_tokens: int = 1024
     max_context: int = 16384
     temperature: float = 1.0
+    gateway_url: str | None = None
+    admission_deadline: float = 0
 
 
 class SwarmPi(InterceptPi):
@@ -154,6 +156,8 @@ def validate_team(results, max_context, winner=None):
 class TeamRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.active_teams = 0
+        self.capture_loop = None
         self.root = Path(settings.output_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.bundle = tool_bundle(self.root / "board-tools.tar.gz")
@@ -165,6 +169,12 @@ class TeamRunner:
             max_model_calls=settings.max_turns,
             api_key=os.environ.get("VLLM_API_KEY"),
         )
+
+        @self.capture.app.middleware("http")
+        async def remember_capture_loop(request, call_next):
+            self.capture_loop = asyncio.get_running_loop()
+            return await call_next(request)
+
         seams.SEAMS["trl-swarm-pi"] = seams.Seam(
             name="trl-swarm-pi",
             status="untested",
@@ -181,8 +191,18 @@ class TeamRunner:
     async def close(self):
         await asyncio.to_thread(self.capture.stop)
 
+    def write_status(self):
+        path = self.root / "rollout-status.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps({"active_teams": self.active_teams, "active_agents": self.active_teams * self.settings.agents})
+        )
+        temporary.replace(path)
+
     async def run(self, task_dir: Path, model: str, version: int = 0):
         cfg = self.settings
+        self.active_teams += 1
+        self.write_status()
         team_id = uuid.uuid4().hex
         directory = self.root / "teams" / team_id
         directory.mkdir(parents=True, mode=0o700)
@@ -203,6 +223,7 @@ class TeamRunner:
             "winner": None,
         }
         jobs = []
+        agent_clients = []
         monitor = None
         started = time.monotonic()
         try:
@@ -296,28 +317,35 @@ class TeamRunner:
                 "top_p": 1.0,
                 "top_k": -1,
             }
-            for name in names:
-                jobs.append(
-                    asyncio.create_task(
-                        run_rollout(
-                            task_dir=task_dir,
-                            harness="trl-swarm-pi",
-                            sandbox=cfg.backend,
-                            registry=self.capture.registry,
-                            intercept_url=cfg.capture_url,
-                            model=model,
-                            trials_dir=directory / name,
-                            capture_level=level,
-                            upstream=upstream,
-                            inference=client,
-                            purpose="train",
-                            sampling=sampling,
-                            agent_timeout_sec=cfg.agent_timeout,
-                            agent_step_limit=cfg.max_turns,
-                            on_trial_created=lambda trial, name=name: created(name, trial),
-                        )
-                    )
+
+            async def run_agent(name):
+                agent_upstream, agent_client = upstream, client
+                if cfg.gateway_url:
+                    agent_upstream = Upstream(llm_url=f"{cfg.gateway_url}/agents/{team_id}-{name}/v1", model=model)
+                    agent_client, agent_level = await self.capture.app.state.upstreams.resolve(agent_upstream)
+                    agent_clients.append((agent_upstream, agent_client))
+                    if agent_level != "tokens":
+                        raise ValueError("Per-agent gateway must preserve exact token capture")
+                return await run_rollout(
+                    task_dir=task_dir,
+                    harness="trl-swarm-pi",
+                    sandbox=cfg.backend,
+                    registry=self.capture.registry,
+                    intercept_url=cfg.capture_url,
+                    model=model,
+                    trials_dir=directory / name,
+                    capture_level=level,
+                    upstream=agent_upstream,
+                    inference=agent_client,
+                    purpose="train",
+                    sampling=sampling,
+                    agent_timeout_sec=cfg.agent_timeout,
+                    agent_step_limit=cfg.max_turns,
+                    on_trial_created=lambda trial: created(name, trial),
                 )
+
+            for name in names:
+                jobs.append(asyncio.create_task(run_agent(name)))
             monitor = asyncio.create_task(watch())
             # Monitor failures and pre-barrier trial failures must not leave peers waiting indefinitely.
             pending = set(jobs)
@@ -343,6 +371,24 @@ class TeamRunner:
                 (directory / f"{name}.json").write_text(result.model_dump_json(indent=2))
             winner = names.index(state["winner"]) if state["winner"] else None
             state["reward"], traces = validate_team(results, cfg.max_context, winner)
+            if cfg.gateway_url:
+                import httpx
+                from policy_gateway import match_versions
+
+                state["call_versions"] = {}
+                async with httpx.AsyncClient(timeout=30) as http:
+                    for name, result in zip(names, results, strict=True):
+                        response = await http.get(
+                            f"{cfg.gateway_url}/records/{team_id}-{name}",
+                            headers={"x-swarm-control": os.environ["SWARM_GATEWAY_TOKEN"]},
+                        )
+                        response.raise_for_status()
+                        state["call_versions"][name] = match_versions(result.turns, response.json())
+                versions = [call["policy_version"] for calls in state["call_versions"].values() for call in calls]
+                if not versions:
+                    raise ValueError("Team has no versioned calls")
+                state["policy_version"] = min(versions)
+                state["newest_policy_version"] = max(versions)
             state["agent_rewards"] = [result.reward for result in results]
             state["capture_roots"] = [result.n_roots for result in results]
             state["generated_tokens"] = sum(len(turn.completion_token_ids) for trace in traces for turn in trace.turns)
@@ -358,12 +404,30 @@ class TeamRunner:
             state.update(reward=None, stop_reason="unscorable", error=f"{type(exc).__name__}: {exc}")
             return state, []
         finally:
+            if cfg.gateway_url:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=10) as http:
+                    for name in names:
+                        try:
+                            await http.delete(
+                                f"{cfg.gateway_url}/records/{team_id}-{name}",
+                                headers={"x-swarm-control": os.environ["SWARM_GATEWAY_TOKEN"]},
+                            )
+                        except httpx.HTTPError:
+                            pass
             if monitor:
                 monitor.cancel()
             for job in jobs:
                 if not job.done():
                     job.cancel()
             await asyncio.gather(*jobs, *([monitor] if monitor else []), return_exceptions=True)
+            for agent_upstream, agent_client in agent_clients:
+                self.capture.app.state.upstreams.forget(agent_upstream)
+                if self.capture_loop and self.capture_loop.is_running():
+                    await asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(agent_client.aclose(), self.capture_loop)
+                    )
             try:
                 await board.close()
                 messages = directory / "board" / "messages.jsonl"
@@ -373,6 +437,8 @@ class TeamRunner:
                     reward=None, stop_reason="unscorable", error=f"Board cleanup failed: {type(exc).__name__}"
                 )
             finally:
+                self.active_teams -= 1
+                self.write_status()
                 state["wall_seconds"] = time.monotonic() - started
                 (directory / "team.json").write_text(json.dumps(state, indent=2))
                 with (self.root / "teams.jsonl").open("a") as output:

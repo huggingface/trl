@@ -17,8 +17,9 @@ Unlike that experiment, all agents train, with no frozen workers or coordinator.
 ## Install and runtime
 
 Use Python 3.12+, the TRL checkout, a working Docker or rootless Podman installation,
-and two GPUs: one for vLLM and one for the trainer. This example supports **one training
-rank**, LoRA, and full-vocabulary sampling. It does not depend on Flock.
+and separate GPUs for inference and training. The default is single-rank LoRA;
+full language-model fine-tuning supports FSDP2 and a call-boundary policy gateway.
+Both paths use full-vocabulary sampling. The runtime does not depend on Flock.
 
 ```sh
 uv pip install -e '.[dev]' -r examples/async_grpo_harbor_swarm/requirements.txt
@@ -100,7 +101,54 @@ A smoke only demonstrates a learning update if a naturally mixed-reward group wa
 observed and trainable parameters changed. Equal-reward groups are retained with zero advantage. A completed run with no
 mixed group saves its checkpoint and reports that the learning criterion remains unmet.
 `--max-groups` also bounds collection when environments repeatedly fail; zero disables
-that collection limit. No synthetic rewards or benchmark-improvement claims are made.
+that collection limit. Native training uses only verifier rewards. The separate
+`--synthetic-smoke` engineering check uses explicitly synthetic rewards to test gradients
+and weight transfer; its outputs are not benchmark results.
+
+## Full-model training
+
+`--full-finetune --gateway-url URL` selects full language-model updates, with the vision
+tower frozen. Run `policy_gateway.py` in front of a fresh vLLM server configured with
+`--weight-transfer-config '{"backend":"nccl"}'` and no LoRA. Set the same private
+`SWARM_GATEWAY_TOKEN` in the gateway and trainer. Install a matching vLLM weight-transfer
+client in the trainer environment as well as the server. Validate imports on a GPU;
+the inference engine and trainer have different dependency requirements.
+
+During synchronization the gateway blocks new calls and drains active ones. TRL transfers
+weights, resets the prefix cache, and publishes the new version before calls resume.
+Teams may span versions. Exact prompt/output token fingerprints join gateway provenance
+to capture nodes; missing or ambiguous matches make a team unscorable. Behavior log-probs
+and masks remain the ones captured during sampling. Control failure closes admission.
+
+For the larger experiment, the configuration is:
+
+- 16 agents/team; 16 teams/GRPO group; 64 teams/update (1,024 agent trajectories).
+- 48 training and 12 held-out scenarios **per difficulty**, selected with
+  `--difficulties 10 15`; the two difficulty pools are interleaved.
+- 1,800 seconds and 64 calls/agent; maximum staleness 4; fresh Qwen3.5-4B weights.
+- Eight FSDP2 ranks, each accumulating eight complete teams per optimizer update.
+  Ragged chunks are padded with zero-gradient work so ranks execute matching collectives.
+- Target 16 concurrent teams (256 agents), validated successively at 4, 8, and 16 teams.
+
+`full_run.sbatch`, `full_server.sh`, and `full_node.sh` provide the cluster launcher.
+Set `SWARM_REPO`, `SWARM_RUN_DIR` (fresh), `SWARM_MODEL_SNAPSHOT`, and
+`SWARM_PODMAN_BUNDLE`. The launcher uses two eight-H100 nodes for eight hours, including
+validation. Its cluster-specific partition and container-image paths must match the
+installation. It requires two real-token synthetic-reward updates and a full checkpoint
+reload, then native Harbor/Pi concurrency checks. Training starts only after these gates.
+The server restarts after the synthetic smoke so the real experiment starts from base weights.
+
+`--teams-per-update` always counts global teams; it must divide evenly across ranks.
+The loader stages a complete optimizer batch before yielding any accumulation rounds.
+`--admission-deadline` and `--collection-deadline` are absolute Unix timestamps. Admission
+closes 45 minutes before allocation expiry; collection stops ten minutes before expiry,
+leaving time to save. Partial final batches are discarded. Checkpoints retain full model
+and optimizer state, with the latest three kept. Resume remains unsupported.
+
+Use `monitor_full.py --run-dir DIR --job JOB_ID` to monitor queued jobs, validation stages,
+training rewards by difficulty, active teams, and saved steps in the existing private
+Trackio Space. Training metrics also include staleness, queue depth, memory, and sync time.
+Native gate results and synthetic smoke results remain separate from training metrics.
 
 ## Evaluation and artifacts
 
@@ -141,8 +189,9 @@ abort through a native extension, then lets Harbor collect evidence and grade. R
 is 1 only for native verified success; a valid unsuccessful attempt receives 0. Infrastructure,
 capture, or verifier failures are unscorable. Incomplete model responses are never reconstructed.
 
-The capture proxy supplies token IDs, logprobs, and explicit loss masks. Each team pins a
-named policy adapter. `SwarmTrainer` consumes a complete team as one logical micro-batch,
+The capture proxy supplies token IDs, logprobs, and explicit loss masks. In LoRA mode, each team pins a
+named policy adapter. Full-model mode records each call's serving version and drops a whole
+team if its oldest call is too stale. `SwarmTrainer` consumes a complete team as one logical micro-batch,
 splits its rows into bounded forward/backward chunks, and uses the team's total supervised
 token count for every chunk. The parent trainer supplies optimizer steps, checkpointing,
 and policy synchronization. Staleness filtering discards complete teams.
@@ -178,3 +227,8 @@ integration checks, not evidence of benchmark improvement.
 `message_board.py` and `board_server.py` are adapted from
 [`huggingface/flock`](https://github.com/huggingface/flock/tree/d624786949f498b08733eb622a52233e049464c5/src/flock/harbor/builtin)
 with attribution. Both use the same pinned msgboard SDK/server as that implementation.
+
+Full-model extension checks: 21 CPU tests pass, including a two-process Gloo check of
+the actual policy loss against a single-process reference. Trainer and NCCL weight-transfer
+imports passed on an H100. The full FSDP2/serving smoke and native 16-agent concurrency
+gates run inside the Slurm allocation; these CPU/import checks do not establish their outcome.

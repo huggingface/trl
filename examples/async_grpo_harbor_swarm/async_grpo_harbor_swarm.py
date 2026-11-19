@@ -35,15 +35,26 @@ REVISION = "144b647af561e28d681552cb04bc7b4a8dbeb1ce"
 def split_tasks(names):
     names = sorted(names)
     if len(names) != 60:
-        raise ValueError(f"Expected 60 difficulty-5 tasks at the pinned revision, found {len(names)}")
+        raise ValueError(f"Expected 60 tasks per difficulty at the pinned revision, found {len(names)}")
     random.Random(42).shuffle(names)
     return {"train": names[12:], "eval": names[:12]}
 
 
+def split_difficulties(names, difficulties):
+    names = list(names)
+    splits = [
+        split_tasks([name for name in names if name.startswith(f"agentescape-{level}-")]) for level in difficulties
+    ]
+    return {
+        part: [name for pair in zip(*(split[part] for split in splits), strict=True) for name in pair]
+        for part in ("train", "eval")
+    }
+
+
 def resolve_tasks(args):
     entries = HfApi().list_repo_tree(args.repo, "tasks", repo_type="dataset", revision=args.revision)
-    names = [entry.path.removeprefix("tasks/") for entry in entries if entry.path.startswith("tasks/agentescape-5-")]
-    splits = split_tasks(names)
+    names = [entry.path.removeprefix("tasks/") for entry in entries]
+    splits = split_difficulties(names, args.difficulties)
     selected = splits["train" if args.command == "train" else "eval"]
     if args.num_tasks:
         selected = selected[: args.num_tasks]
@@ -94,6 +105,19 @@ def main():
     parser.add_argument("--repo", default=REPO)
     parser.add_argument("--revision", default=REVISION)
     parser.add_argument("--backend", choices=["podman", "docker"], default="podman")
+    parser.add_argument("--difficulties", type=int, nargs="+", default=[5])
+    parser.add_argument("--full-finetune", action="store_true")
+    parser.add_argument("--gateway-url")
+    parser.add_argument("--max-staleness", type=int, default=2)
+    parser.add_argument("--admission-deadline", type=float, default=0)
+    parser.add_argument("--collection-deadline", type=float, default=0)
+    parser.add_argument("--model-revision")
+    parser.add_argument("--require-nonzero-update", action="store_true")
+    parser.add_argument(
+        "--synthetic-smoke",
+        action="store_true",
+        help="Engineering check with synthetic rewards; not benchmark results",
+    )
     parser.add_argument("--agents", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=4)
     parser.add_argument("--concurrent-teams", type=int, default=2)
@@ -139,12 +163,31 @@ def main():
         parser.error("num-tasks, max-groups, and time-limit-seconds cannot be negative")
     if not re.fullmatch(r"[0-9a-fA-F]{40}", args.revision):
         parser.error("--revision must be a full Hub commit SHA")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    if (args.output_dir / "manifest.json").exists():
-        parser.error("Use a fresh output directory; resuming swarm rollouts is not supported")
-    tasks, splits = resolve_tasks(args)
+    if args.full_finetune and not args.gateway_url:
+        parser.error("--full-finetune requires --gateway-url")
+    if args.max_staleness < 0 or len(set(args.difficulties)) != len(args.difficulties):
+        parser.error("Staleness must be nonnegative and difficulties must be unique")
+    from accelerate import PartialState
+
+    distributed = PartialState()
+    if args.teams_per_update % distributed.num_processes:
+        parser.error("--teams-per-update must be divisible by the training world size")
+    with distributed.main_process_first():
+        if distributed.is_main_process:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            if (args.output_dir / "manifest.json").exists():
+                parser.error("Use a fresh output directory; resuming swarm rollouts is not supported")
+            tasks, splits = resolve_tasks(args)
+            (args.output_dir / "task-selection.json").write_text(
+                json.dumps({"splits": splits, "tasks": [str(task.resolve()) for task in tasks]})
+            )
+        else:
+            selection = json.loads((args.output_dir / "task-selection.json").read_text())
+            tasks, splits = [Path(task) for task in selection["tasks"]], selection["splits"]
     settings = Settings(
-        vllm_url=args.vllm_url,
+        vllm_url=args.gateway_url or args.vllm_url,
+        gateway_url=args.gateway_url,
+        admission_deadline=args.admission_deadline,
         capture_url=args.capture_url,
         output_dir=str(args.output_dir.resolve()),
         model=args.model,
@@ -167,7 +210,8 @@ def main():
         "arguments": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "versions": {name: importlib.metadata.version(name) for name in ("trl", "harbor", "openenv", "msgboard")},
     }
-    (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    if distributed.is_main_process:
+        (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     if args.command == "evaluate":
         asyncio.run(evaluate(settings, tasks, args.served_model or args.model, args.concurrent_teams))
         return
@@ -184,9 +228,19 @@ def main():
         max_concurrent_rollouts=args.concurrent_teams,
         max_completion_length=args.max_output_tokens,
         token_budget=args.token_budget,
-        gradient_accumulation_steps=args.teams_per_update,
+        gradient_accumulation_steps=args.teams_per_update // distributed.num_processes,
+        collection_deadline=args.collection_deadline,
+        ddp_timeout=7200,
+        fsdp="full_shard auto_wrap" if distributed.num_processes > 1 else "",
+        fsdp_config={
+            "fsdp_version": 2,
+            "cpu_ram_efficient_loading": True,
+            "reshard_after_forward": True,
+            "state_dict_type": "FULL_STATE_DICT",
+        },
+        model_init_kwargs={"revision": args.model_revision} if args.model_revision else None,
         max_steps=args.max_steps,
-        max_staleness=2,
+        max_staleness=args.max_staleness,
         score_centering=False,
         temperature=args.temperature,
         top_p=1.0,
@@ -217,21 +271,50 @@ def main():
         save_total_limit=3,
         seed=42,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    trainer = SwarmTrainer(
+    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.model_revision)
+    if args.synthetic_smoke:
+        from smoke_full import SyntheticTrainer
+
+        trainer_class = SyntheticTrainer
+    else:
+        trainer_class = SwarmTrainer
+    trainer = trainer_class(
         model=args.model,
         args=config,
         processing_class=tokenizer,
-        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear", exclude_modules=r".*visual.*"),
+        peft_config=None
+        if args.full_finetune
+        else LoraConfig(r=32, lora_alpha=64, target_modules="all-linear", exclude_modules=r".*visual.*"),
         train_dataset=Dataset.from_list([{"prompt": [{"role": "user", "content": str(task)}]} for task in tasks]),
     )
     import torch
+    from transformers import TrainerCallback
 
-    initial_parameters = {
-        name: parameter.detach().cpu().clone()
-        for name, parameter in trainer.model.named_parameters()
-        if parameter.requires_grad
-    }
+    class ParameterProbe(TrainerCallback):
+        def on_train_begin(self, args, state, control, **kwargs):
+            self.initial = self.sample()
+
+        def sample(self):
+            return {
+                name: (parameter.to_local() if hasattr(parameter, "to_local") else parameter)
+                .detach()
+                .reshape(-1)[:64]
+                .cpu()
+                .clone()
+                for name, parameter in trainer.model.named_parameters()
+                if parameter.requires_grad
+            }
+
+    probe = ParameterProbe()
+    trainer.add_callback(probe)
+
+    class CollectionLimit(TrainerCallback):
+        def on_epoch_end(self, args, state, control, **kwargs):
+            if args.collection_deadline and time.time() >= args.collection_deadline:
+                control.should_training_stop = True
+                control.should_save = True
+
+    trainer.add_callback(CollectionLimit())
     if args.time_limit_seconds:
         from transformers import TrainerCallback
 
@@ -248,20 +331,22 @@ def main():
         trainer.add_callback(TimeLimit())
     trainer.train()
     trainer.save_model()
-    tokenizer.save_pretrained(config.output_dir)
+    if distributed.is_main_process:
+        tokenizer.save_pretrained(config.output_dir)
     groups = [json.loads(line) for line in (args.output_dir / "groups.jsonl").read_text().splitlines()]
-    changed = any(
-        not torch.equal(initial_parameters[name], parameter.detach().cpu())
-        for name, parameter in trainer.model.named_parameters()
-        if name in initial_parameters
-    )
+    changed = any(not torch.equal(probe.initial[name], parameter) for name, parameter in probe.sample().items())
+    changed_tensor = torch.tensor(int(changed), device=distributed.device)
+    if distributed.num_processes > 1:
+        torch.distributed.all_reduce(changed_tensor, op=torch.distributed.ReduceOp.MAX)
+    changed = bool(changed_tensor.item())
     result = {
         "optimizer_steps": trainer.state.global_step,
         "mixed_groups": sum(group["mixed"] for group in groups),
         "parameters_changed": changed,
     }
-    (args.output_dir / "training-smoke.json").write_text(json.dumps(result, indent=2))
-    if not result["mixed_groups"] or not changed:
+    if distributed.is_main_process:
+        (args.output_dir / "training-smoke.json").write_text(json.dumps(result, indent=2))
+    if args.require_nonzero_update and (not result["mixed_groups"] or not changed):
         raise RuntimeError("Training pipeline completed, but no mixed-reward group demonstrated a nonzero update")
 
 
