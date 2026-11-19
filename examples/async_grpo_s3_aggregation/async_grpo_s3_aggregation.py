@@ -12,14 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# /// script
-# dependencies = [
-#     "trl[kernels]",
-#     "datasets",
-#     "httpx",
-# ]
-# ///
-
 """Multi-agent team RL with `AsyncGRPOTrainer`: information aggregation with Qwen3-0.6B, a replication of s3
 (https://huggingface.co/papers/2611.08615).
 
@@ -207,14 +199,20 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
     ap.add_argument("--agents", type=int, default=4)
-    ap.add_argument("--teams-per-update", type=int, default=128)
+    ap.add_argument(
+        "--teams-per-update",
+        type=int,
+        default=128,
+        help="approximate: sets gradient_accumulation_steps to half of it, for about two teams per 40,960-token "
+        "micro-batch; teams forward about 17k tokens, so an update holds about 150 teams, varying with their length",
+    )
     ap.add_argument("--updates", type=int, default=50)
     ap.add_argument("--problems", type=int, default=1024, help="training problem ids 0..problems-1")
     ap.add_argument("--vllm-url", default=os.environ.get("VLLM_URL", "http://127.0.0.1:8000"))
     ap.add_argument("--output-dir", default="Qwen3-0.6B-S3-Aggregation")
     ap.add_argument("--concurrent-teams", type=int, default=64)
     ap.add_argument("--lr", type=float, default=5e-7)
-    ap.add_argument("--report-to", default="none")
+    ap.add_argument("--report-to", default="trackio")
     a = ap.parse_args()
     rows = [{"prompt": [{"role": "user", "content": f"problem:{i}"}]} for i in range(a.problems)]
     config = TeamConfig(

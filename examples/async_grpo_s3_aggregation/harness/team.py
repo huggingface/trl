@@ -335,6 +335,11 @@ class Agent:
         return notice(counts)
 
     # ---- the episode --------------------------------------------------------------------------------------------
+    def _room(self) -> int:
+        """Work tokens left: the agent's allowance, and its context minus room for the final answer."""
+        s, st = self.s, self.st
+        return min(s.work_tokens - st.work_generated, s.context - len(st.tokens) - s.final_tokens - 256)
+
     async def run(self) -> AgentState:
         st, i = self.st, self.p.names.index(self.st.name)
         st.tokens = self.chat.prompt(opening(st.name, self.teammates, self.n, self.p.numbers[i], self.s.token_cost))
@@ -342,7 +347,7 @@ class Agent:
         s, segment = self.s, ""
         try:
             while True:
-                room = min(s.work_tokens - st.work_generated, s.context - len(st.tokens) - s.final_tokens - 256)
+                room = self._room()
                 if room <= 0:
                     self.board.finish(st.name)
                     reason = "allowance" if st.work_generated >= s.work_tokens else "context"
@@ -351,7 +356,8 @@ class Agent:
                 segment += await self._gen(min(s.chunk, room))
                 st.work_generated += len(st.tokens) - before
                 if self._finish == "length":  # a request boundary: deliver a notification if one is due
-                    note = self._notice()
+                    # unless the work budget is spent: the final request comes next, with no turn to act on it
+                    note = self._notice() if self._room() > 0 else None
                     if note is not None:
                         self._tool_results([note])
                         segment = ""

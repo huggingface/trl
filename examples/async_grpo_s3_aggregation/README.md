@@ -25,6 +25,27 @@ In training, agents sample through the rollout loop's `generate_one_turn` and us
 
 ## How it maps onto AsyncGRPO
 
+```mermaid
+flowchart LR
+    P["problem p<br/>(dataset row)"] --> G["group: G = 8 rollouts"]
+    G --> R["one rollout = one team episode<br/>(generate_one → harness.run_team)"]
+    subgraph R2 [team episode]
+        A1[agent 1] <--> B[(message board)]
+        A2[agent 2] <--> B
+        A3[agent 3] <--> B
+        A4[agent 4] <--> B
+    end
+    R --> R2
+    R2 --> W["team reward R (Eq. 1)<br/>one per rollout"]
+    R2 --> T["N training rows<br/>(each agent's sampled turns)"]
+    W --> AD["compute_advantages:<br/>group-standardized, length-weighted"]
+    AD --> T
+    T --> L[AsyncGRPOTrainer loss]
+```
+
+Every agent samples from the same policy through the loop's `generate_one_turn`; the team's reward and advantage
+are shared by all its agents' rows.
+
 - **One rollout = one team.** `generate_one` runs `harness.run_team` and returns each agent's sampled stretches as
   `TurnRecord`s. Each request is one `generate_one_turn` call of at most `max_completion_length` = 1,024 tokens, the
   paper's chunk between notifications. Each agent's turns chain into one training row, so a team gives N rows that share the team's
@@ -35,8 +56,9 @@ In training, agents sample through the rollout loop's `generate_one_turn` and us
   (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). TRL's loss is a token mean per micro-batch, which weighs a
   team by its length; `compute_advantages` scales each team's advantage by its group's mean team length over its
   own, so each team counts about equally, as in the paper's mean over teams of per-team token means.
-  Micro-batches use TRL's token-budget packing (about two teams per 40,960 tokens), so
-  `gradient_accumulation_steps` is `--teams-per-update` / 2.
+  Micro-batches use TRL's token-budget packing, and `gradient_accumulation_steps` is `--teams-per-update` / 2,
+  for about two teams per 40,960-token micro-batch. So `--teams-per-update` is approximate: a team forwards about
+  17k tokens, so a micro-batch holds about 2.4 teams and an update about 150, varying with team length.
 - **Concurrency.** Rollouts start at TRL's default cap (KV cache tokens / max model length, about 14 teams) and
   the control loop raises it while the vLLM KV cache has room, up to `--concurrent-teams`.
 
