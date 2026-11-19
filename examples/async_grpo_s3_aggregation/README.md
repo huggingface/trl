@@ -35,12 +35,13 @@ In training, agents sample through the rollout loop's `generate_one_turn` and us
 - **Groups are G = 8 teams on the same problem.** The numbers are the same across the group; the agent names and
   teammate orders differ.
 - **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
-  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). A small `TeamBatcher` replaces TRL's token-budget packing so
-  that each micro-batch is one whole team: the token mean is per team, and `gradient_accumulation_steps` is the number
-  of teams per update. This is exact with one training GPU; with several, each micro-batch holds one team per GPU.
-- **All-equal groups are kept** as advantage-0 rows (App. C), so every update is exactly `--teams-per-update` teams.
-- **Concurrency.** `_init_kv_cap` starts at `--concurrent-teams` instead of TRL's default (KV cache tokens / max model
-  length), which assumes one full-length sequence per rollout.
+  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). The loss is a mean over teams of each team's token mean:
+  each agent row's advantage is scaled by N / |T_g| (|T_g| = the team's trained tokens), and a `compute_loss`
+  override divides by the micro-batch's agent rows instead of its tokens. Micro-batches use TRL's token-budget packing
+  (about two teams per 40,960 tokens), so `gradient_accumulation_steps` is `--teams-per-update` / 2.
+- **All-equal groups are kept** as advantage-0 rows (App. C): they count in the average over teams.
+- **Concurrency.** Rollouts start at TRL's default cap (KV cache tokens / max model length, about 14 teams) and
+  the control loop raises it while the vLLM KV cache has room, up to `--concurrent-teams`.
 
 Not implemented: the KL penalty the paper lists for this task (its coefficient and reference model are not
 published), and the individual-reward and online-SFT baselines.
@@ -117,7 +118,9 @@ model and 93.2% after 200 updates. Our base is higher, probably because parts of
 unpublished and left out here (marked in `harness/task.py`). At 50 updates the curve is still rising.
 
 The training curves above come from an earlier version of this code with the same prompts, tools, reward and
-trainer settings; it sampled from the vLLM server directly instead of through `generate_one_turn`. The checkpoint was then evaluated with the harness in this folder.
+trainer settings, except that it sampled from the vLLM server directly instead of through `generate_one_turn`, put
+one team in each micro-batch (128 per update) instead of weighting rows by team, and started at 128 teams in
+flight. The checkpoint was then evaluated with the harness in this folder.
 
 ## Deviations from the paper
 

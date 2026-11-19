@@ -38,10 +38,12 @@ The paper's objective for information aggregation:
 - Loss (Eq. 3): -1/|B| sum_g 1/|T_g| sum_{t in T_g} m_t rho_t A_g, with rho_t = pi_theta / mu (mu is the vLLM
   sampler's logprob) and m_t = 1[0.2 <= rho_t <= 5.0]. Here the importance mask is
   `vllm_importance_sampling_clip_min/max` = 0.2 / 5.0 and PPO clipping is off (`epsilon` = 1, `epsilon_high` = 1e9,
-  so the min of the clipped and unclipped terms is rho * A). `TeamBatcher` replaces TRL's token-budget packing so
-  that a micro-batch is exactly one team (its N agent rows) per training process. TRL's per-micro-batch token mean is
-  then the team mean 1/|T_g| sum_t, and `gradient_accumulation_steps` = teams per update averages over teams
-  (1/|B| sum_g). This is exact on one training process; with more, each micro-batch averages over one team per rank.
+  so the min of the clipped and unclipped terms is rho * A). TRL's loss is a token mean per micro-batch; here it is a
+  team mean: `_score_group` scales each agent row's advantage by N / |T_g| (|T_g| = its team's trained tokens), and
+  `TeamTrainer.compute_loss` divides the micro-batch's summed token losses by its agent rows instead of its tokens.
+  Each team then contributes its token mean 1/|T_g| sum_t, and a micro-batch averages over its teams (rows / N). With
+  TRL's token-budget packing a team can be split across micro-batches; the mean over micro-batches stands in for
+  1/|B|, exact when the micro-batches of an update hold the same number of teams.
 - Not implemented: the KL penalty listed for aggregation in the paper's Table 4 (coefficient and reference model are
   not published).
 
@@ -67,17 +69,15 @@ import random
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 from datasets import Dataset
 from harness import Chat, Settings, run_team
 
 from trl import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.trainer import async_grpo_trainer
 from trl.trainer.async_grpo_trainer import (
     AsyncRolloutLoop,
     Rollout,
     RolloutSample,
-    TokenBudgetBatcher,
-    TreeRow,
     TurnRecord,
 )
 
@@ -115,6 +115,19 @@ def team_metrics(ep) -> dict[str, float]:
     }
 
 
+def team_mean_advantages(samples: list, n_agents: int) -> list:
+    """Scale each agent row's advantage by N / |T_g|, with |T_g| its team's trained tokens (all its agents' rows),
+    for `TeamTrainer.compute_loss`. A group's samples are its teams' rows; the rollout summary in `completion` is
+    unique per team."""
+    tokens: dict[str, int] = {}
+    for s in samples:
+        team = s.completion[0]["content"]
+        tokens[team] = tokens.get(team, 0) + int(np.asarray(s.completion_mask)[1:].sum())  # TRL's trained positions
+    for s in samples:
+        s.advantage *= n_agents / max(1, tokens[s.completion[0]["content"]])
+    return samples
+
+
 class LoopSampler:
     """The harness's sampler on `AsyncRolloutLoop.generate_one_turn`, which samples up to `max_completion_length`
     (the harness's request size) with the config's sampling settings. A request for fewer tokens (the end of an
@@ -149,12 +162,6 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         kwargs = {"enable_thinking": self._settings.enable_thinking, **self.chat_template_kwargs}
         self._chat = Chat(self.tokenizer, chat_template=self.chat_template, **kwargs)
         self._rng = random.Random(os.getpid())
-
-    async def _init_kv_cap(self) -> None:
-        """Start at `max_concurrent_rollouts` teams. TRL's default (KV cache tokens / max_model_len) assumes one
-        full-length sequence per rollout, about 14 here; a team is N shorter agent contexts, many of them idle at a
-        time. The control loop still lowers the cap when KV cache usage passes 0.8."""
-        self._kv_cap = max(1, self.config.max_concurrent_rollouts)
 
     async def generate_one(self, prompt, tools, group_id: int = 0) -> Rollout:
         problem = int(prompt[-1]["content"].split("problem:", 1)[1])
@@ -204,10 +211,10 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         )
 
     async def _score_group(self, group):
-        """Keep a group whose teams all got the same reward, as advantage-0 rows (App. C: such groups "have zero
-        advantage; they still count toward the collection budget"). TRL drops them and generates more groups until an
-        update has `gradient_accumulation_steps` teams with signal; kept, they add no gradient but count in the 1/|B|
-        team average, so an update is exactly `teams_per_update` teams collected, as in the paper."""
+        """Scale advantages for the team-mean loss (`team_mean_advantages`), and keep a group whose teams all got the
+        same reward as advantage-0 rows (App. C: such groups "have zero advantage; they still count toward the
+        collection budget"). TRL drops them and generates more groups instead; kept, they add no gradient but count in
+        the average over teams."""
         samples = await super()._score_group(group)
         if not samples and group.rewards is not None and len(group.completions_sequences):
             kept = float(np.nanmean(group.rewards)) if not np.isnan(group.rewards).all() else 0.0
@@ -231,45 +238,24 @@ class TeamRolloutLoop(AsyncRolloutLoop):
                 )
                 for seq in sequences
             ]
-        for s in samples:  # which team each row came from (the summary is unique per team), for TeamBatcher
-            s.metrics["team"] = s.completion[0]["content"]
-        return samples
-
-
-class TeamBatcher(TokenBudgetBatcher):
-    """One whole team per row: each micro-batch is `num_processes` teams, one per rank.
-
-    A team's rows arrive consecutively (a group's samples are queued together, team by team), so a team is complete
-    when the next sample belongs to another team. The team tag is removed here, so it is never logged as a metric."""
-
-    def __iter__(self):
-        teams, team, key = [], [], None
-        for sample in self.dataset:
-            k = sample["metrics"].pop("team")
-            if team and k != key:
-                teams.append(team)
-                team = []
-                if len(teams) == self.num_processes:
-                    rows = [TreeRow() for _ in teams]
-                    for row, members in zip(rows, teams, strict=True):
-                        for s in members:
-                            row.add(s)
-                    yield rows
-                    teams = []
-            team.append(sample)
-            key = k
+        return team_mean_advantages(samples, self.config.team_agents)
 
 
 class TeamTrainer(AsyncGRPOTrainer):
     loop_cls = TeamRolloutLoop
 
-    def get_train_dataloader(self):
-        """TRL's dataloader with `TeamBatcher` in place of `TokenBudgetBatcher`."""
-        async_grpo_trainer.TokenBudgetBatcher = TeamBatcher
-        try:
-            return super().get_train_dataloader()
-        finally:
-            async_grpo_trainer.TokenBudgetBatcher = TokenBudgetBatcher
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """TRL divides a micro-batch's summed token losses by its trained tokens (summed over ranks). Divide by its
+        agent rows instead: with advantages scaled by N / |T_g|, that is the mean over the micro-batch's teams of each
+        team's token mean."""
+        tokens = inputs["global_n_tokens"]
+        segments = inputs["segment_id"][inputs["token_index"] >= 0]
+        rows = torch.tensor(float(segments.max() + 1) if segments.numel() else 0.0, device=tokens.device)
+        rows = float(self.accelerator.reduce(rows, reduction="sum"))
+        inputs["global_n_tokens"] = torch.full_like(tokens, rows)
+        loss = super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+        self._step_trained_tokens += float(tokens[0]) - rows  # TRL counts trained tokens from the same input
+        return loss
 
 
 def main() -> None:
@@ -291,9 +277,9 @@ def main() -> None:
         team_agents=a.agents,
         num_generations=8,  # G team attempts per problem
         max_completion_length=1024,  # tokens per generation request, so the harness's chunk between notifications
-        # TeamBatcher forms one-team micro-batches; the token budget only sizes how far generation may run ahead
-        token_budget=a.agents * 40960,
-        gradient_accumulation_steps=a.teams_per_update,
+        # a 40,960-token micro-batch holds about two teams (a team forwards about 17k tokens with shared prefixes)
+        token_budget=40960,
+        gradient_accumulation_steps=max(1, a.teams_per_update // 2),
         max_steps=a.updates,
         learning_rate=a.lr,
         lr_scheduler_type="constant",

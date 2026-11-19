@@ -187,24 +187,18 @@ def test_final_answer_is_read_after_the_thinking_only():
     assert parse_answer(after_thinking("<think>#### [1, 2, 3, 4]</think>[1, 2, 3, 4]")) is None
 
 
-def test_team_batcher_puts_one_whole_team_on_each_row():
+def test_team_mean_advantages_weigh_each_team_by_its_tokens():
+    from types import SimpleNamespace
+
     import numpy as np
-    from async_grpo_s3_aggregation import TeamBatcher
+    from async_grpo_s3_aggregation import team_mean_advantages
 
-    def row(team, i):
-        ids = np.array([7, 7, 7, team, i], dtype=np.int64)  # a shared prefix, then the agent's own tokens
-        return {
-            "input_ids": ids,
-            "completion_mask": np.array([0, 0, 0, 1, 1]),
-            "group_id": 0,
-            "metrics": {"team": f"team {team}", "reward_trained": 1.0},
-        }
+    def row(team, trained, advantage):  # position 0 is never a training target
+        mask = np.array([0, 0] + [1] * trained)
+        return SimpleNamespace(completion=[{"content": f"team {team}"}], completion_mask=mask, advantage=advantage)
 
-    stream = [row(t, i) for t in range(5) for i in range(4)]
-    batches = list(TeamBatcher(stream, num_processes=2, token_budget=0, metrics={}))
-    assert len(batches) == 2  # teams 0-3 in pairs; team 4 waits for a teammate's successor
-    for b in batches:
-        for r in b:
-            assert len(r.samples) == 4 and len({int(s["input_ids"][3]) for s in r.samples}) == 1
-            assert all("team" not in s["metrics"] for s in r.samples)  # never logged
-            assert len(r.tokens) == 3 + 4 * 2  # the shared prefix is forwarded once
+    rows = [row(0, 10, 1.0), row(0, 30, 1.0), row(1, 5, -1.0), row(1, 15, -1.0)]
+    team_mean_advantages(rows, n_agents=2)
+    assert [r.advantage for r in rows] == [2 / 40, 2 / 40, -2 / 20, -2 / 20]
+    # compute_loss sums token terms and divides by agent rows: a team of N rows contributes its advantage once
+    assert sum(r.advantage * r.completion_mask[1:].sum() for r in rows[:2]) / 2 == 1.0
