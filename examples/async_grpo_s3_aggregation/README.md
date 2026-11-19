@@ -16,9 +16,6 @@ alone, so the only way to score is to message the number and read teammates' mes
 | [`harness/team.py`](harness/team.py) | One team episode: N asynchronous agents generating on token ids, each with its tools (`AgentTools`) on an in-memory message board, notifications at request boundaries, idling and wake-ups, and the final-answer request (§3.1, App. F). |
 | [`async_grpo_s3_aggregation.py`](async_grpo_s3_aggregation.py) | Training with `AsyncGRPOTrainer`: a custom `AsyncRolloutLoop` whose rollout is a whole team episode. The module docstring maps the paper's objective onto the config. |
 | [`evaluate.py`](evaluate.py) | Evaluates a served model on held-out problems; one JSON line per team episode. |
-| [`analyze_episodes.py`](analyze_episodes.py) | Success, tokens, messages, and the paper's Table 11 failure causes from `evaluate.py` output. |
-| [`transcript.py`](transcript.py) | Decodes one agent's full token context (what it saw and wrote). |
-| [`test_harness.py`](test_harness.py) | CPU tests of the harness with a scripted fake model. |
 
 The harness works on token ids, so the training rows are exactly the sampled tokens and the sampler's logprobs.
 Prompts are rendered with the tokenizer's chat template; each new message (a tool result, a notification, the final
@@ -35,11 +32,11 @@ In training, agents sample through the rollout loop's `generate_one_turn` and us
 - **Groups are G = 8 teams on the same problem.** The numbers are the same across the group; the agent names and
   teammate orders differ.
 - **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
-  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). The loss is a mean over teams of each team's token mean:
-  each agent row's advantage is scaled by N / |T_g| (|T_g| = the team's trained tokens), and a `compute_loss`
-  override divides by the micro-batch's agent rows instead of its tokens. Micro-batches use TRL's token-budget packing
-  (about two teams per 40,960 tokens), so `gradient_accumulation_steps` is `--teams-per-update` / 2.
-- **All-equal groups are kept** as advantage-0 rows (App. C): they count in the average over teams.
+  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). TRL's loss is a token mean per micro-batch, which weighs a
+  team by its length; `compute_advantages` scales each team's advantage by its group's mean team length over its
+  own, so each team counts about equally, as in the paper's mean over teams of per-team token means.
+  Micro-batches use TRL's token-budget packing (about two teams per 40,960 tokens), so
+  `gradient_accumulation_steps` is `--teams-per-update` / 2.
 - **Concurrency.** Rollouts start at TRL's default cap (KV cache tokens / max model length, about 14 teams) and
   the control loop raises it while the vLLM KV cache has room, up to `--concurrent-teams`.
 
@@ -52,7 +49,6 @@ Use this TRL checkout with vLLM installed:
 
 ```sh
 pip install -e ".[vllm,kernels]" datasets httpx
-python -m pytest examples/async_grpo_s3_aggregation/test_harness.py -q
 ```
 
 ## Training
@@ -85,11 +81,10 @@ vllm serve Qwen3-0.6B-S3-Aggregation/checkpoint-50 --port 8000 \
 
 python examples/async_grpo_s3_aggregation/evaluate.py --url http://127.0.0.1:8000 \
     --model Qwen3-0.6B-S3-Aggregation/checkpoint-50 --name ckpt50 --episodes 192
-python examples/async_grpo_s3_aggregation/analyze_episodes.py runs/ckpt50.jsonl --quiet
 ```
 
 Held-out problems use ids 1,000,000 and up, and the team seed is the episode index, so reruns score the same
-teams. Add `--save-tokens` to keep full contexts and read one with `transcript.py`.
+teams. Add `--save-tokens` to keep each agent's full token context.
 
 ## Results
 
@@ -129,3 +124,7 @@ flight. The checkpoint was then evaluated with the harness in this folder.
 - An agent whose own token allowance runs out is asked for its final answer right away, not when the whole team's
   work phase ends. It cannot read messages in between, so its context at the request is the same.
 - No KL penalty.
+- Groups whose teams all get the same reward are dropped (TRL's default) and replaced by new ones; the paper keeps
+  them with advantage 0 (App. C).
+- The mean over teams is approximated by TRL's token mean with length-weighted advantages (see the loss above): it
+  is exact when the teams of a micro-batch have their groups' mean length.

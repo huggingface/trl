@@ -15,7 +15,6 @@
 """Evaluate a served model on information aggregation with the harness in `harness/`; one JSON line per team episode.
 
     python examples/async_grpo_s3_aggregation/evaluate.py --url http://127.0.0.1:8000 --name base
-    python examples/async_grpo_s3_aggregation/analyze_episodes.py runs/base.jsonl
 
 Held-out problems are ids 1,000,000 + i (training draws ids 0..problems-1); the team seed is the episode index, so a
 rerun scores the same teams. `--model` is the served model name (a checkpoint served under its own name works too).
@@ -49,7 +48,7 @@ async def main() -> None:
     ap.add_argument("--concurrency", type=int, default=64, help="teams in flight")
     ap.add_argument("--work-tokens", type=int, default=8192)
     ap.add_argument("--final-tokens", type=int, default=1024)
-    ap.add_argument("--save-tokens", action="store_true", help="keep each agent's tokens and mask (for transcripts)")
+    ap.add_argument("--save-tokens", action="store_true", help="keep each agent's tokens and mask")
     a = ap.parse_args()
 
     out = Path(a.out or f"runs/{a.name}.jsonl")
