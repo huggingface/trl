@@ -59,6 +59,9 @@ from trl.chat_template_utils import (
     lfm2_v2_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
+    olmo3_instruct_chat_template,
+    olmo3_instruct_v2_chat_template,
+    olmo3_instruct_v3_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
@@ -1397,6 +1400,30 @@ class TestIsChatTemplateStopTokenTrained:
                 reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            id="olmo3_instruct",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            id="olmo3_instruct_v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+            id="olmo3_instruct_v3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
@@ -1601,6 +1628,14 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -1652,6 +1687,14 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -1688,6 +1731,14 @@ class TestGetTrainingChatTemplate:
             # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -1720,6 +1771,14 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here `<|observation|>`, which closes a tool call.
             assert after == before + "<|observation|>"
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
