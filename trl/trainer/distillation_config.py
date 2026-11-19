@@ -41,8 +41,9 @@ class DistillationConfig(_BaseConfig):
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
             for both the student and teacher.
         teacher_model_name_or_path (`str` or `dict[str, str]`, *optional*):
-            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from teacher ID
-            to model name or path uses several teachers, where the `teacher_id` column of each row selects its teacher.
+            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from teacher
+            ID to model name or path uses several teachers, where the `teacher_id` column of each row selects its
+            teacher.
         teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):

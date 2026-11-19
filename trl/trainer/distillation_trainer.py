@@ -258,8 +258,8 @@ class DistillationTrainer(_BaseTrainer):
             Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
             (loaded like `model`, using `args.teacher_model_init_kwargs`), an instantiated
             [`~transformers.PreTrainedModel`], or a mapping from teacher ID to either of those, in which case the
-            `teacher_id` column of each row selects its teacher. Every teacher must share the student's vocabulary.
-            May be omitted by subclasses that supply the teacher another way (e.g. a remote server).
+            `teacher_id` column of each row selects its teacher. Every teacher must share the student's vocabulary. May
+            be omitted by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
