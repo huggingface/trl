@@ -169,7 +169,11 @@ earned reward 1 on the pinned skeleton task on both CPU and GPU hosts. An isolat
 Podman 5.8.8 installation with slirp rootless networking resolved the GPU host's old
 system runtime limitation. A two-agent, four-call Pi check then passed native grading
 and exact capture validation: 373 supervised tokens, two board messages, and a valid
-unsuccessful team reward of 0. Optimizer updates and adapter reload remain to be validated.
+unsuccessful team reward of 0. The longer run completed its first two optimizer steps
+on eight valid teams. Its first group had rewards `[1, 0, 1, 0]`, gradient norm 0.336,
+and changed 248 LoRA-B tensors in the saved checkpoint; vLLM loaded policy versions
+through `v3`. Final held-out checkpoint evaluation remains outstanding. These are
+integration checks, not evidence of benchmark improvement.
 
 `message_board.py` and `board_server.py` are adapted from
 [`huggingface/flock`](https://github.com/huggingface/flock/tree/d624786949f498b08733eb622a52233e049464c5/src/flock/harbor/builtin)
