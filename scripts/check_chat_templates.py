@@ -56,6 +56,7 @@ REPOS = [
     "google/gemma-4-E4B-it",
     "google/gemma-7b-it",
     "HuggingFaceM4/Idefics3-8B-Llama3",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
     "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
     "LiquidAI/d1-3B",

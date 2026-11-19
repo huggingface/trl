@@ -195,7 +195,11 @@ Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medi
 
 ### `muse_glimmer.jinja`
 
-Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B` before [1297fd7](https://huggingface.co/meta-models/Muse-Glimmer-30B/commit/1297fd7dfe)). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
+
+### `muse_glimmer_v2.jinja`
+
+Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B` since [1297fd7](https://huggingface.co/meta-models/Muse-Glimmer-30B/commit/1297fd7dfe)). Same as `muse_glimmer.jinja`, plus a system message line stating the JSON schema when `response_format` is a `json_schema`.
 
 ### `muse_spark.jinja`
 
@@ -291,6 +295,10 @@ Original Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Inst
 ### `qwen3_coder_next.jinja`
 
 Qwen3-Coder-Next chat template (as shipped by `Qwen/Qwen3-Coder-Next`). Same as `qwen3_coder.jinja`, except that non-string tool-call arguments render as JSON and tool responses are wrapped with different newlines. Response parsing reuses `qwen3_5_template`.
+
+### `smollm2.jinja`
+
+Original SmolLM2 chat template (`HuggingFaceTB/SmolLM2-135M-Instruct`, `HuggingFaceTB/SmolLM2-360M-Instruct`, `HuggingFaceTB/SmolLM2-1.7B-Instruct`). Does not support tool calling.
 
 ### `smolvlm.jinja`
 
@@ -432,6 +440,10 @@ Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`:
 
 Wrap the whole assistant branch — every ATEM channel of the turn — with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start|>assistant` that opens the turn stays outside the markers, since the generation prompt already ends with it. Same treatment as `gptoss_training.jinja`, which shares the `<|start|>assistant` generation cue and the one-block-per-channel layout.
 
+### `muse_glimmer_v2_training.jinja`
+
+Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, applied to `muse_glimmer_v2.jinja`.
+
 ### `muse_spark_training.jinja`
 
 Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
@@ -540,6 +552,12 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (drop the `loop.in
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss, with the part of the thinking block that the generation prompt pre-fills left outside them.
+
+### `smollm2_training.jinja`
+
+Patched SmolLM2 template. Diff vs `smollm2.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
 ### `smolvlm_training.jinja`
 
