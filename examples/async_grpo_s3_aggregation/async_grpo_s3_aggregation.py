@@ -30,10 +30,9 @@ The paper's objective for information aggregation:
 - Loss (Eq. 3): -1/|B| sum_g 1/|T_g| sum_{t in T_g} m_t rho_t A_g, with rho_t = pi_theta / mu (mu is the vLLM
   sampler's logprob) and m_t = 1[0.2 <= rho_t <= 5.0]. Here the importance mask is
   `vllm_importance_sampling_clip_min/max` = 0.2 / 5.0 and PPO clipping is off (`epsilon` = 1, `epsilon_high` = 1e9,
-  so the min of the clipped and unclipped terms is rho * A). TRL's loss is a token mean per micro-batch, which weighs
-  a team by its length; `compute_advantages` scales A_g by mean_g' |T_g'| / |T_g| (|T_g| = the team's trained tokens,
-  the mean over its group) so that each team counts about equally. This matches the team mean when a micro-batch's
-  teams have their groups' mean length.
+  so the min of the clipped and unclipped terms is rho * A). `compute_advantages` divides A_g by |T_g| (the team's
+  trained tokens) and `TeamTrainer` undoes TRL's per-micro-batch token mean and divides by |B| (the update's teams),
+  so the loss is Eq. 3 however teams are packed into micro-batches.
 - Not implemented: the KL penalty listed for aggregation in the paper's Table 4 (coefficient and reference model are
   not published).
 
@@ -98,24 +97,6 @@ def team_metrics(ep) -> dict[str, float]:
     }
 
 
-class LoopSampler:
-    """The harness's sampler on `AsyncRolloutLoop.generate_one_turn`, which samples up to `max_completion_length`
-    (the harness's request size) with the config's sampling settings. A request for fewer tokens (the end of an
-    agent's allowance) keeps the first `max_tokens`: a sample cut short is a sample with a smaller limit."""
-
-    def __init__(self, loop: AsyncRolloutLoop):
-        self.loop = loop
-
-    async def generate(self, prompt_ids, max_tokens):
-        turn = await self.loop.generate_one_turn(prompt_ids)
-        ids, lps = list(turn.output_ids), list(turn.output_log_probs)
-        cut = len(ids) > max_tokens
-        ids, lps = ids[:max_tokens], lps[:max_tokens]
-        # vLLM stopped by itself when it returned fewer than max_completion_length tokens or ended on an EOS token
-        stopped = not cut and (len(ids) < self.loop.config.max_completion_length or ids[-1] in self.loop.eos_token_ids)
-        return ids, lps, "stop" if stopped else "length"
-
-
 class TeamRolloutLoop(AsyncRolloutLoop):
     """Rollouts are `harness.run_team` episodes (see the module docstring)."""
 
@@ -125,7 +106,6 @@ class TeamRolloutLoop(AsyncRolloutLoop):
             raise ValueError("the team harness keeps no sampling masks: use top_p=1.0 and top_k=0")
         if c.team_final_tokens > c.max_completion_length:
             raise ValueError("team_final_tokens must fit in one request of max_completion_length tokens")
-        self._sampler = LoopSampler(self)
         self._settings = Settings(
             work_tokens=c.team_work_tokens, final_tokens=c.team_final_tokens, chunk=c.max_completion_length
         )
@@ -133,11 +113,23 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         self._chat = Chat(self.tokenizer, chat_template=self.chat_template, **kwargs)
         self._rng = random.Random(os.getpid())
 
+    async def generate(self, prompt_ids, max_tokens):
+        """The harness's sampler: one `generate_one_turn` of up to `max_completion_length` tokens (the harness's
+        request size). A request for fewer tokens (the end of an agent's allowance) keeps the first `max_tokens`: a
+        sample cut short is a sample with a smaller limit."""
+        turn = await self.generate_one_turn(prompt_ids)
+        ids, lps = list(turn.output_ids), list(turn.output_log_probs)
+        cut = len(ids) > max_tokens
+        ids, lps = ids[:max_tokens], lps[:max_tokens]
+        # vLLM stopped by itself when it returned fewer than max_completion_length tokens or ended on an EOS token
+        stopped = not cut and (len(ids) < self.config.max_completion_length or ids[-1] in self.eos_token_ids)
+        return ids, lps, "stop" if stopped else "length"
+
     async def generate_one(self, prompt, tools, group_id: int = 0) -> Rollout:
         problem = int(prompt[-1]["content"].split("problem:", 1)[1])
         n = self.config.team_agents
         try:
-            ep = await run_team(self._sampler, self._chat, problem, self._rng.randrange(1 << 31), n, self._settings)
+            ep = await run_team(self, self._chat, problem, self._rng.randrange(1 << 31), n, self._settings)
         except Exception as e:  # an infrastructure failure: return it unscored, so it gives no rows
             logger.warning("team episode for problem %d failed: %s: %s", problem, type(e).__name__, e)
             self._push_metrics({"team/episode_errors": 1.0})
@@ -181,18 +173,34 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         )
 
     def compute_advantages(self, group):
-        """TRL's group-standardized advantage (Eq. 2), times mean_g' |T_g'| / |T_g| with |T_g| the team's trained
-        tokens, so that TRL's token-mean loss counts each team about equally (Eq. 3's 1/|T_g|)."""
+        """TRL's group-standardized advantage (Eq. 2) over the team's trained tokens |T_g|: Eq. 3's per-team token
+        mean. `TeamTrainer` turns the rest of TRL's loss normalization into Eq. 3's mean over the update's teams."""
         advantages = super().compute_advantages(group)
         tokens = np.array([len(ids) for ids in group.completions_ids], dtype=float)
         scored = ~np.isnan(group.rewards) & (tokens > 0)
-        if scored.any():
-            advantages[scored] *= tokens[scored].mean() / tokens[scored]
+        advantages[scored] /= tokens[scored]
         return advantages
 
 
 class TeamTrainer(AsyncGRPOTrainer):
+    """Eq. 3 exactly, however teams are packed into micro-batches. TRL divides each micro-batch's loss sum by its
+    trained tokens and by `gradient_accumulation_steps`; the advantages, already over |T_g|, are scaled back by both,
+    so the update's gradient is the sum over its teams of their token means. Before clipping it is divided by the
+    update's team count |B|: every team gives one row per agent, so |B| is the update's rows over `team_agents`."""
+
     loop_cls = TeamRolloutLoop
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        scale = inputs["global_n_tokens"][0] * self.current_gradient_accumulation_steps
+        inputs = {**inputs, "advantages": inputs["advantages"] * scale}
+        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+    def _clip_grad_norm(self, model):
+        teams = round(self._step_samples) / self.args.team_agents
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.div_(teams)
+        return super()._clip_grad_norm(model)
 
 
 def main() -> None:

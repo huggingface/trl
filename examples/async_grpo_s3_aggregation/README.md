@@ -53,9 +53,10 @@ are shared by all its agents' rows.
 - **Groups are G = 8 teams on the same problem.** The numbers are the same across the group; the agent names and
   teammate orders differ.
 - **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
-  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). TRL's loss is a token mean per micro-batch, which weighs a
-  team by its length; `compute_advantages` scales each team's advantage by its group's mean team length over its
-  own, so each team counts about equally, as in the paper's mean over teams of per-team token means.
+  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). `compute_advantages` divides each team's advantage by its trained
+  tokens |T_g|, and `TeamTrainer` scales out TRL's per-micro-batch token mean and divides the update's gradient by its
+  team count |B| (rows / N, since every team gives one row per agent) before clipping. So every team counts equally
+  however the batcher packs or splits teams, as in the paper's mean over teams of per-team token means.
   Micro-batches use TRL's token-budget packing, and `gradient_accumulation_steps` is `--teams-per-update` / 2,
   for about two teams per 40,960-token micro-batch. So `--teams-per-update` is approximate: a team forwards about
   17k tokens, so a micro-batch holds about 2.4 teams and an update about 150, varying with team length.
@@ -148,5 +149,3 @@ flight. The checkpoint was then evaluated with the harness in this folder.
 - No KL penalty.
 - Groups whose teams all get the same reward are dropped (TRL's default) and replaced by new ones; the paper keeps
   them with advantage 0 (App. C).
-- The mean over teams is approximated by TRL's token mean with length-weighted advantages (see the loss above): it
-  is exact when the teams of a micro-batch have their groups' mean length.

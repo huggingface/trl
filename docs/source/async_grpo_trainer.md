@@ -722,7 +722,7 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
-For a larger example, [`async_grpo_s3_aggregation`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_s3_aggregation) trains a multi-agent team: its `generate_one` runs a whole team episode (several agents sampling through `generate_one_turn` and messaging each other) as one rollout, and its `compute_advantages` weighs each team by its length.
+For a larger example, [`async_grpo_s3_aggregation`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_s3_aggregation) trains a multi-agent team: its `generate_one` runs a whole team episode (several agents sampling through `generate_one_turn` and messaging each other) as one rollout, and its `compute_advantages` and `compute_loss` make every team count equally in the loss.
 
 Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`~trainer.async_grpo_trainer.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level and keep the training code under `if __name__ == "__main__":`. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
