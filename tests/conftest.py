@@ -22,8 +22,6 @@ import pytest
 import torch
 from transformers.utils import is_peft_available, is_torch_xpu_available
 
-# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
-import trl  # noqa: F401
 from trl.import_utils import is_vllm_available
 
 
