@@ -136,11 +136,12 @@ text.num_hidden_layers = len(text.layer_types)
 model = getattr(transformers, config.architectures[0])(config).to("cuda", torch.bfloat16)
 ```
 
-MoE returns router logits and a non-zero aux loss, and LoRA reaches the routed experts:
+MoE: TRL computes the load-balancing loss itself (`add_fused_lm_head`), from the router logits of the backbone and `num_experts_per_tok`, so the backbone must return one `(tokens, experts)` tensor per MoE layer. LoRA must reach the routed experts:
 
 ```python
 x = torch.randint(0, 100, (1, 16), device="cuda")
-assert model(x, labels=x, output_router_logits=True).aux_loss > 0
+router_logits = model.base_model(x, output_router_logits=True).router_logits
+print(len(router_logits), router_logits[0].shape, text.num_experts_per_tok)
 print([n for n, _ in peft_model.named_parameters() if "lora" in n and "expert" in n][:3])
 ```
 
