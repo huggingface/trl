@@ -307,7 +307,6 @@ def main() -> None:
     )
     trainer = TeamTrainer(model=a.model, args=config, train_dataset=Dataset.from_list(rows), reward_funcs=[])
     trainer.train()
-    trainer.end()
 
 
 if __name__ == "__main__":
