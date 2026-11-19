@@ -109,7 +109,7 @@ jobs:
           files="tests/test_grpo_trainer.py tests/test_rloo_trainer.py tests/test_distillation_trainer.py tests/experimental/test_online_dpo_trainer.py"
           # The async trainers need transformers>=5.2.0, which the vLLM floor does not allow
           if [ "$VLLM_END" != "floor" ]; then
-            files="$files tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
+            files="$files tests/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
           fi
           # One process per test, since colocated vLLM engines keep their GPU memory until the process exits
           pytest --collect-only -q -k "vllm" $files | grep "::" | xargs -d '\n' -I{} timeout 30m pytest -v -rsx {}

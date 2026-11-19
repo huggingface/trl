@@ -56,7 +56,8 @@ class DistillationConfig(_BaseConfig):
             Whether to only keep the column `"prompt"` in the dataset. The trainer consumes the raw prompt column and
             generates completions on-policy, so it defaults to `False`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation.
+            Maximum number of tokens to generate per completion during on-policy generation. With `tools`, it caps the
+            whole multi-turn completion after the prompt (all model turns plus tool results).
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -138,8 +139,10 @@ class DistillationConfig(_BaseConfig):
             divergence itself; there is no reference-model KL penalty.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
+            stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
+            results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
+            length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
+            otherwise).
 
         > Parameters that control the logging
 
@@ -222,7 +225,10 @@ class DistillationConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+        metadata={
+            "help": "Maximum number of tokens to generate per completion. With `tools`, it caps the whole multi-turn "
+            "completion after the prompt (all model turns plus tool results)."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
@@ -368,8 +374,10 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
+            "generation stops when the model generates a response turn with no tool calls, when the completion "
+            "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
+            "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
+            "`max_position_embeddings` otherwise)."
         },
     )
 

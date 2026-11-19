@@ -47,7 +47,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_distillation.py
+torchrun --nproc_per_node 8 train_distillation.py
 ```
 
 ## Looking deeper into the distillation method
@@ -72,7 +72,7 @@ In practice, the projection to vocabulary logits and the divergence are computed
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
+The dataset should be a [prompt-only](dataset_formats#prompt-only) dataset, in either [standard](dataset_formats#standard) or [conversational](dataset_formats#conversational) format. The student generates its own completions on-policy, so only the prompt is needed:
 
 ```python
 {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
@@ -127,7 +127,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
        --weight-transfer-config '{"backend": "nccl"}' \
        --logprobs-mode processed_logprobs \
        --max-logprobs -1
@@ -199,7 +199,7 @@ For more details, see the [Passing tools guide](https://huggingface.co/docs/tran
 > [!TIP]
 > The tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
-Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls.
+Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls, when the completion (all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings` otherwise).
 
 Example:
 

@@ -33,9 +33,8 @@ Prerequisites:
 
 Example:
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_nemotron_3/sft_nemotron_3.py \
+torchrun --nproc_per_node 8 examples/sft_nemotron_3/sft_nemotron_3.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dtype bfloat16 \
     --model_name_or_path nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
     --attn_implementation eager \

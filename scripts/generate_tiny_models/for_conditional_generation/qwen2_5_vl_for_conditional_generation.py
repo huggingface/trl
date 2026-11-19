@@ -47,7 +47,7 @@ text_config = {
 }
 vision_config = {
     "hidden_size": 16,
-    "num_heads": 4,
+    "num_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "depth": 2,
     "fullatt_block_indexes": [1],  # must contain valid layer indices (< depth)
     "out_hidden_size": 32,

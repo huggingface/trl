@@ -16,7 +16,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv[harbor] @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv[harbor]==0.7.0",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
@@ -89,7 +89,7 @@ TRAIN_SCRIPT_URL = (
     "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py"
 )
 DATA_ROOT = pathlib.Path(os.environ.get("DATA_ROOT", "/data"))
-OPENENV_REVISION = "86a180ede21e044f7929b9a7783ad83aa67d83a3"
+OPENENV_REVISION = "v0.7.0"
 
 _children: list[subprocess.Popen] = []
 _stopping = threading.Event()
@@ -367,6 +367,7 @@ def main() -> None:
         "--default-chat-template-kwargs", '{"enable_thinking": false}',
         "--return-tokens-as-token-ids",
         "--logprobs-mode", "processed_logprobs",
+        "--gpu-memory-utilization", "0.9",
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
     proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})

@@ -282,7 +282,7 @@ hf jobs run \
     --secrets HF_TOKEN \
     huggingface/trl \
     -- \
-    trl sft --num_processes 4 \
+    trl sft --nproc_per_node 4 \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/Capybara \
     --max_steps 100 \
@@ -299,7 +299,7 @@ from huggingface_hub import run_job
 run_job(
     image="huggingface/trl",
     command=[
-        "trl", "sft", "--num_processes", "4",
+        "trl", "sft", "--nproc_per_node", "4",
         "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
         "--dataset_name", "trl-lib/Capybara",
         "--max_steps", "100",
@@ -315,11 +315,11 @@ run_job(
 </hfoption>
 </hfoptions>
 
-The [`trl` CLI](clis) passes `--num_processes` to `accelerate launch`. Set it to the number of GPUs in the flavor, here four L4s. Each process takes its own batch, so the effective batch size is four times that of a single-GPU run. This run takes a few minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout`, for example to `2h`.
+The [`trl` CLI](clis) passes `--nproc_per_node` to `torchrun`. Set it to the number of GPUs in the flavor, here four L4s. Each process takes its own batch, so the effective batch size is four times that of a single-GPU run. This run takes a few minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout`, for example to `2h`.
 
 ### Your own script
 
-You are not limited to the TRL scripts. Training code that runs with `accelerate launch` locally runs the same way on Jobs, as long as the image has the packages it needs. For example, save a GRPO script with your own reward function as `train_grpo.py` in a folder, and mount the folder into the Job. Jobs uploads the folder to a private bucket and mounts it read-only:
+You are not limited to the TRL scripts. Training code that runs with `torchrun` locally runs the same way on Jobs, as long as the image has the packages it needs. For example, save a GRPO script with your own reward function as `train_grpo.py` in a folder, and mount the folder into the Job. Jobs uploads the folder to a private bucket and mounts it read-only:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -332,7 +332,7 @@ hf jobs run \
     --volume ./my-project:/code \
     huggingface/trl \
     -- \
-    accelerate launch --num_processes 4 /code/train_grpo.py
+    torchrun --nproc_per_node 4 /code/train_grpo.py
 ```
 
 </hfoption>
@@ -344,7 +344,7 @@ from huggingface_hub import run_job, sync_job_volume
 code = sync_job_volume("./my-project", "/code")
 run_job(
     image="huggingface/trl",
-    command=["accelerate", "launch", "--num_processes", "4", "/code/train_grpo.py"],
+    command=["torchrun", "--nproc_per_node", "4", "/code/train_grpo.py"],
     flavor="l4x4",
     timeout="30m",
     secrets={"HF_TOKEN": "hf_..."},

@@ -33,6 +33,7 @@ from trl.chat_template_utils import (
     cohere_training_chat_template,
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
+    deepseekv3_v5_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
@@ -56,6 +57,8 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    muse_glimmer_v2_chat_template,
+    muse_spark_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
@@ -64,6 +67,8 @@ from trl.chat_template_utils import (
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
+    smollm2_chat_template,
+    smolvlm_v2_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -766,15 +771,18 @@ class TestAddResponseSchemaTrainingTemplate:
         sorted(path.name.removesuffix("_training.jinja") for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja")),
     )
     def test_add_response_schema_training_template(self, name):
-        # The training variant renders a generated turn like the original, so it gets the same parser
+        # The training variant renders a generated turn like the original, so it gets the same parser, or fails the
+        # same way when the original isn't parsed
         original = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         original.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}.jinja").read_text(encoding="utf-8")
-        try:
-            original = add_response_schema(original)
-        except ValueError:
-            pytest.skip("The original template isn't parsed with the installed transformers")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         tokenizer.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}_training.jinja").read_text(encoding="utf-8")
+        try:
+            original = add_response_schema(original)
+        except ValueError as error:
+            with pytest.raises(ValueError, match=re.escape(str(error))):
+                add_response_schema(tokenizer)
+            return
         tokenizer = add_response_schema(tokenizer)
         if _SUPPORTS_RESPONSE_TEMPLATE:
             assert tokenizer.response_template == original.response_template
@@ -992,6 +1000,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
+            pytest.param(
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+                id="smolvlm_v2",
+            ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
@@ -1273,6 +1285,9 @@ class TestIsChatTemplateStopTokenTrained:
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
             id="diffusion_gemma",
             marks=[
@@ -1331,6 +1346,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
             id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", muse_glimmer_v2_chat_template),
+            id="muse_glimmer_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -1433,6 +1459,17 @@ class TestIsChatTemplateStopTokenTrained:
             ],
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", qwen3_6_v2_chat_template),
+            id="qwen36_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
             id="qwen38",
             marks=[
@@ -1443,10 +1480,39 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_v2_chat_template),
+            id="qwen38_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
+        # SmolLM2 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
+        pytest.param(
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
+            id="smolvlm_v2",
+            marks=require_vision,
+        ),
         pytest.param(
             "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
             id="muse_spark",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", muse_spark_v2_chat_template),
+            id="muse_spark_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -1538,6 +1604,33 @@ class TestGetTrainingChatTemplate:
         else:
             assert before == after
 
+    def test_behavior_unchanged_with_response_format(self, tokenizer_name):
+        tokenizer = self._load(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": '{"color": "blue"}'},
+        ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "color",
+                "schema": {"type": "object", "properties": {"color": {"type": "string"}}},
+            },
+        }
+
+        before = tokenizer.apply_chat_template(messages, tokenize=False, response_format=response_format)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages, tokenize=False, chat_template=new_chat_template, response_format=response_format
+        )
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
+
     def test_behavior_unchanged_final_assistant_with_reasoning_content(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
         messages = [
@@ -1591,6 +1684,10 @@ class TestGetTrainingChatTemplate:
             # assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
+        elif tokenizer_name == ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template):
+            # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
+            reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
+            assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
         else:
             assert before == after
 
@@ -1609,6 +1706,7 @@ class TestGetTrainingChatTemplate:
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
         ):
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
             # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
@@ -1707,7 +1805,7 @@ class TestGetTrainingChatTemplate:
     def test_assistant_masks(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1738,26 +1836,9 @@ class TestGetTrainingChatTemplate:
 
     @pytest.mark.parametrize("enable_thinking", [None, False, True])
     def test_assistant_masks_exclude_generation_prompt(self, tokenizer_name, enable_thinking, request):
-        # The enable_thinking values for which the training template trains tokens the generation prompt ends with
-        trains_generation_prompt = [
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", [None]),
-            ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
-            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-nano", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-super", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-ultra", [None, False, True]),
-            ("trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning", [None, False, True]),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
-            (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", [None]),
-        ]
-        if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
-            reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
-            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1779,6 +1860,9 @@ class TestGetTrainingChatTemplate:
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
         if prompt.rstrip().endswith("</think>"):
             assistant = {"role": "assistant", "content": "It is blue."}
+        # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
+        elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
+            assistant = {"role": "assistant", "content": "<think>\nRayleigh scattering.\n</think>\n\nIt is blue."}
         else:
             assistant = {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
         messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
@@ -1797,10 +1881,59 @@ class TestGetTrainingChatTemplate:
         # The assistant mask starts right after the generation prompt
         assert list(masks).index(1) == len(prompt_ids)
 
+    @pytest.mark.parametrize("enable_thinking", [None, False, True])
+    def test_assistant_masks_exclude_generation_prompt_without_reasoning(
+        self, tokenizer_name, enable_thinking, request
+    ):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0"):
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
+        tokenizer = self._load(tokenizer_name)
+        if enable_thinking is not None and "enable_thinking" not in tokenizer.chat_template:
+            pytest.skip("This chat template doesn't use enable_thinking.")
+        kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **kwargs)
+        assistant = {"role": "assistant", "content": "It is blue."}
+        messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
+        chat_template = get_training_chat_template(tokenizer)
+        text = tokenizer.apply_chat_template(messages, chat_template=chat_template, tokenize=False, **kwargs)
+        if not text.startswith(prompt):
+            pytest.skip("A turn without reasoning can't continue this generation prompt.")
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            **kwargs,
+        )
+        input_ids, masks = result["input_ids"], result["assistant_masks"]
+        if self.is_vlm:  # VLM processors return batched output
+            input_ids, masks = input_ids[0], masks[0]
+        encoding = (tokenizer.tokenizer if self.is_vlm else tokenizer)(
+            text, add_special_tokens=False, return_offsets_mapping=True
+        )
+        # Some processors add special tokens before the rendered text
+        shift = len(input_ids) - len(encoding["input_ids"])
+        assert list(input_ids[shift:]) == encoding["input_ids"]
+        assert 1 in masks
+        # The first trained token starts after the generation prompt
+        assert encoding["offset_mapping"][list(masks).index(1) - shift][0] >= len(prompt)
+
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
-        ) < Version("5.18.0.dev0"):
+        ) < Version("5.18.0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1830,6 +1963,15 @@ class TestGetTrainingChatTemplate:
         assert region_starts == 2
 
 
+class TestGetTrainingChatTemplateRequirePrefixPreservation:
+    def test_require_prefix_preservation(self):
+        # This template has generation markers but supports tools without being prefix-preserving
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        with pytest.raises(ValueError, match="not training-compatible"):
+            get_training_chat_template(tokenizer)
+        assert get_training_chat_template(tokenizer, require_prefix_preservation=False) is None
+
+
 class TestDeepseekTrainingChatTemplates:
     @pytest.mark.parametrize(
         "tokenizer_name",
@@ -1842,6 +1984,9 @@ class TestDeepseekTrainingChatTemplates:
             ),
             pytest.param(
                 ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
+            ),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
             ),
         ],
     )
@@ -1874,6 +2019,33 @@ class TestDeepseekTrainingChatTemplates:
         assert "It is 12." in trained and "You are welcome." in trained
         assert "<｜Assistant｜>" not in trained
         assert "<｜tool▁outputs▁end｜>" not in trained
+
+    def test_deepseekv3_v5_thinking_trains_reasoning(self):
+        # With `thinking=True`, the DeepSeek-V3.1 generation prompt ends with `<think>`, so the training template must
+        # open the assistant turn the same way and train the reasoning that follows
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        tokenizer.chat_template = deepseekv3_v5_chat_template
+        chat_template = get_training_chat_template(tokenizer)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "The sky scatters shorter wavelengths.</think>It is blue."},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages[:1], chat_template=chat_template, add_generation_prompt=True, tokenize=False, thinking=True
+        )
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            thinking=True,
+        )
+        assert tokenizer.decode(result["input_ids"]).startswith(prompt)
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained == "The sky scatters shorter wavelengths.</think>It is blue.<｜end▁of▁sentence｜>"
 
 
 class TestNamedChatTemplateVariants:
@@ -2309,7 +2481,10 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = processing_class(text)["input_ids"]
-        parsed = parse_response(processing_class, assistant_text)
+        prefix = processing_class.apply_chat_template(
+            [{"role": "user", "content": "What is 3*4?"}], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        parsed = parse_response(processing_class, assistant_text, prefix=prefix)
         expected = {
             "role": "assistant",
             "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
@@ -2343,7 +2518,7 @@ class TestParseResponse:
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
         # Truncate the response mid-tool-call and just check that parsing doesn't crash.
         for end in range(1, len(response)):
-            parse_response(tokenizer, response[:end])
+            parse_response(tokenizer, response[:end], prefix=prefix)
 
 
 @pytest.mark.skipif(not _SUPPORTS_RESPONSE_TEMPLATE, reason="Requires the response_template parser (>= 5.13)")
