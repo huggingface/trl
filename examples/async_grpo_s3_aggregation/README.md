@@ -38,9 +38,9 @@ flowchart LR
     R --> R2
     R2 --> W["team reward R (Eq. 1)<br/>one per rollout"]
     R2 --> T["N training rows<br/>(each agent's sampled turns)"]
-    W --> AD["compute_advantages:<br/>group-standardized, length-weighted"]
+    W --> AD["compute_advantages:<br/>group-standardized, over the team's tokens"]
     AD --> T
-    T --> L[AsyncGRPOTrainer loss]
+    T --> L["TeamTrainer loss (Eq. 3):<br/>mean over the update's teams"]
 ```
 
 Every agent samples from the same policy through the loop's `generate_one_turn`; the team's reward and advantage
