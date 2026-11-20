@@ -23,10 +23,10 @@
 
 # docstyle-ignore
 """
-Teach REDACTED_NAME to read analog clocks: LoRA SFT on 10,000 clocks on one H100, 53 minutes at a peak of 55 GiB. The
+Teach Inkling 2 Mini to read analog clocks: LoRA SFT on 10,000 clocks on one H100, 53 minutes at a peak of 55 GiB. The
 fine-tuned model reads 93.5% of the held-out clocks to the second, against none for the original.
 
-    python sft_redacted_name_clocks.py
+    python sft_inkling_2_mini_clocks.py
 """
 
 from datasets import Image, load_dataset
@@ -35,7 +35,7 @@ from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 
-MODEL = "REDACTED_HUB_ID"
+MODEL = "thinkingmachines/Inkling-2-Mini"
 
 
 def to_messages(example):
@@ -58,7 +58,7 @@ dataset = dataset.shuffle(seed=0).select(range(10_000))
 dataset = dataset.map(to_messages, remove_columns=dataset.column_names)
 
 training_args = SFTConfig(
-    output_dir="REDACTED_FILE_NAME-clocks",
+    output_dir="Inkling-2-Mini-clocks",
     # TRL loads a model id in float32 unless told otherwise, which doesn't fit on one GPU
     model_init_kwargs={"dtype": "bfloat16"},
     per_device_train_batch_size=8,

@@ -23,8 +23,8 @@
 """
 Share of held-out analog clocks a model reads right: to the second, to the minute, and the hour alone.
 
-    python evaluate.py REDACTED_HUB_ID
-    python evaluate.py REDACTED_HUB_ID --adapter REDACTED_FILE_NAME-clocks
+    python evaluate.py thinkingmachines/Inkling-2-Mini
+    python evaluate.py thinkingmachines/Inkling-2-Mini --adapter Inkling-2-Mini-clocks
 """
 
 import argparse

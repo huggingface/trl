@@ -4312,17 +4312,17 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
         pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
         pytest.param(
-            "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+            "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
             {},
-            id="redacted",
+            id="inkling2_loop",
             marks=[
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
-                    reason="REDACTED_NAME models were introduced in transformers-5.24.0",
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
                 pytest.mark.xfail(
                     raises=ValueError,
-                    reason="Tree packing doesn't support REDACTED_NAME's hybrid layers",
+                    reason="Tree packing doesn't support Inkling 2 Mini's hybrid layers",
                     strict=True,
                 ),
             ],
