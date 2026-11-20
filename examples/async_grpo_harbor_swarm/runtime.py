@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from board import TeamBoard, tool_bundle
+from harbor.trial.hooks import TrialEvent
 from openenv.core.harness.capture import CaptureServer
 from openenv.core.harness.capture.sessions import Upstream
 from openenv.harbor import seams
@@ -185,6 +186,8 @@ class TeamRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.active_teams = 0
+        self.setup_teams = asyncio.Semaphore(2)
+        self.grading_slots = asyncio.Semaphore(8)
         self.capture_loop = None
         self.root = Path(settings.output_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -237,6 +240,7 @@ class TeamRunner:
         names = [f"agent{i:03}" for i in range(cfg.agents)]
         board = TeamBoard(directory / "board", names)
         trials, ready = {}, set()
+        grading = set()
         barrier = asyncio.Event()
         active = asyncio.Event()
         scenario = tomllib.loads((task_dir / "task.toml").read_text())["metadata"]["scenario_sha256"]
@@ -253,8 +257,11 @@ class TeamRunner:
         jobs = []
         agent_clients = []
         monitor = None
+        setting_up = False
         started = time.monotonic()
         try:
+            await self.setup_teams.acquire()
+            setting_up = True
             await board.start()
             upstream = Upstream(llm_url=cfg.vllm_url, model=model, api_key=os.environ.get("VLLM_API_KEY"))
             client, level = await self.capture.app.state.upstreams.resolve(upstream)
@@ -262,8 +269,11 @@ class TeamRunner:
                 raise ValueError("The inference endpoint must supply exact tokens and sampling logprobs")
 
             async def ready_agent(name):
+                nonlocal setting_up
                 ready.add(name)
                 if len(ready) == cfg.agents:
+                    setting_up = False
+                    self.setup_teams.release()
                     state["execution_started"] = time.time()
                     barrier.set()
                     active.set()
@@ -271,6 +281,12 @@ class TeamRunner:
 
             def created(name, trial):
                 trials[name] = trial
+
+                async def admit_grading(event):
+                    await self.grading_slots.acquire()
+                    grading.add(name)
+
+                trial.add_hook(TrialEvent.AGENT_END, admit_grading)
                 board.bind(trial, name)
                 trial.config.agent.extra_allowed_hosts.append(urlsplit(cfg.capture_url).hostname)
                 # Configure the native backend before rebuilding with the board mount.
@@ -354,6 +370,14 @@ class TeamRunner:
             }
 
             async def run_agent(name):
+                try:
+                    return await run_trial_agent(name)
+                finally:
+                    if name in grading:
+                        grading.remove(name)
+                        self.grading_slots.release()
+
+            async def run_trial_agent(name):
                 agent_upstream, agent_client = upstream, client
                 if cfg.gateway_url:
                     agent_upstream = Upstream(llm_url=f"{cfg.gateway_url}/agents/{team_id}-{name}/v1", model=model)
@@ -457,6 +481,8 @@ class TeamRunner:
                 if not job.done():
                     job.cancel()
             await asyncio.gather(*jobs, *([monitor] if monitor else []), return_exceptions=True)
+            if setting_up:
+                self.setup_teams.release()
             for agent_upstream, agent_client in agent_clients:
                 self.capture.app.state.upstreams.forget(agent_upstream)
                 if self.capture_loop and self.capture_loop.is_running():

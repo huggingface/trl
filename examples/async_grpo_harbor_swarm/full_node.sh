@@ -19,6 +19,7 @@ export CONTAINERS_CONF=$local_root/containers.conf
 cat > "$CONTAINERS_CONF" <<EOF
 [containers]
 seccomp_profile = "$bundle/etc/containers/seccomp.json"
+keyring = false
 [engine]
 helper_binaries_dir = ["$bundle/usr/local/lib/podman", "$bundle/usr/local/bin", "/usr/lib/podman"]
 conmon_path = ["$bundle/usr/local/lib/podman/conmon"]

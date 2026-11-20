@@ -19,6 +19,8 @@ import json
 import os
 import signal
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import podman_healthchecks
@@ -26,6 +28,7 @@ import pytest
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 from podman_runtime import SwarmPodmanEnvironment
+from runtime import Settings, TeamRunner
 
 
 def environment(tmp_path):
@@ -86,6 +89,49 @@ def test_cancelled_exec_terminates_compose_descendants(tmp_path, monkeypatch):
             pytest.fail("Compose child survived cancellation")
 
     asyncio.run(run())
+
+
+def test_failed_team_setup_releases_admission(tmp_path):
+    class UnavailableInference(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b'{"error":"unavailable"}')
+
+        do_GET = do_POST
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UnavailableInference)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.toml").write_text('[metadata]\nscenario_sha256 = "setup-failure"\n')
+
+    async def run():
+        runner = TeamRunner(
+            Settings(
+                vllm_url=f"http://127.0.0.1:{server.server_port}/v1",
+                capture_url="http://127.0.0.1:1",
+                output_dir=str(tmp_path / "run"),
+            )
+        )
+        # Use real boards and upstream discovery. More teams than admission slots
+        # must all finish when the external inference service refuses setup.
+        results = await asyncio.wait_for(
+            asyncio.gather(*(runner.run(task, runner.settings.model) for _ in range(6))), 45
+        )
+        assert all(state["stop_reason"] == "unscorable" and traces == [] for state, traces in results)
+        assert runner.active_teams == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_health_scheduler_recovers_inspection_timeout_and_caches_config(monkeypatch):
@@ -159,5 +205,46 @@ def test_daemon_probe_does_not_block_event_loop(tmp_path, monkeypatch):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             SwarmPodmanEnvironment._detect_daemon_os.cache_clear()
+
+    asyncio.run(run())
+
+
+def test_new_container_readiness_precedes_periodic_healthy_checks(monkeypatch):
+    existing = [f"{i:012x}" for i in range(16)]
+    newcomer = "ffffffffffff"
+    checks = []
+
+    async def engine(*args):
+        if args[0] == "ps":
+            ids = existing + ([newcomer] if len(checks) >= 16 else [])
+            return 0, "\n".join(ids).encode(), b""
+        if args[0] == "inspect":
+            return (
+                0,
+                json.dumps(
+                    [
+                        {"Id": key, "Config": {"Healthcheck": {"Test": ["CMD", "true"], "Interval": 1}}}
+                        for key in args[1:]
+                    ]
+                ).encode(),
+                b"",
+            )
+        assert args[0] == "healthcheck"
+        checks.append(args[-1])
+        return 0, b"", b""
+
+    monkeypatch.setattr(podman_healthchecks, "podman", engine)
+
+    async def run():
+        task = asyncio.create_task(podman_healthchecks.main())
+        try:
+            async with asyncio.timeout(8):
+                while len(checks) < 17:
+                    await asyncio.sleep(0.05)
+            assert checks[16] == newcomer
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     asyncio.run(run())

@@ -156,7 +156,18 @@ The Podman backend limits environment starts/stops to eight at a time and serial
 builds because AgentEscape tasks share image tags. Daemon detection runs off the event
 loop and is cached. Compose cancellation terminates its child processes. Healthcheck
 discovery retries timeouts, caches container configuration, and limits concurrent checks
-to sixteen. A healthcheck scheduler or gateway exit fails the training job promptly.
+to sixteen. First readiness checks take priority over periodic checks of containers
+that have already passed. A healthcheck scheduler or gateway exit fails the training job promptly.
+The job-local container configuration disables per-container kernel keyrings; these
+tasks do not use them, and the default per-user quota prevents the 256-agent target
+from starting all of its containers.
+At most two teams enter setup together; admission happens before trial creation and
+startup timers. Once all members are ready, the next team can enter setup while the
+ready team executes. This preserves the target of sixteen executing teams without
+starting hundreds of trial timers while their environments are still queued.
+After agent execution, at most eight trials collect artifacts, run native grading,
+and clean up together. Admission uses Harbor's agent-end hook, outside the agent's
+execution budget and before the verifier's timeout starts.
 
 `--teams-per-update` always counts global teams; it must divide evenly across ranks.
 The loader stages a complete optimizer batch before yielding any accumulation rounds.

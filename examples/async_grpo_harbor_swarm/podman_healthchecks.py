@@ -56,11 +56,14 @@ async def main():
     # Cache immutable healthcheck configuration; inspecting every container every
     # second blocked the scheduler under load. Bound healthcheck subprocesses too.
     deadlines, configs, running = {}, {}, {}
+    awaiting_first_success = set()
     while True:
         for key, task in list(running.items()):
             if task.done():
                 try:
-                    task.result()
+                    code, _, _ = task.result()
+                    if code == 0:
+                        awaiting_first_success.discard(key)
                 except TimeoutError:
                     print(f"Healthcheck timed out for {key}; will retry", flush=True)
                 deadlines[key] = time.monotonic() + interval(configs.get(key, {}))
@@ -73,6 +76,7 @@ async def main():
                 continue
             ids = stdout.decode().split()
             active = set(ids)
+            awaiting_first_success.intersection_update(active)
             configs = {key: value for key, value in configs.items() if key in active}
             deadlines = {key: value for key, value in deadlines.items() if key in active}
             # Discover only a small batch per tick, so one slow inspection cannot
@@ -84,11 +88,12 @@ async def main():
                     for container in json.loads(stdout):
                         key = container["Id"][:12]
                         configs[key] = container.get("Config", {}).get("Healthcheck") or {}
+                        awaiting_first_success.add(key)
                         deadlines[key] = time.monotonic()
         except TimeoutError:
             print("Podman discovery timed out; continuing health checks", flush=True)
         now = time.monotonic()
-        for key in sorted(configs, key=lambda key: deadlines.get(key, 0)):
+        for key in sorted(configs, key=lambda key: (key not in awaiting_first_success, deadlines.get(key, 0))):
             health = configs[key]
             if not health.get("Test") or health["Test"] == ["NONE"]:
                 continue
