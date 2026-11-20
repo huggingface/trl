@@ -4462,6 +4462,25 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 train_dataset=dataset,
             )
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0"),
+        reason="The head dim check requires transformers>=5.18.0",
+    )
+    def test_init_raises_on_head_dim_above_256(self):
+        # Like released Gemma 4 checkpoints, whose full-attention layers have a head dim of 512
+        config = AutoConfig.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        config_dict = config.to_dict()
+        config_dict["text_config"]["per_layer_config"]["1"]["head_dim"] = 512  # layer 1 is the full-attention layer
+        model = AutoModelForImageTextToText.from_config(type(config).from_dict(config_dict))
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with pytest.raises(ValueError, match="head dim of 512"):
+            AsyncGRPOTrainer(
+                model=model,
+                reward_funcs=str_length_reward,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
 
 def _finalize(turns, rollout_id="r0"):
     rows, _drifts = _chain_to_sequences(Rollout([], [], turns, rollout_id=rollout_id))
