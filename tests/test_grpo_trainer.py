@@ -4468,9 +4468,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
                         reason="Inkling 2 models were introduced in transformers-5.23.0",
                     ),
                     pytest.mark.xfail(
-                        raises=TypeError,
-                        reason="Inkling 2's patch tensor is taken for InternVL tiles (#8484)",
-                        strict=True,
+                        reason="Dequantizing the MXFP8 checkpoint leaves the experts unscaled (#8497)", strict=True
                     ),
                 ],
             ),
