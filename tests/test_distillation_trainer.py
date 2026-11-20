@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+from collections import defaultdict
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +21,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -52,6 +54,240 @@ def multiply_tool(a: int, b: int) -> int:
         The product of the two integers.
     """
     return a * b
+
+
+RECORDS = defaultdict(list)  # what the environments below saw, cleared by the tests that read it
+
+
+def record(key: str, value):
+    """Append `value` under `key` to `RECORDS`."""
+    RECORDS[key].append(value)
+
+
+class ScriptedTurns:
+    """Answers each prompt with a completion written as text, in place of the model's generation.
+
+    The k-th first turn of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets
+    `after_tool`. Call it with a prompt's token ids, or patch [`~ScriptedTurns.generate`] in for the model's
+    `generate`.
+
+    Args:
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer of the model.
+        first_turns (`list[str]` or `Callable[[str], list[str]]`):
+            Completions of the first turn, or a function of the prompt's text returning them.
+        after_tool (`str`, *optional*, defaults to `"Done!<|im_end|>"`):
+            Completion of a turn after a tool result.
+        tool_response_marker (`str`, *optional*, defaults to `"<tool_response>"`):
+            Text the chat template renders a tool result with, which tells the turns apart.
+
+    Attributes:
+        turns_after_tool (`int`):
+            Number of turns answered after a tool result.
+    """
+
+    def __init__(self, tokenizer, first_turns, after_tool="Done!<|im_end|>", tool_response_marker="<tool_response>"):
+        self.tokenizer = tokenizer
+        self.first_turns = first_turns
+        self.after_tool = after_tool
+        self.tool_response_marker = tool_response_marker
+        self.seen = defaultdict(int)
+        self.turns_after_tool = 0
+
+    def __call__(self, prompt_ids: list[int]) -> list[int]:
+        prompt = self.tokenizer.decode(prompt_ids)
+        if self.tool_response_marker in prompt:
+            self.turns_after_tool += 1
+            text = self.after_tool
+        else:
+            first_turns = self.first_turns(prompt) if callable(self.first_turns) else self.first_turns
+            text = first_turns[self.seen[prompt] % len(first_turns)]
+            self.seen[prompt] += 1
+        return self.tokenizer(text, add_special_tokens=False).input_ids
+
+    def generate(self, input_ids, attention_mask, **kwargs):
+        """Answer a batch of left-padded prompts as `generate` does: each prompt followed by its completion,
+        right-padded."""
+        completions = [self(ids[mask.bool()].tolist()) for ids, mask in zip(input_ids, attention_mask, strict=True)]
+        width = max(len(ids) for ids in completions)
+        completion_ids = [ids + [self.tokenizer.pad_token_id] * (width - len(ids)) for ids in completions]
+        return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+
+class CounterEnvironment:
+    def reset(self, **kwargs):
+        record("reset_counter", kwargs)
+        return "Count."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        record("increment", step)
+        return step
+
+
+class EchoEnvironment:
+    def reset(self, **kwargs):
+        record("reset_echo", kwargs)
+        return "Echo."
+
+    def shout(self, text: str) -> str:
+        """
+        Shout the given text.
+
+        Args:
+            text: Text to shout.
+
+        Returns:
+            The text in upper case.
+        """
+        record("shout", text)
+        return text.upper()
+
+
+class ZipEnvironment:
+    def reset(self, **kwargs):
+        return "Give the zip code."
+
+    def submit(self, answer: str) -> str:
+        """
+        Submit the zip code.
+
+        Args:
+            answer: The zip code.
+
+        Returns:
+            A confirmation.
+        """
+        record("zip", answer)
+        return "ok"
+
+
+class CountEnvironment:
+    def reset(self, **kwargs):
+        return "Count."
+
+    def submit(self, answer: int) -> str:
+        """
+        Submit the count.
+
+        Args:
+            answer: The count.
+
+        Returns:
+            A confirmation.
+        """
+        record("count", answer)
+        return "ok"
+
+
+class IncrementEnvironment:
+    def reset(self, **kwargs):
+        self._counter = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._counter += step
+        return self._counter
+
+
+class StartedCounterEnvironment:
+    # Reads its start from a dataset column, keeps its state across turns, and scores the rollout from it
+    def reset(self, start: int, **kwargs):
+        self._counter = start
+        return f" The counter starts at {start}."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter, must be positive.
+
+        Returns:
+            The updated counter value.
+        """
+        if step <= 0:
+            raise ValueError("`step` must be positive.")
+        self._counter += step
+        return self._counter
+
+    def get_reward(self) -> float:
+        return float(self._counter)
+
+
+class DocumentEnvironment:
+    def reset(self, length: int, **kwargs):
+        self._length = length
+
+    def read(self) -> str:
+        """
+        Read the document.
+
+        Returns:
+            The content of the document.
+        """
+        return "lorem " * self._length
+
+
+class PropertyEnvironment:
+    def __init__(self):
+        self.is_reset = False
+
+    def reset(self, **kwargs):
+        self.is_reset = True
+
+    @property
+    def reward(self) -> float:
+        if self.is_reset:
+            raise RuntimeError("`reward` must not be evaluated while discovering tools")
+        return 0.0
+
+    def echo(self, text: str) -> str:
+        """
+        Echo the text back.
+
+        Args:
+            text: Text to echo.
+
+        Returns:
+            The text, unchanged.
+        """
+        return text
+
+
+class ScoredEnvironment:  # owns its reward
+    def reset(self, **kwargs): ...
+
+    def act(self, x: int) -> int:
+        """
+        Act.
+
+        Args:
+            x: A value.
+
+        Returns:
+            The value.
+        """
+        return x
+
+    def get_reward(self) -> float:
+        return 1.0
 
 
 if is_peft_available():
@@ -1502,6 +1738,456 @@ class TestDistillationTrainer(TrlTestCase):
         assert pad_token_id is not None
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_factory(self):
+        # 3 completions per step: a valid tool call, a call to `reset` (not exposed as a tool, so it fails), no call
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            max_steps=2,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            # A different (same-vocab) teacher, so the divergence is not trivially zero
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=IncrementEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # a call to `reset`, which is not exposed as a tool
+                '<tool_call>\n{"name": "reset", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # The failed call is answered with its error, so both tool calls get a next turn
+        assert script.turns_after_tool == 4  # 2 per step
+        # Without `get_reward`, no environment score is logged
+        assert not any(key.startswith("rewards/") for key in trainer.state.log_history[-1])
+
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_stateful_environment(self):
+        # Each rollout is reset with its `start` column and calls `increment` every turn: start -> +1 -> +3, and the
+        # third call is cut by `max_tool_calling_iterations=2`
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 10, 20]},
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=256,
+            max_tool_calling_iterations=2,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=StartedCounterEnvironment,
+        )
+
+        increment_1 = '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+        increment_2 = '<tool_call>\n{"name": "increment", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
+        script = ScriptedTurns(trainer.processing_class, first_turns=[increment_1], after_tool=increment_2)
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["train_loss"] is not None
+        # 2 calls run per rollout, the third is cut by `max_tool_calling_iterations`
+        assert logged["tools/call_frequency"] == pytest.approx(2.0)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
+        # The score is logged, never trained on: final counters 3, 13 and 23
+        assert logged["rewards/StartedCounterEnvironment/mean"] == pytest.approx(13.0)
+        # Only the 3 model turns count as completion tokens: the tool results are masked out of the loss
+        num_turn_tokens = len(trainer.processing_class(increment_1, add_special_tokens=False).input_ids)
+        assert logged["completions/mean_length"] == pytest.approx(3 * num_turn_tokens)
+        # The observation returned by `reset` is appended to the prompt
+        assert {prompt.count("The counter starts at") for prompt in script.seen} == {1}
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_and_tools(self):
+        # Rollouts call the standalone tool, `increment` with a rejected step, and `increment`
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 0, 0]})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+            environment_factory=StartedCounterEnvironment,
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "increment", "arguments": {"step": -1}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["tools/call_frequency"] == pytest.approx(1.0)
+        # The exception raised by the environment is returned to the model as the tool result, so it gets a next turn
+        assert logged["tools/failure_frequency"] == pytest.approx(1 / 3)
+        assert script.turns_after_tool == 3
+        # Only the successful `increment` moved its counter
+        assert logged["rewards/StartedCounterEnvironment/mean"] == pytest.approx(1 / 3)
+        prompt = next(iter(script.seen))
+        assert '"name": "multiply_tool"' in prompt and '"name": "increment"' in prompt
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_episode_capped_by_max_completion_length(self):
+        # `max_completion_length` caps the whole episode: an overflowing tool result is dropped, a model turn truncated
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Read."}]] * 3, "length": [1000, 1, 1000]},
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=64,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=DocumentEnvironment,
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=['<tool_call>\n{"name": "read", "arguments": {}}\n</tool_call><|im_end|>'],
+            after_tool="word " * 100 + "<|im_end|>",
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["train_loss"] is not None
+        assert logged["tools/call_frequency"] == pytest.approx(1.0)
+        # Only the short document fits: that rollout gets a next turn, truncated at the budget
+        assert script.turns_after_tool == 1
+        assert logged["completions/clipped_ratio"] == pytest.approx(1 / 3)
+        assert logged["completions/max_length"] <= 64
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments(self):
+        # With a dict `environment_factory`, each rollout gets the environment named in its `environment` field
+        RECORDS.clear()
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["counter", "echo"] * 2}
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # a batch mixes both environments
+            max_completion_length=128,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                    '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                    # counter example: no tool call
+                    "I won't<|im_end|>",
+                ]
+                if "Count." in prompt
+                else [
+                    # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                    '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>',
+                    # echo example: no tool call
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Each rollout dispatched to the tools of its own environment
+        assert RECORDS["increment"]
+        assert RECORDS["shout"]
+        # Half of the rollouts issued a tool call, and every call succeeded.
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
+        assert RECORDS["reset_counter"] and RECORDS["reset_echo"]
+        assert all("environment" not in kwargs for kwargs in RECORDS["reset_counter"] + RECORDS["reset_echo"])
+        # Each rollout is shown only the tool of its own environment
+        prompts = list(script.seen)
+        assert all(("increment" in prompt) == ("Count." in prompt) for prompt in prompts)
+        assert all(("shout" in prompt) == ("Echo." in prompt) for prompt in prompts)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments_same_tool_name(self):
+        # Two environments expose `submit` with different argument types, each call is parsed with its own schema
+        RECORDS.clear()
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["zip", "count"] * 2}
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # a batch mixes both environments
+            max_completion_length=128,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                ['<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>']
+                if "zip code" in prompt
+                else ['<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>']
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert RECORDS["zip"] and all(answer == "42" for answer in RECORDS["zip"])
+        assert RECORDS["count"] and all(answer == 42 for answer in RECORDS["count"])
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_unknown_environment_raises(self):
+        # An unknown `environment` field fails with a clear error, not a bare KeyError mid-rollout
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment},
+        )
+
+        with pytest.raises(ValueError, match="not among the environments"):
+            trainer.train()
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_tool_discovery_does_not_evaluate_environment_properties(self):
+        # Tools are listed on the class: `reward` raises once reset, so listing the instance would raise in batch 2
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            max_steps=2,  # the first batch resets the pooled instances, the second re-lists their tools
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=PropertyEnvironment,
+        )
+
+        script = ScriptedTurns(trainer.processing_class, first_turns=["I won't echo<|im_end|>"])
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_reward_mixed_environments(self):
+        # Only some environments define `get_reward`, and two names mapping to the same class share one metric
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 3, "environment": ["scored", "scored2", "plain"]}
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # one batch holds the 3 environments
+            max_completion_length=128,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single metric.
+            environment_factory={
+                "scored": ScoredEnvironment,
+                "scored2": ScoredEnvironment,
+                "plain": IncrementEnvironment,
+            },
+        )
+
+        script = ScriptedTurns(trainer.processing_class, first_turns=["I won't increment<|im_end|>"])
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/ScoredEnvironment/mean"}
+        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_async_environment_raises(self):
+        # Async environment methods (tools or `get_reward`) are rejected at init
+        class AsyncToolEnvironment(IncrementEnvironment):
+            async def decrement(self, step: int) -> int:
+                """
+                Decrement the internal counter.
+
+                Args:
+                    step: Value to subtract from the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                self._counter -= step
+                return self._counter
+
+        class AsyncRewardEnvironment(IncrementEnvironment):
+            async def get_reward(self) -> float:
+                return float(self._counter)
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
+        for environment_factory in (AsyncToolEnvironment, AsyncRewardEnvironment):
+            with pytest.raises(ValueError, match="Async"):
+                DistillationTrainer(
+                    model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                    teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                    args=training_args,
+                    train_dataset=dataset,
+                    environment_factory=environment_factory,
+                )
 
 
 @require_vision

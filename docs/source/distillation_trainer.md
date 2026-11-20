@@ -93,6 +93,8 @@ While training and evaluating, we record the following metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
+- `rewards/{EnvironmentClass}/mean`: The average value returned by the environment's `get_reward` over the rollouts bound to that environment class. Logged only when an `environment_factory` defines `get_reward`; it is never used in the loss.
+- `rewards/{EnvironmentClass}/std`: The standard deviation of the value returned by `get_reward`, over the same rollouts.
 - `entropy`: Average entropy of token predictions across generated completions (in nats).
 
 ## Customization
@@ -227,6 +229,74 @@ trainer = DistillationTrainer(
 
 > [!WARNING]
 > Async tools are not supported yet — pass synchronous functions.
+
+### Environments
+
+You can also provide tools through `environment_factory`, with the same contract as in [`GRPOTrainer`](grpo_trainer#environments). [`DistillationTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. The student runs a multi-turn episode against its own instance, the teacher scores every token the student generated with the whole episode (tool results included) as context, and the tool-result tokens are masked out of the loss.
+
+> [!IMPORTANT]
+> `environment_factory` requires `transformers>=5.2.0`.
+
+Per rollout, the trainer samples one row of the `train_dataset`, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments, so the environment reads the task from the dataset.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+# Each row carries the prompt and the task data (here, the counter target to reach).
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {i}."}] for i in range(1, 7)],
+        "target": list(range(1, 7)),
+    }
+)
+
+class IncrementEnv:
+    # Reserved methods
+    def reset(self, target, **kwargs) -> str | None:  # required; the row's `target` column arrives as a keyword argument
+        self.counter = 0
+        self.target = target
+        return None  # a returned string is appended to the last user message
+
+    def get_reward(self) -> float:  # optional: logged, never used in the loss
+        return float(self.counter == self.target)
+
+    # Public methods (exposed as tools)
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self.counter += step
+        return self.counter
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen3-0.6B",
+    teacher_model="Qwen/Qwen3-4B",
+    args=DistillationConfig(max_tool_calling_iterations=4, chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
+
+An environment class has two reserved methods, `reset` and `get_reward`, which are not exposed to the model as tools:
+
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string: when it returns a string, that string is appended to the last user message.
+- `get_reward` (optional) takes no argument and returns a `float`. Distillation has no reward, so it is called once per completed rollout only to log the episode's score as `rewards/{EnvironmentClass}/mean`, which is handy to follow task success while the loss goes down. It also lets an environment release per-episode resources. It runs on every rollout, so an expensive `get_reward` (for example one that runs a test suite) adds to the time of every step.
+
+> [!IMPORTANT]
+> With tools, `max_completion_length` is the budget for the **whole episode**: every model turn plus every tool result. Tool results are masked out of the loss but still count toward it, and they can take most of it: in the [`distillation_coding_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_coding_env) example they are about 80% of the episode's tokens, mostly tracebacks. Size it for the episode rather than for a single answer. A tool result that would overflow the budget is dropped and the episode ends there.
+
+To mix several environments in one run, pass a dictionary mapping environment names to factories and add an `environment` column to the dataset, as for [`GRPOTrainer`](grpo_trainer#multiple-environments): each rollout only sees the tools of its own environment, and the `environment` field is not forwarded to `reset`. Instances are reused across steps (reset between episodes), so an expensive `__init__` is paid once. The [`distillation_coding_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_coding_env) example distills a coding agent in OpenEnv's coding environment.
+
+> [!WARNING]
+> Async environment methods (tools or `get_reward`) are not supported yet, and the `train_dataset` is required: the environment cannot own the data as with [`GRPOTrainer`].
 
 ### Multimodal Tool Responses
 
