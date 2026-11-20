@@ -22,10 +22,12 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -35,6 +37,7 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -71,6 +74,7 @@ from .utils import (
     disable_dropout_in_model,
     get_config_model_id,
     identity,
+    model_accepts_images,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -81,9 +85,13 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
-    from peft import PeftConfig, PeftModel, PrefixTuningConfig, PromptLearningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -385,7 +393,8 @@ class DistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 model_name_or_path,
                 revision=model_revision,
                 truncation_side="left",
@@ -526,42 +535,99 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if isinstance(peft_config, PromptLearningConfig):
+                raise ValueError(
+                    "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
+                    "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
+                    "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
+                    "adapter such as LoRA instead."
+                )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
             if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
             ):
                 raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
+                )
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
+                and any(
+                    isinstance(module, torch.nn.Linear)
+                    and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                    for name, module in model.named_modules()
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                logger.warning(
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
-        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing before DeepSpeed 0.19.3. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703 and
+        # https://github.com/deepspeedai/DeepSpeed/pull/8148.
+        # Can be removed once the minimum supported DeepSpeed version is 0.19.3.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
+            and Version(version("deepspeed")) < Version("0.19.3")
         ):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
                     "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
-                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
-                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training with "
+                    "DeepSpeed < 0.19.3. To remove this warning, upgrade DeepSpeed to 0.19.3 or later, unset "
+                    "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
-        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -752,6 +818,17 @@ class DistillationTrainer(_BaseTrainer):
         if isinstance(processing_class, ProcessorMixin):
             # A sampled image token would mismatch the image features
             generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                generation_kwargs["suppress_tokens"].append(model.config.vision_start_token_id)
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
         self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
@@ -1013,7 +1090,7 @@ class DistillationTrainer(_BaseTrainer):
 
             # Generate using vLLM with raw token IDs. Distillation is n=1 and uses the teacher distribution rather than
             # sampled logprobs, so we request one completion per prompt and discard vLLM's logprobs.
-            _, completion_ids, _, _ = self.vllm_generation.generate(
+            _, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=1,
@@ -1043,7 +1120,7 @@ class DistillationTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
@@ -1138,6 +1215,11 @@ class DistillationTrainer(_BaseTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+            # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+            # (huggingface/transformers#50094)
+            if isinstance(prefix_ids, torch.Tensor):
+                prefix_ids = prefix_ids.tolist()
+                full_ids = full_ids.tolist()
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
@@ -1630,9 +1712,11 @@ class DistillationTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Recover counts for crop/tile-indexed pixels (Gemma pan-and-scan and InternVL).
+        # Recover counts for crop- or tile-indexed pixels (Gemma pan-and-scan and InternVL).
+        # Models with `image_grid_thw` (e.g. Inkling 2) are split by their grid instead.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
@@ -1993,12 +2077,13 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            pq.write_table(
+                Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
                     self.args.output_dir,
                     "completions",
                     f"completions_{self.state.global_step:05d}.parquet",
-                )
+                ),
             )
 
             for logging_backend in logging_backends:

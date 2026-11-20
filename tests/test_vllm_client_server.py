@@ -22,7 +22,12 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import backend_device_count, torch_device
 
-from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
+from trl.generation.vllm_client import (
+    _DEFAULT_GENERATION_CONCURRENCY,
+    VLLMClient,
+    parse_generate_logprobs,
+    parse_logprobs,
+)
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_requests_available, is_vllm_available
 
@@ -52,6 +57,9 @@ VLLM_SERVE_TRL_ARGS = [
     "processed_logprobs",
     "--max-logprobs",
     "-1",
+    # vLLM's default 0.9 leaves a 24 GB GPU too little room for the weight-sync receive buffers
+    "--gpu-memory-utilization",
+    "0.5",
 ]
 # From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
 if is_vllm_available(min_version="0.30.0"):
@@ -182,6 +190,31 @@ class TestParseLogprobs(TrlTestCase):
 
     def test_returns_none_when_logprobs_missing(self):
         assert parse_logprobs([None]) == (None, None)
+
+
+class TestParseGenerateLogprobs(TrlTestCase):
+    def test_generate_logprobs_sorted_by_probability(self):
+        logprobs = {
+            "content": [
+                {
+                    "token_id": 7,
+                    "logprob": -0.5,
+                    "rank": 2,
+                    "top_logprobs": [
+                        {"token_id": 7, "logprob": -0.5, "rank": 2},
+                        {"token_id": 3, "logprob": -0.4, "rank": 1},
+                    ],
+                }
+            ]
+        }
+
+        all_logprobs, all_token_ids = parse_generate_logprobs([logprobs])
+
+        assert all_token_ids == [[[3, 7]]]
+        assert all_logprobs == [[[-0.4, -0.5]]]
+
+    def test_returns_none_when_logprobs_missing(self):
+        assert parse_generate_logprobs([None]) == (None, None)
 
 
 class TestExtractLogprobs(TrlTestCase):
@@ -477,6 +510,43 @@ class TestVLLMClientServer(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
+        kill_process(cls.server_process)
+
+
+@require_torch_multi_accelerator
+@pytest.mark.skipif(
+    not is_vllm_available(min_version="0.30.0"),
+    reason="`/inference/v1/generate`, which returns the candidate sets, needs `--enable-scale-out` (vLLM >= 0.30)",
+)
+@pytest.mark.xdist_group("vllm_server")
+class TestVLLMClientServerSamplingMask(TrlTestCase):
+    model_id = "Qwen/Qwen2.5-1.5B"
+
+    @classmethod
+    def setup_class(cls):
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
+        cls.server_process = subprocess.Popen(
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS, "--return-sampling-mask"], env=env
+        )
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
+
+    def test_generate_with_sampling_mask(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompt_token_ids = tokenizer(["Hello, AI!", "Tell me a joke"])["input_ids"]
+        outputs = self.client.generate(prompt_token_ids, n=2, top_k=10, max_tokens=8, return_sampling_mask=True)
+
+        assert len(outputs["sampling_mask"]) == len(outputs["completion_ids"]) == 4
+        for completion_ids, sampling_mask in zip(outputs["completion_ids"], outputs["sampling_mask"], strict=True):
+            assert len(sampling_mask) == len(completion_ids)
+            for token_id, candidates in zip(completion_ids, sampling_mask, strict=True):
+                assert token_id in candidates
+                assert len(candidates) <= 10
+
+    @classmethod
+    def teardown_class(cls):
         kill_process(cls.server_process)
 
 
@@ -894,8 +964,9 @@ class TestVLLMClientServerVLM(TrlTestCase):
         env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
         env["VLLM_SERVER_DEV_MODE"] = "1"
 
-        # Start the server process
-        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
+        # Start the server process, with smaller images and context so its memory profiling fits a 24 GB GPU
+        args = ["--mm-processor-kwargs", '{"max_pixels": 1003520}', "--max-model-len", "4096"]
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS, *args], env=env)
 
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -49,7 +50,8 @@ class ModelConfig:
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
         lora_target_modules (`str | list[str]`, *optional*):
-            LoRA target modules.
+            LoRA target modules. A single value other than a module name, such as `"all-linear"` or a regex, is passed
+            to PEFT as a string.
         lora_target_parameters (`str | list[str]`, *optional*):
             List of target parameters for LoRA.
         lora_modules_to_save (`list[str]`, *optional*):
@@ -174,5 +176,8 @@ class ModelConfig:
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
 
-        if hasattr(self.lora_target_modules, "__len__") and len(self.lora_target_modules) == 1:
+        # PEFT reads a string as a regex or "all-linear", so a single module name must stay a list (#7795)
+        if isinstance(self.lora_target_modules, str):
+            self.lora_target_modules = [self.lora_target_modules]
+        if len(self.lora_target_modules or []) == 1 and not re.fullmatch(r"[\w.]+", self.lora_target_modules[0]):
             self.lora_target_modules = self.lora_target_modules[0]

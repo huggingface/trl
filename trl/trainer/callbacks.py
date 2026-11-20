@@ -440,7 +440,6 @@ class WeaveCallback(TrainerCallback):
         self.model_name = model_name
         self._last_logged_step = -1
         self._weave_initialized = False
-        self._eval_logger = None
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WeaveCallback.")
@@ -738,9 +737,10 @@ class BEMACallback(TrainerCallback):
         alpha = self._bema_alpha(step)
 
         # Compute EMA + BEMA in-place and write directly to running_model
-        for thetat, theta0, ema, run_param in zip(
-            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=True
+        for name, thetat, theta0, ema in zip(
+            self.param_names, self.thetat_params, self.theta0_params, self.ema_params, strict=True
         ):
+            run_param = self.running_model.get_parameter(name)
             thetat = thetat.detach().to(self.device)
             ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
             run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)

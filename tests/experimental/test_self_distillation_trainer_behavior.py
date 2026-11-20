@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -28,6 +27,7 @@ from trl.experimental.sdft.loss_utils import (
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
 )
+from trl.experimental.sdft.sdft_trainer import DistillationLogits
 from trl.experimental.sdft.teacher_sync import PEFTAdapterEMACallback
 
 from ..testing_utils import TrlTestCase
@@ -278,7 +278,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
 
         student_probs = torch.tensor([[[0.8, 0.2], [0.01, 0.99]]], dtype=torch.float32)
         teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
-        distillation_logits = SimpleNamespace(
+        distillation_logits = DistillationLogits(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             loss_mask=torch.tensor([[1, 0]], dtype=torch.long),
             student_logits=student_probs.log(),
@@ -305,7 +305,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         old_token_probs = torch.tensor([[0.05, 0.4]], dtype=torch.float32)
         clip_coeff = trainer.args.distillation_is_clip
 
-        distillation_logits = SimpleNamespace(
+        distillation_logits = DistillationLogits(
             completion_ids=torch.tensor([[0, 1]], dtype=torch.long),
             loss_mask=torch.tensor([[1, 1]], dtype=torch.long),
             student_logits=torch.log(torch.tensor([[[0.2, 0.8], [0.6, 0.4]]], dtype=torch.float32)),

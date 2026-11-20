@@ -12,9 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**🔥 Muse Spark Open:** Fine-tune [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B) with [`SFTTrainer`], sharded across your GPUs at load time. See the [8-node LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_muse_spark_open).
-
-**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
+**⚡ AsyncGRPOTrainer is now stable:** [`AsyncGRPOTrainer`] graduates to the stable API. It runs GRPO much faster by decoupling generation from training: a vLLM server streams rollouts while the trainer updates the model.
 
 ## Taxonomy
 
@@ -25,6 +23,7 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 
 #### Online methods
 
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GRPOTrainer`](grpo_trainer)
 - [`RLOOTrainer`](rloo_trainer)
 
@@ -56,7 +55,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Online methods
 
 - [`A2POTrainer`](a2po_trainer)
-- [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 
@@ -68,7 +66,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [BEMA for Reference Model](bema_for_reference_model)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 

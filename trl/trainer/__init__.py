@@ -25,6 +25,8 @@ _import_structure = {
         "SyncRefModelCallback",
         "WeaveCallback",
     ],
+    "async_grpo_config": ["AsyncGRPOConfig"],
+    "async_grpo_trainer": ["AsyncGRPOTrainer"],
     "distillation_config": ["DistillationConfig"],
     "distillation_trainer": ["DistillationTrainer"],
     "dpo_config": ["DPOConfig"],
@@ -50,6 +52,8 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
+    from .async_grpo_config import AsyncGRPOConfig
+    from .async_grpo_trainer import AsyncGRPOTrainer
     from .callbacks import (
         BEMACallback,
         LogCompletionsCallback,

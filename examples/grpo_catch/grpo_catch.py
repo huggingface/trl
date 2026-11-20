@@ -35,7 +35,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/openspiel_env
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git
+git clone https://github.com/openenv/OpenEnv.git
 cd OpenEnv/envs/openspiel_env
 uv pip install -e .
 ```
@@ -49,7 +49,7 @@ python examples/grpo_catch/grpo_catch.py --env-mode space --env-host https://ope
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
