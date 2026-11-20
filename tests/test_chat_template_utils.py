@@ -1307,6 +1307,19 @@ class TestIsChatTemplateStopTokenTrained:
         assert is_chat_template_stop_token_trained(tokenizer) is False
 
 
+# Gemma 4 revisions whose generation prompt pre-fills an empty thought channel when thinking is off: their training
+# templates render it in the conversation too
+_GEMMA4_EMPTY_THOUGHT = tuple(
+    ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", chat_template)
+    for chat_template in (
+        gemma4_v7_chat_template,
+        gemma4_v8_chat_template,
+        gemma4_v9_chat_template,
+        gemma4_v10_chat_template,
+    )
+)
+
+
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
@@ -1355,6 +1368,94 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
         pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            id="gemma4",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v3_chat_template),
+            id="gemma4-v3",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v4_chat_template),
+            id="gemma4-v4",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v5_chat_template),
+            id="gemma4-v5",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v7_chat_template),
+            id="gemma4-v7",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v8_chat_template),
+            id="gemma4-v8",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v9_chat_template),
+            id="gemma4-v9",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v10_chat_template),
+            id="gemma4-v10",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.5.0"),
+                    reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             id="glm4moe",
@@ -1662,6 +1763,10 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
+            # These Gemma 4 revisions pre-fill an empty thought channel in the generation prompt when thinking is off.
+            # The training template renders it in the final model turn too, so that the turn continues the prompt.
+            assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
         else:
             assert before == after
 
@@ -1689,6 +1794,9 @@ class TestGetTrainingChatTemplate:
         if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
             # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before + "<|user|>"
+        elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
+            # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
         else:
             assert before == after
 
@@ -1713,6 +1821,10 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
+        elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT[:-1]:
+            # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content.
+            # gemma4_v10 renders the reasoning of the final model turn instead, so it has none.
+            assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
         else:
             assert before == after
 
@@ -1749,6 +1861,9 @@ class TestGetTrainingChatTemplate:
             # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
+        elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
+            # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
         else:
             assert before == after
 
@@ -1781,6 +1896,9 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here `<|observation|>`, which closes a tool call.
             assert after == before + "<|observation|>"
+        elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
+            # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
         else:
             assert before == after
 
@@ -1919,7 +2037,7 @@ class TestGetTrainingChatTemplate:
             messages, add_generation_prompt=True, tokenize=True, return_dict=True, **kwargs
         )["input_ids"]
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
-        if prompt.rstrip().endswith("</think>"):
+        if prompt.rstrip().endswith(("</think>", "<channel|>")):
             assistant = {"role": "assistant", "content": "It is blue."}
         # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
         elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
