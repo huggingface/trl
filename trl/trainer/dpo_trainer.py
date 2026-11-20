@@ -1565,11 +1565,13 @@ class DPOTrainer(_BaseTrainer):
                 # Modulate the mixing coefficient based on the log ratio magnitudes
                 log_ratio_modulation = torch.sigmoid(logits / self.args.discopop_tau)
                 logistic_component = -F.logsigmoid(logits)
-                exp_component = torch.exp(-logits)
+                # Evaluate the exponential branch in log space. exp(-logits) overflows for large negative
+                # margins while the modulation factor underflows to 0 there, so their product is inf * 0 = NaN.
+                # exp(-logits) * sigmoid(logits / tau) equals exp(-logits - softplus(-logits / tau)), which
+                # underflows to 0 exactly as the mathematical product does.
+                exp_component = torch.exp(-logits - F.softplus(-logits / self.args.discopop_tau))
                 # Blend between logistic and exponential component based on log ratio modulation
-                per_sequence_loss = (
-                    logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
-                )
+                per_sequence_loss = logistic_component * (1 - log_ratio_modulation) + exp_component
 
             elif loss_type == "sft":
                 chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
