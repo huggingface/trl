@@ -298,6 +298,7 @@ class Agent:
         self.tools = AgentTools(board, self.st.name, self.teammates, self.st.events)
         self.notified: set[int] = set()
         self._finish = "stop"
+        self._last_then: tuple[int, list[dict]] | None = None
 
     # ---- tokens -------------------------------------------------------------------------------------------------
     async def _gen(self, max_tokens: int) -> str:
@@ -312,6 +313,7 @@ class Agent:
     def _then(self, messages: list[dict]) -> None:
         """Close the assistant turn in progress and append `messages` with the generation prompt."""
         st, ids = self.st, self.chat.then(messages)
+        self._last_then = (len(st.tokens), messages)
         if self._finish == "stop" and st.mask[-1] == 1 and st.tokens[-1] == ids[0]:
             ids = ids[1:]  # the model ended its turn itself
         st.tokens += ids
@@ -398,9 +400,15 @@ class Agent:
             if not self.board.stalled:
                 self.board.finish(st.name)  # never leave teammates parked on an agent that died
             raise
+        pending = []
+        if st.answer is None and st.mask[-1] == 0 and self._last_then is not None:
+            # the work phase ended right after tool results, whose generation prompt is still open: take them back,
+            # to render the final request after them instead of closing an empty assistant turn
+            at, pending = self._last_then
+            del st.tokens[at:], st.mask[at:], st.logprobs[at:]
         st.events.append({"kind": "work_end", "at": len(st.tokens), "reason": reason})
         if st.answer is None:
-            self._then([{"role": "user", "content": FINAL_REQUEST.format(n=count_words(self.n))}])
+            self._then([*pending, {"role": "user", "content": FINAL_REQUEST.format(n=count_words(self.n))}])
             before = len(st.tokens)
             text = await self._gen(self.s.final_tokens)
             st.final_generated = len(st.tokens) - before
