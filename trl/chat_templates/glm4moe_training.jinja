@@ -31,7 +31,7 @@ For each function call, output the function name and arguments within the follow
                 {{- item }}
             {%- endif -%}
         {%- endfor -%}
-    {%- else -%}
+    {%- elif content is not none -%}
         {{- content }}
     {%- endif -%}
 {%- endmacro -%}
