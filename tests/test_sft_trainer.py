@@ -41,6 +41,7 @@ from .testing_utils import (
     ignore_warnings,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_fp8,
     require_kernels,
     require_peft,
     require_torch_accelerator,
@@ -413,6 +414,21 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_fp8
+    def test_train_fp8(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", fp8=True, max_steps=1)
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.accelerator.mixed_precision == "fp8"
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @pytest.mark.parametrize(
         "config_name",

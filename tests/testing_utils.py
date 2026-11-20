@@ -61,6 +61,20 @@ require_response_parsing = pytest.mark.skipif(
     reason="test requires jmespath for response parsing on transformers below 5.13.0",
 )
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
+
+
+def is_fp8_available() -> bool:
+    # FP8 training needs a CUDA device and an accelerate FP8 backend (torchao or transformer-engine).
+    if torch_device in (None, "cpu"):
+        return False
+    from accelerate.utils import is_torchao_available, is_transformer_engine_available
+
+    return is_torchao_available() or is_transformer_engine_available()
+
+
+require_fp8 = pytest.mark.skipif(
+    not is_fp8_available(), reason="test requires an FP8 backend (torchao or transformer-engine) and a CUDA device"
+)
 require_torch_accelerator = pytest.mark.skipif(
     torch_device is None or torch_device == "cpu", reason="test requires accelerator"
 )

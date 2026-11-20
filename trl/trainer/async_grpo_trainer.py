@@ -3254,6 +3254,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.compute_dtype = {
             "bf16": "bfloat16",
             "fp16": "float16",
+            # FP8 mixed precision keeps bf16 master weights (accelerate maps fp8 to bfloat16 in its FSDP
+            # mixed-precision policy), so the compute dtype is bfloat16.
+            "fp8": "bfloat16",
             "no": str(self.model.dtype).removeprefix("torch."),
         }.get(precision, precision)
         self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)

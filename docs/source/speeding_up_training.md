@@ -163,3 +163,15 @@ training_args = SFTConfig(..., bf16=True)  # or fp16=True for older GPUs
 ```
 
 Use `bf16=True` for Ampere GPUs (A100, RTX 30xx) or newer, and `fp16=True` for older GPUs. Mixed precision training is supported across all TRL trainers.
+
+### FP8 training
+
+On Hopper GPUs (H100/H200) or newer consumer GPUs (RTX 30xx and newer), FP8 mixed precision can further speed up training and halve the memory of the matrix multiplications, with bf16 master weights:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., fp8=True)  # optionally fp8_backend="te" or "ao"
+```
+
+This needs an FP8 backend installed: `torchao` or `transformer-engine`. If `fp8_backend` is not set, accelerate picks an installed backend, preferring torchao. FP8 training is supported across all TRL trainers and cannot be combined with `fp16` or used on CPU. In GRPO, the weights synced to the vLLM generation server are the bf16 master weights.

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from dataclasses import dataclass, field
 
 import transformers
@@ -39,6 +40,13 @@ class _BaseConfig(TrainingArguments):
             Whether to use bfloat16 (BF16) mixed precision instead of 32-bit. Generally preferred over FP16 due to
             better numerical stability and no loss scaling required. Requires Ampere or higher NVIDIA architecture or
             Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if `fp16` is not set.
+        fp8 (`bool`, *optional*, defaults to `False`):
+            Whether to use FP8 mixed precision instead of 32-bit. Requires a Hopper or newer NVIDIA GPU (or RTX 30xx
+            or newer) and an FP8 backend: `torchao` or `transformer-engine`. FP8 keeps bf16 master weights and
+            applies FP8 to the matrix multiplications. Cannot be combined with `fp16`.
+        fp8_backend (`str`, *optional*):
+            FP8 backend to use: `"te"` for TransformerEngine or `"ao"` for torchao. If not set, accelerate picks an
+            installed backend, preferring torchao. Requires `fp8=True`.
         lr_scheduler_kwargs (`dict` or `str`, *optional*):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
             the documentation of each scheduler for possible values.
@@ -77,6 +85,22 @@ class _BaseConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    fp8: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use FP8 (mixed) precision instead of 32-bit. Requires a Hopper or newer NVIDIA "
+            "GPU (or RTX 30xx or newer) and an FP8 backend (`torchao` or `transformer-engine`). FP8 keeps bf16 "
+            "master weights and applies FP8 to the matrix multiplications. Cannot be combined with `fp16`."
+        },
+    )
+    fp8_backend: str | None = field(
+        default=None,
+        metadata={
+            "help": 'FP8 backend to use: `"te"` for TransformerEngine or `"ao"` for torchao. If not set, '
+            "accelerate picks an installed backend, preferring torchao. Requires `fp8=True`.",
+            "choices": ["te", "ao"],
+        },
+    )
     # Transformers 4.57.0 introduced a bug that caused the dtype of `lr_scheduler_kwargs` to be unparsable. This issue
     # was fixed in https://github.com/huggingface/transformers/pull/41322 and released in 4.57.5. We add a temporary
     # workaround here, which can be removed once we drop support for versions older than 4.57.5.
@@ -111,6 +135,16 @@ class _BaseConfig(TrainingArguments):
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
+        if self.fp8:
+            if self.fp16:
+                raise ValueError(
+                    "`fp8` cannot be combined with `fp16`: FP8 mixed precision keeps bf16 master weights."
+                )
+        elif self.fp8_backend is not None:
+            raise ValueError("`fp8_backend` requires `fp8=True`.")
+        if self.fp8_backend is not None and self.fp8_backend not in ("te", "ao"):
+            raise ValueError(f'`fp8_backend` must be `"te"` or `"ao"`, got `{self.fp8_backend}`.')
+
         # TRL enables activation checkpointing by default, under the name this transformers version reads: from 5.23,
         # `activation_checkpointing`. A `gradient_checkpointing` the user passes still gets transformers' deprecation
         # warning.
@@ -122,3 +156,14 @@ class _BaseConfig(TrainingArguments):
                 self.gradient_checkpointing = True
 
         super().__post_init__()
+
+        if self.fp8:
+            # `TrainingArguments` derives `mixed_precision` from `bf16`/`fp16` — and TRL defaults `bf16=True` — so
+            # without this, an `accelerate launch` config asking for FP8 would be silently overridden with bf16.
+            # transformers 5.x reads `mixed_precision` from the config; transformers 4.56 reads the
+            # `ACCELERATE_MIXED_PRECISION` env var, which `TrainingArguments` sets from bf16/fp16 above, so set both.
+            self.mixed_precision = "fp8"
+            os.environ["ACCELERATE_MIXED_PRECISION"] = "fp8"
+            if self.fp8_backend is not None:
+                # accelerate picks the FP8 backend from this env var (`NO` = auto-detect, torchao first).
+                os.environ["ACCELERATE_FP8_BACKEND"] = self.fp8_backend.upper()
