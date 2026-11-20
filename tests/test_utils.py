@@ -1934,6 +1934,20 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
         ),
     ),
     pytest.param(
+        "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.23.0"),
+                reason="Inkling 2 models were introduced in transformers-5.23.0",
+            ),
+            pytest.mark.xfail(
+                raises=AssertionError,
+                reason="Inkling 2's head keeps the padded vocabulary rows its forward slices off (#8497)",
+                strict=True,
+            ),
+        ],
+    ),
+    pytest.param(
         "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
