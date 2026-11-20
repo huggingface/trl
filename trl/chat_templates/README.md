@@ -47,7 +47,7 @@ DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and
 
 ### `deepseekv3_v5.jinja`
 
-DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepseek-ai/DeepSeek-V3.1-Terminus` and `deepseek-ai/DeepSeek-V3.1-Base`). Unlike the earlier DeepSeek templates, it opens each assistant turn with `<｜Assistant｜>` followed by `</think>`, or by `<think>` in the generation prompt when `thinking=True`, and renders tool calls as `name<｜tool▁sep｜>arguments` with no type or JSON fence. It drops the reasoning from assistant content, and renders tool-call arguments only as strings.
+DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepseek-ai/DeepSeek-V3.1-Terminus` and `deepseek-ai/DeepSeek-V3.1-Base`). Unlike the earlier DeepSeek templates, it opens each assistant turn with `<｜Assistant｜>` followed by `</think>`, or by `<think>` in the generation prompt when `thinking=True`, and renders tool calls as `name<｜tool▁sep｜>arguments` with no type or JSON fence. It drops the reasoning from assistant content, and renders tool-call arguments only as strings, so trainers swap in `deepseekv3_v5_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_v5_template`.
 
 ### `diffusion_gemma.jinja`
 
