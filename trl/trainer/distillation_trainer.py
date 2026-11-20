@@ -85,6 +85,10 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
@@ -531,8 +535,6 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
-            # peft <= 0.17.1 (peft#2821).
             if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
                     "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
@@ -546,7 +548,10 @@ class DistillationTrainer(_BaseTrainer):
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -566,7 +571,10 @@ class DistillationTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}

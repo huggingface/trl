@@ -28,7 +28,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.integrations import is_deepspeed_available
+from transformers.integrations import is_deepspeed_available, unset_hf_deepspeed_config
 from transformers.testing_utils import torch_device
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
@@ -728,11 +728,6 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if Version(peft.__version__) <= Version("0.17.1"):
-                pytest.xfail(
-                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
-                    "https://github.com/huggingface/peft/issues/2821"
-                )
             peft_config = PrefixTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
@@ -850,15 +845,25 @@ class TestSFTTrainer(TrlTestCase):
         reason="Only transformers v5 with peft<0.19 skips the routed experts (#7765)",
     )
     @pytest.mark.parametrize(
-        "target_modules, target_parameters, expect_error",
+        "model_id, target_modules, target_parameters, expect_error",
         [
-            (["gate_proj", "up_proj", "down_proj"], None, True),
-            ("all-linear", None, True),
-            (r".*\.(q_proj|v_proj)", None, False),
-            (["gate_proj", "up_proj", "down_proj"], ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"], False),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", "all-linear", None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", r".*\.(q_proj|v_proj)", None, False),
+            (
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"],
+                False,
+            ),
+            # no peft version maps `target_modules` onto the routed experts of these models (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", None, False),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "all-linear", None, False),
         ],
     )
-    def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
+    def test_moe_lora_raises_when_peft_skips_routed_experts(
+        self, model_id, target_modules, target_parameters, expect_error
+    ):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
@@ -866,14 +871,14 @@ class TestSFTTrainer(TrlTestCase):
         if expect_error:
             with pytest.raises(ValueError, match=r"peft>=0\.19\.0"):
                 SFTTrainer(
-                    model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                    model=model_id,
                     args=training_args,
                     train_dataset=dataset,
                     peft_config=peft_config,
                 )
         else:
             SFTTrainer(
-                model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                model=model_id,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=peft_config,
@@ -895,6 +900,8 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
             # no dense or shared expert layers to skip
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+            # peft doesn't remap this model's targets, so its dense layers are trained (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", False),
         ],
     )
     def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
@@ -1135,10 +1142,11 @@ class TestSFTTrainer(TrlTestCase):
         not is_deepspeed_available() or Version(version("deepspeed")) >= Version("0.19.3"),
         reason="The trainer forces reentrant checkpointing for PEFT + ZeRO-3 only on DeepSpeed < 0.19.3",
     )
-    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch):
+    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch, request):
         # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
         # reach the checkpoint function whichever name transformers reads the kwargs from.
         monkeypatch.setenv("ACCELERATE_USE_DEEPSPEED", "false")  # `TrainingArguments` sets it, restore it after
+        request.addfinalizer(unset_hf_deepspeed_config)  # the ZeRO-3 config is process-global, don't leak it (#8447)
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
