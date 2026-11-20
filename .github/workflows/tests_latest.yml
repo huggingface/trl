@@ -24,8 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transformers: [release, main]
-        shard: [1, 2]
+        transformers: [main]
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         shell: bash
@@ -60,42 +60,19 @@ jobs:
           nvidia-smi
           python -c "import torch, transformers; print(torch.__version__, transformers.__version__, torch.cuda.get_device_name())"
 
-      - name: CB tests in isolation, 20 times
-        timeout-minutes: 45
-        continue-on-error: true
-        run: |
-          source .venv/bin/activate
-          mkdir -p logs
-          for i in $(seq 1 20); do
-            timeout 300 pytest -n 0 -s -v -rA tests/test_grpo_trainer.py tests/test_rloo_trainer.py \
-              -k test_train_with_transformers_continuous_batching > logs/isolated-$i.log 2>&1
-            echo "isolated $i: exit=$? asserts=$(grep -c 'srcIndex <' logs/isolated-$i.log)"
-          done
-
-      - name: GRPO + RLOO test files with xdist, 3 times
-        timeout-minutes: 60
-        continue-on-error: true
-        run: |
-          source .venv/bin/activate
-          mkdir -p logs
-          for i in 1 2 3; do
-            timeout 900 pytest -n auto --dist loadgroup -s -v -rA tests/test_grpo_trainer.py tests/test_rloo_trainer.py \
-              > logs/xdist-$i.log 2>&1
-            echo "xdist $i: exit=$? asserts=$(grep -c 'srcIndex <' logs/xdist-$i.log)"
-          done
-
-      - name: GRPO + RLOO test files with xdist and the token-id check, 3 times
-        timeout-minutes: 60
+      - name: GRPO + RLOO test files with xdist and the CB trace, 12 times
+        timeout-minutes: 100
         continue-on-error: true
         env:
-          CB_HOOK: "1"
+          CB_TRACE: "1"
         run: |
+          set +e
           source .venv/bin/activate
           mkdir -p logs
-          for i in 1 2 3; do
+          for i in $(seq 1 12); do
             timeout 900 pytest -n auto --dist loadgroup -s -v -rA tests/test_grpo_trainer.py tests/test_rloo_trainer.py \
-              > logs/hook-$i.log 2>&1
-            echo "hook $i: exit=$? asserts=$(grep -c 'srcIndex <' logs/hook-$i.log) bad=$(grep -c 'CB_HOOK BAD' logs/hook-$i.log)"
+              > logs/trace-$i.log 2>&1
+            echo "trace $i: exit=$? asserts=$(grep -c 'srcIndex <' logs/trace-$i.log) dumps=$(grep -c 'CB_TRACE DUMP' logs/trace-$i.log)"
           done
 
       - name: Upload logs

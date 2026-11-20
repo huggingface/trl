@@ -280,36 +280,99 @@ def cleanup_vllm_dist_env():
 
 
 # Debug hook for #8339: before each continuous batching forward, check the token ids the model will embed
-if os.environ.get("CB_HOOK") == "1":
+if os.environ.get("CB_TRACE") == "1":
+    # Debug trace for the CB device-side assert: records the carry-over inputs on the compute stream into pinned host
+    # buffers (no sync), and prints them when a test fails
+    import atexit
+    import collections
+    import threading
+    import time
+
+    from transformers.generation.continuous_batching.input_outputs import ContinuousBatchingAsyncIOs
     from transformers.generation.continuous_batching.model_runner import ModelRunner
+
+    _K = 64
+    _trace = collections.deque(maxlen=24)
+    _slots = []
+    _seq = [0]
+
+    def _streams_state(io):
+        return {
+            "default_busy": not torch.cuda.default_stream().query(),
+            "h2d_busy": not io.h2d_stream.query(),
+            "compute_busy": not io.compute_stream.query(),
+            "d2h_busy": not io.d2h_stream.query(),
+        }
 
     _orig_compute_batch = ModelRunner.compute_batch
 
-    def _checked_compute_batch(self, model, batch_data):
-        torch.cuda.synchronize()
+    def _traced_compute_batch(self, model, batch_data):
         io = self.inputs_and_outputs
-        carry, prev_out, _ = io.get_cb_kwargs()
-        ids = batch_data["input_ids"][0]
-        n = ids.numel()
-        c = carry[:n].long()
-        vocab = model.get_input_embeddings().num_embeddings
-        carry_ok = bool(((c >= -1) & (c < prev_out.size(1))).all())
-        eff = torch.where(c != -1, prev_out[0, c.clamp(-1, prev_out.size(1) - 1)].long(), ids.long())
-        bad = (eff < 0) | (eff >= vocab)
-        if not carry_ok or bool(bad.any()):
-            print(  # noqa: T201
-                f"CB_HOOK BAD pid={os.getpid()} pair={getattr(io, 'current_pair', None)} n={n} vocab={vocab} "
-                f"use_block_table={io.use_block_table if not hasattr(io, 'io_pairs') else io.io_pairs[io.current_pair].device_io.use_block_table} "
-                f"carry_ok={carry_ok}\n  input_ids={ids.tolist()}\n  carry={c.tolist()}\n  eff={eff.tolist()}\n"
-                f"  prev_out[:, :32]={prev_out[:, :32].tolist()}",
-                flush=True,
+        if isinstance(io, ContinuousBatchingAsyncIOs):
+            host = io.io_pairs[io.current_pair].host_io
+            _seq[0] += 1
+            _trace.append(
+                {
+                    "seq": _seq[0],
+                    "t": time.time(),
+                    "test": os.environ.get("PYTEST_CURRENT_TEST"),
+                    "thread": threading.current_thread().name,
+                    "pair": io.current_pair,
+                    "n": batch_data["input_ids"].size(1),
+                    "use_block_table": io.use_block_table,
+                    "host_input_ids": host.input_ids[:_K].tolist(),
+                    "host_carry": host.carry_over_ids[:_K].tolist(),
+                    **_streams_state(io),
+                    "dev": None,
+                }
             )
-            if hasattr(io, "io_pairs"):
-                for k, pair in enumerate(io.io_pairs):
-                    for side in ("host_io", "device_io"):
-                        b = getattr(pair, side)._bulk_input_tensor
-                        print(f"  pair{k}.{side}.bulk[:, :16]={b[:, :16].tolist()}", flush=True)  # noqa: T201
-            raise RuntimeError("CB_HOOK: invalid token id before the forward")
         return _orig_compute_batch(self, model, batch_data)
 
-    ModelRunner.compute_batch = _checked_compute_batch
+    ModelRunner.compute_batch = _traced_compute_batch
+
+    _orig_carry_over_tokens = ContinuousBatchingAsyncIOs.carry_over_tokens
+
+    def _traced_carry_over_tokens(self, input_ids, carry_over_ids, prev_output_ids):
+        if not _trace or _trace[-1]["dev"] is not None or torch.cuda.is_current_stream_capturing():
+            return _orig_carry_over_tokens(self, input_ids, carry_over_ids, prev_output_ids)
+        if not _slots:
+            _slots.extend(torch.empty((4, _K), dtype=torch.int64, pin_memory=True) for _ in range(_trace.maxlen))
+        slot = _slots[_trace[-1]["seq"] % len(_slots)]
+        slot.fill_(-777)  # sentinel: a row still at -777 was never copied (the stream died before)
+        k = min(_K, input_ids.size(1))
+        slot[0, :k].copy_(input_ids[0, :k], non_blocking=True)
+        slot[1, :k].copy_(carry_over_ids[:k], non_blocking=True)
+        slot[2, :k].copy_(prev_output_ids[0, :k], non_blocking=True)
+        out = _orig_carry_over_tokens(self, input_ids, carry_over_ids, prev_output_ids)
+        slot[3, :k].copy_(input_ids[0, :k], non_blocking=True)
+        _trace[-1]["dev"] = slot
+        return out
+
+    ContinuousBatchingAsyncIOs.carry_over_tokens = _traced_carry_over_tokens
+
+    def _dump_trace(reason):
+        lines = [f"CB_TRACE DUMP pid={os.getpid()} reason={reason} entries={len(_trace)}"]
+        for e in _trace:
+            dev = e["dev"]
+            meta = {k: v for k, v in e.items() if k not in ("dev", "host_input_ids", "host_carry")}
+            lines.append(f"  {meta}")
+            lines.append(f"    host input_ids={e['host_input_ids']}")
+            lines.append(f"    host carry    ={e['host_carry']}")
+            if dev is None:
+                lines.append("    dev: not recorded")
+            else:
+                for name, row in zip(
+                    ("dev input_ids", "dev carry", "dev prev_out", "dev input_ids after"), dev.tolist(), strict=True
+                ):
+                    lines.append(f"    {name}={row}")
+        print("\n".join(lines), flush=True)  # noqa: T201
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(item, call):
+        report = yield
+        if report.failed and _trace:
+            _dump_trace(f"{item.nodeid} {report.when} failed")
+            _trace.clear()
+        return report
+
+    atexit.register(lambda: _trace and _dump_trace("atexit"))
