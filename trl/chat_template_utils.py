@@ -773,6 +773,12 @@ phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="ut
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
 
+phi4_chat_template = (_CHAT_TEMPLATES_DIR / "phi4.jinja").read_text(encoding="utf-8")
+
+phi4_mini_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning.jinja").read_text(encoding="utf-8")
+
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
@@ -1268,6 +1274,14 @@ phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
 
+phi4_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
@@ -1477,6 +1491,15 @@ def get_training_chat_template(
 
     if chat_template == phi3_5_chat_template:
         return phi3_5_training_chat_template
+
+    if chat_template == phi4_chat_template:
+        return phi4_training_chat_template
+
+    if chat_template == phi4_mini_chat_template:
+        return phi4_mini_training_chat_template
+
+    if chat_template == phi4_mini_reasoning_chat_template:
+        return phi4_mini_reasoning_training_chat_template
 
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
