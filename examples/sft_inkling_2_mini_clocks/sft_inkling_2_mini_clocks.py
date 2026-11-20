@@ -24,7 +24,7 @@
 # docstyle-ignore
 """
 Teach Inkling 2 Mini to read analog clocks: LoRA SFT on 10,000 clocks on one H100, 53 minutes at a peak of 55 GiB. The
-fine-tuned model reads 93.5% of the held-out clocks to the second, against none for the original.
+fine-tuned model reads 87.0% of the held-out clocks to the second, against none for the original.
 
     python sft_inkling_2_mini_clocks.py
 """

@@ -55,9 +55,11 @@ python examples/sft_inkling_2_mini_clocks/sft_inkling_2_mini_clocks.py
 - `model_init_kwargs={"dtype": "bfloat16"}`: TRL loads a model id in float32 unless told otherwise, and the model then doesn't fit on one GPU.
 - `assistant_only_loss=True`: the loss is on the answer only, not on the image and the question.
 
-Token accuracy passes 0.9 within 200 steps:
+To follow the training, we also saved a checkpoint every 125 steps (`save_steps=125`) and measured each one on the 200 held-out clocks. At 0, the original model, without reasoning, answers none of them within 256 tokens:
 
-![Token accuracy during training](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/token_accuracy.png)
+![Held-out clocks read right after each checkpoint](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/checkpoints_accuracy.png)
+
+The hour comes first, after about 1,000 clocks. The minutes and seconds take longer, and they are still rising at the end of the epoch.
 
 ## 4. Measure again
 
@@ -67,8 +69,8 @@ python examples/sft_inkling_2_mini_clocks/evaluate.py thinkingmachines/Inkling-2
 ```
 
 ```
-Inkling-2-Mini-clocks: 93.5% to the second, 94.5% to the minute, 98.0% the hour
-Inkling-2-Mini-clocks: 93.8% to the second, 93.8% to the minute, 96.9% the hour
+Inkling-2-Mini-clocks: 87.0% to the second, 88.0% to the minute, 98.5% the hour
+Inkling-2-Mini-clocks: 81.2% to the second, 87.5% to the minute, 96.9% the hour
 ```
 
 The first line is on 200 clocks, the second on the 32 the original model was measured on:
@@ -76,9 +78,9 @@ The first line is on 200 clocks, the second on the 32 the original model was mea
 | Model | To the second | To the minute | The hour | Tokens per answer |
 | --- | --- | --- | --- | --- |
 | Inkling 2 Mini, low reasoning effort | 0.0% | 15.6% | 50.0% | 600 to 1,000 |
-| Fine-tuned | 93.8% | 93.8% | 96.9% | 9 |
+| Fine-tuned | 81.2% | 87.5% | 96.9% | 9 |
 
-The fine-tuned model reads the time to the second on more than 9 clocks in 10, and answers in 9 tokens instead of reasoning for a thousand. Here are three test clocks, one of each style, and what each model answers:
+On the 200 clocks, the fine-tuned model reads the time to the second on close to 9 in 10, and answers in 9 tokens instead of reasoning for a thousand. A first run with the same settings reached 93.5%: two runs differ by a few points. Here are three test clocks, one of each style, and what each model answers:
 
 <table>
   <tr>
