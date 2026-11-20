@@ -4312,6 +4312,22 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
         pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
         pytest.param(
+            "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+            {},
+            id="redacted",
+            marks=[
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="REDACTED_NAME models were introduced in transformers-5.24.0",
+                ),
+                pytest.mark.xfail(
+                    raises=ValueError,
+                    reason="Tree packing doesn't support REDACTED_NAME's hybrid layers",
+                    strict=True,
+                ),
+            ],
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             {},
             id="deepseek-v3",

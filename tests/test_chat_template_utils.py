@@ -868,6 +868,14 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+                id="redacted",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="REDACTED_NAME models were introduced in transformers-5.24.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 id="glm4moe",
                 marks=pytest.mark.skipif(
@@ -2271,6 +2279,17 @@ class TestNamedChatTemplateVariants:
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+            id="redacted",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="REDACTED_NAME models were introduced in transformers-5.24.0",
                 ),
             ],
         ),
