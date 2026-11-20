@@ -277,3 +277,39 @@ def cleanup_vllm_dist_env():
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
+
+
+# Debug hook for #8339: before each continuous batching forward, check the token ids the model will embed
+if os.environ.get("CB_HOOK") == "1":
+    from transformers.generation.continuous_batching.model_runner import ModelRunner
+
+    _orig_compute_batch = ModelRunner.compute_batch
+
+    def _checked_compute_batch(self, model, batch_data):
+        torch.cuda.synchronize()
+        io = self.inputs_and_outputs
+        carry, prev_out, _ = io.get_cb_kwargs()
+        ids = batch_data["input_ids"][0]
+        n = ids.numel()
+        c = carry[:n].long()
+        vocab = model.get_input_embeddings().num_embeddings
+        carry_ok = bool(((c >= -1) & (c < prev_out.size(1))).all())
+        eff = torch.where(c != -1, prev_out[0, c.clamp(-1, prev_out.size(1) - 1)].long(), ids.long())
+        bad = (eff < 0) | (eff >= vocab)
+        if not carry_ok or bool(bad.any()):
+            print(  # noqa: T201
+                f"CB_HOOK BAD pid={os.getpid()} pair={getattr(io, 'current_pair', None)} n={n} vocab={vocab} "
+                f"use_block_table={io.use_block_table if not hasattr(io, 'io_pairs') else io.io_pairs[io.current_pair].device_io.use_block_table} "
+                f"carry_ok={carry_ok}\n  input_ids={ids.tolist()}\n  carry={c.tolist()}\n  eff={eff.tolist()}\n"
+                f"  prev_out[:, :32]={prev_out[:, :32].tolist()}",
+                flush=True,
+            )
+            if hasattr(io, "io_pairs"):
+                for k, pair in enumerate(io.io_pairs):
+                    for side in ("host_io", "device_io"):
+                        b = getattr(pair, side)._bulk_input_tensor
+                        print(f"  pair{k}.{side}.bulk[:, :16]={b[:, :16].tolist()}", flush=True)  # noqa: T201
+            raise RuntimeError("CB_HOOK: invalid token id before the forward")
+        return _orig_compute_batch(self, model, batch_data)
+
+    ModelRunner.compute_batch = _checked_compute_batch
