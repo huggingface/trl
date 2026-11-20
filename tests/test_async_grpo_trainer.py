@@ -68,6 +68,7 @@ from trl.trainer.async_grpo_trainer import (
     TrainingSequence,
     TreeRow,
     TurnRecord,
+    _broadcast_trainable_parameters,
     _chain_to_sequences,
     _common_prefix_len,
     _iter_vllm_named_params,
@@ -6009,3 +6010,42 @@ class TestStopWatcher:
         stop_event.set()
         watcher.join(timeout=5)
         assert not watcher.is_alive()
+
+
+def _broadcast_trainable_parameters_worker(rank: int, world_size: int, init_file: str, results) -> None:
+    import torch.distributed as dist
+
+    dist.init_process_group("gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size)
+    torch.manual_seed(rank)  # a different draw on each rank, as transformers' distributed loading leaves it
+    model = torch.nn.Linear(4, 2)
+    torch.manual_seed(0)
+    from_rank_0 = torch.nn.Linear(4, 2)
+
+    _broadcast_trainable_parameters(model)
+
+    equal = torch.equal(model.weight, from_rank_0.weight) and torch.equal(model.bias, from_rank_0.bias)
+    results.put((rank, equal))
+    dist.destroy_process_group()
+
+
+class TestBroadcastTrainableParameters(TrlTestCase):
+    """A loaded shard draws different random values per rank, so PEFT's adapter must be synced after it."""
+
+    def test_every_rank_starts_from_the_adapters_of_rank_0(self):
+        context = mp.get_context("spawn")
+        results = context.Queue()
+        workers = [
+            context.Process(
+                target=_broadcast_trainable_parameters_worker,
+                args=(rank, 2, os.path.join(self.tmp_dir, "process_group"), results),
+            )
+            for rank in range(2)
+        ]
+        for worker in workers:
+            worker.start()
+        parameters = dict(results.get(timeout=120) for _ in workers)
+        for worker in workers:
+            worker.join(timeout=120)
+
+        assert all(worker.exitcode == 0 for worker in workers)
+        assert all(parameters.values())

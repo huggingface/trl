@@ -47,6 +47,7 @@ from typing import Any, Protocol, TypeAlias
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -413,6 +414,23 @@ def patch_tree_recurrent(model, layer_type: str) -> bool:
         modeling.torch_chunk_gated_delta_rule = torch_chunk_gated_delta_rule
     _PATCHED.add(modeling)
     return True
+
+
+def _broadcast_trainable_parameters(model) -> None:
+    """
+    Copy the trainable parameters of rank 0 to every other rank, in place.
+
+    transformers' distributed loading consumes a different amount of random values on each rank, so PEFT initializes
+    the adapter right after it from a different random state on each: the replicas start from different adapters.
+    Gradients are averaged across ranks, not parameters, so they never come back together.
+    """
+    if not (dist.is_available() and dist.is_initialized()) or dist.get_world_size() == 1:
+        return
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            # The shards of a DTensor line up across ranks, so the local one is broadcast
+            tensor = parameter.to_local() if isinstance(parameter, DTensor) else parameter
+            dist.broadcast(tensor.detach(), src=0)
 
 
 logger = get_logger(__name__)
@@ -3133,7 +3151,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             # Unlike `GRPOTrainer`, no `autocast_adapter_dtype=False` branch (it works around a DeepSpeed ZeRO-3
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
+            distributed_loading = getattr(model.config, "distributed_config", None) is not None
             model = get_peft_model(model, peft_config)
+            if distributed_loading:
+                _broadcast_trainable_parameters(model)
 
         # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) add virtual tokens rather than weights, and
         # the trainer syncs weights to the vLLM server, so the server would generate without them.
