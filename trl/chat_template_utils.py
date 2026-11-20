@@ -421,6 +421,37 @@ glm4moe_template = {
     },
 }
 
+laguna_template = {
+    # Same tool-call format as `glm4moe_template`. The generation prompt pre-fills `<think>` (thinking) or `</think>`:
+    # the anchor consumes it, and reasoning opens only if a `</think>` follows
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<assistant>\n?(?:<think>|</think>\n?)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"\s*(?:<think>)?\n?(?=[\s\S]*?</think>)",
+            "close_pattern": r"\n?</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            # Laguna-XS.2 and Laguna-M.1 put a newline after the name and between key and value; the 2.1 templates
+            # put none
+            "open_pattern": r"<tool_call>(?P<name>[^<\s]+)\s*",
+            "close_pattern": r"</tool_call>\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
+                "value_parser": _XML_INLINE_VALUE_PARSER,
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"\s*</assistant>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 llama3_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|start_header_id|>assistant<|end_header_id|>\n\n",
@@ -723,6 +754,14 @@ gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding
 
 idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
 
+laguna_chat_template = (_CHAT_TEMPLATES_DIR / "laguna.jinja").read_text(encoding="utf-8")
+
+laguna_v2_chat_template = (_CHAT_TEMPLATES_DIR / "laguna_v2.jinja").read_text(encoding="utf-8")
+
+laguna_v3_chat_template = (_CHAT_TEMPLATES_DIR / "laguna_v3.jinja").read_text(encoding="utf-8")
+
+laguna_v4_chat_template = (_CHAT_TEMPLATES_DIR / "laguna_v4.jinja").read_text(encoding="utf-8")
+
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
@@ -892,6 +931,15 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = None, glm4moe_template
     elif chat_template in [gptoss_chat_template, gptoss_training_chat_template]:
         schema, template = gptoss_schema, gptoss_template
+    elif chat_template in [
+        laguna_chat_template,
+        laguna_v2_chat_template,
+        laguna_v3_chat_template,
+        laguna_v4_chat_template,
+    ]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, laguna_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         schema, template = llama3_schema, llama3_template
     elif chat_template in [

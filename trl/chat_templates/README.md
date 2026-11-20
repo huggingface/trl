@@ -137,6 +137,22 @@ Original GPT-OSS chat template.
 
 Original Idefics3 chat template (as shipped by `HuggingFaceM4/Idefics3-8B-Llama3`). Does not support tool calling.
 
+### `laguna.jinja`
+
+Original Laguna chat template (as shipped by `poolside/Laguna-XS.2`). Wraps turns in `<user>` / `<assistant>` tags and writes tool calls in the same format as `glm4moe.jinja` (`<tool_call>name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>`). The generation prompt pre-fills `<think>` with `enable_thinking=True` and `</think>` otherwise. The template already has `{% generation %}` markers and is prefix-preserving, so it needs no training template. Response parsing uses `laguna_template`.
+
+### `laguna_v2.jinja`
+
+Laguna-M.1 chat template (as shipped by `poolside/Laguna-M.1`). Same as `laguna.jinja`, except that it has no default system message. Response parsing uses `laguna_template`.
+
+### `laguna_v3.jinja`
+
+Laguna 2.1 chat template (as shipped by `poolside/Laguna-XS-2.1`). Same as `laguna.jinja`, without the newlines around the turns, the reasoning and the tool-call arguments (`<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>`), and without the tool-call format instructions in the system message. It renders the reasoning of assistant turns only with `enable_thinking=True`. Response parsing uses `laguna_template`.
+
+### `laguna_v4.jinja`
+
+Laguna 2.1 chat template (as shipped by `poolside/Laguna-S-2.1`). Same as `laguna_v3.jinja`, except that thinking is enabled by default and `preserve_thinking=True` also renders the reasoning with thinking disabled. Response parsing uses `laguna_template`.
+
 ### `lfm2.jinja`
 
 Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatML-style. Renders `tools` into the system prompt wrapped in `<|tool_list_start|>` / `<|tool_list_end|>`, and wraps `tool` message content in `<|tool_response_start|>` / `<|tool_response_end|>`. It never reads `message['tool_calls']` though, so assistant tool calls are silently dropped: the model is trained to emit `<|tool_call_start|>` / `<|tool_call_end|>` as plain text inside `content`.

@@ -52,6 +52,10 @@ from trl.chat_template_utils import (
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    laguna_chat_template,
+    laguna_v2_chat_template,
+    laguna_v3_chat_template,
+    laguna_v4_chat_template,
     lfm2_2_5_v2_chat_template,
     lfm2_2_5_v4_chat_template,
     lfm2_2_5_vl_v2_chat_template,
@@ -511,6 +515,42 @@ class TestAddResponseSchema:
         prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
         response = tokenizer(completion, add_special_tokens=False).input_ids
         assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
+
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(laguna_chat_template, id="laguna"),
+            pytest.param(laguna_v2_chat_template, id="laguna-v2"),
+            pytest.param(laguna_v3_chat_template, id="laguna-v3"),
+            pytest.param(laguna_v4_chat_template, id="laguna-v4"),
+        ],
+    )
+    @pytest.mark.parametrize("enable_thinking", [False, True])
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Laguna only gets a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_laguna(self, chat_template, enable_thinking):
+        # No tiny Laguna model yet: parsing only depends on the rendered text, so borrow a tokenizer
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [
+            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
+            {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris (FR), France"}}},
+        ]
+        assistant = {"role": "assistant", "content": "Let me check.", "tool_calls": tool_calls}
+        if enable_thinking:
+            assistant["reasoning_content"] = "Hmmm."
+        messages = [{"role": "user", "content": "What is 3*4?"}, assistant]
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True, enable_thinking=enable_thinking
+        )
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=True, return_dict=True, enable_thinking=enable_thinking
+        )
+        response = text.input_ids[len(prefix.input_ids) :]
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids, tools=[multiply]) == assistant
 
     @pytest.mark.parametrize(
         "completion, expected",
