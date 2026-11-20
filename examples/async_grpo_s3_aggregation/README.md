@@ -54,8 +54,9 @@ are shared by all its agents' rows.
   teammate orders differ.
 - **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
   (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). `compute_advantages` divides each team's advantage by its trained
-  tokens |T_g|, and `TeamTrainer` scales out TRL's per-micro-batch token mean and divides the update's gradient by its
-  team count |B| (rows / N, since every team gives one row per agent) before clipping. So every team counts equally
+  tokens |T_g|, and `TeamTrainer` scales out TRL's per-micro-batch token mean and divides by the update's team count
+  |B| (its rows / N, since every team gives one row per agent; the Trainer fetches all of an update's micro-batches
+  before the first forward, so |B| is known in `compute_loss`). So every team counts equally
   however the batcher packs or splits teams, as in the paper's mean over teams of per-team token means.
   Micro-batches use TRL's token-budget packing, and `gradient_accumulation_steps` is `--teams-per-update` / 2,
   for about two teams per 40,960-token micro-batch. So `--teams-per-update` is approximate: a team forwards about

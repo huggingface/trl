@@ -184,23 +184,23 @@ class TeamRolloutLoop(AsyncRolloutLoop):
 
 class TeamTrainer(AsyncGRPOTrainer):
     """Eq. 3 exactly, however teams are packed into micro-batches. TRL divides each micro-batch's loss sum by its
-    trained tokens and by `gradient_accumulation_steps`; the advantages, already over |T_g|, are scaled back by both,
-    so the update's gradient is the sum over its teams of their token means. Before clipping it is divided by the
-    update's team count |B|: every team gives one row per agent, so |B| is the update's rows over `team_agents`."""
+    trained tokens and by `gradient_accumulation_steps`; the advantages, already over |T_g|, are scaled back by both
+    and divided by the update's team count |B|. The Trainer fetches all of an update's micro-batches before the first
+    forward, so |B| is known then: every team gives one row per agent, so it is the update's rows over `team_agents`."""
 
     loop_cls = TeamRolloutLoop
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        # rows of each micro-batch, from counts the collator repeats on every rank
+        rows = sum(round(float(b["global_n_forward_tokens"][0] / b["mean_seq_len"][0])) for b in batch_samples)
+        self._update_teams = max(rows, 1) / self.args.team_agents
+        return batch_samples, num_items_in_batch
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        scale = inputs["global_n_tokens"][0] * self.current_gradient_accumulation_steps
+        scale = inputs["global_n_tokens"][0] * self.current_gradient_accumulation_steps / self._update_teams
         inputs = {**inputs, "advantages": inputs["advantages"] * scale}
         return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
-
-    def _clip_grad_norm(self, model):
-        teams = round(self._step_samples) / self.args.team_agents
-        for p in model.parameters():
-            if p.grad is not None:
-                p.grad.div_(teams)
-        return super()._clip_grad_norm(model)
 
 
 def main() -> None:
