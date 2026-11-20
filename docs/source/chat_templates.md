@@ -187,6 +187,10 @@ Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, appli
 
 Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
+### `muse_spark_v3_training.jinja`
+
+Patched Muse Spark Open template. Same as `muse_spark_v3.jinja` with the header comment of `muse_spark_training.jinja`: the Hub template already keeps the `<|start|>assistant` out of its `{% generation %}` markers.
+
 ### `nemotron_3_nano_training.jinja`
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`: the original is already prefix-preserving, so the change is wrapping assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
