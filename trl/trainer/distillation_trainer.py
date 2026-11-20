@@ -39,6 +39,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
+    Gemma3Processor,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -1720,9 +1721,7 @@ class DistillationTrainer(_BaseTrainer):
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
-            if "num_crops" in self.processing_class.image_processor.model_input_names and hasattr(
-                self.processing_class.image_processor, "do_pan_and_scan"
-            ):
+            if isinstance(self.processing_class, Gemma3Processor):
                 image_info = self.processing_class.image_processor(images=images, return_tensors="pt")
                 num_patches = torch.as_tensor(image_info["num_crops"]) + 1
             else:
