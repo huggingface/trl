@@ -1,0 +1,37 @@
+# verl W1 on Qwen3.5-35B-A3B (MoE), LoRA, FSDP2 backend (the installed bench-verl venv: vllm + fsdp extras).
+# Base: w1-M.yaml (V1 separate_async, hybrid_engine=False, 4 vLLM + 4 trainer GPUs). MoE/LoRA deltas, with sources:
+#  - FSDP2 has no expert parallelism (verl/workers/engine/fsdp/: no EP code); experts are transformers' packed 3D params,
+#    FSDP-sharded like any weight. verl's MoE-native EP path is Megatron, not in this venv (see envs/verl/NOTES.md "MoE 35B-A3B").
+#  - LoRA through PEFT (docs/advance/ppo_lora.rst). Targets = TRL's set: attention + GDN + shared-expert Linear layers
+#    (routed experts and the router are nn.Parameter, so they stay frozen). lora.merge=true: in separate_async, merge=false
+#    never ships the adapters to vLLM (engine_workers.py:766-768, fsdp_utils.py:762-772); merged weights are streamed.
+#  - lr 1e-5, alpha 64 as TRL's LoRA run. ppo_max_token_len_per_gpu kept at w1-M's 36864.
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+    - file:///fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/configs/verl
+
+defaults:
+  - w1-M
+  - _self_
+
+actor_rollout_ref:
+  model:
+    path: Qwen/Qwen3.5-35B-A3B
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: [q_proj, k_proj, v_proj, o_proj, in_proj_qkv, in_proj_z, in_proj_b, in_proj_a, out_proj, gate_proj, up_proj, down_proj]
+    lora:
+      merge: true
+  actor:
+    optim:
+      lr: 1.0e-5
+    checkpoint:
+      save_contents: [model, extra]
+  rollout:
+    checkpoint_engine:
+      update_weights_bucket_megabytes: 4096
+
+trainer:
+  total_training_steps: 50
+  save_freq: -1

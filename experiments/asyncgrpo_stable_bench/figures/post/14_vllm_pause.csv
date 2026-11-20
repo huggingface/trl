@@ -1,0 +1,6 @@
+option,pause_mean_s,pause_max_s,gen_ktok_s
+top-8 (default),12.0,38.2,65.3
+top-4,6.7,19.3,79.9
+top-2,0.05,0.21,91.1
+top-1,0.04,0.06,91.9
+no logprobs,0.05,0.07,95.9

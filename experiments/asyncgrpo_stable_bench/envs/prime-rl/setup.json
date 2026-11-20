@@ -1,0 +1,24 @@
+{
+  "install_wall_s": 814,
+  "install_wall_s_breakdown": {
+    "uv_sync_s": 436,
+    "import_check_cold_s": 378,
+    "import_check_warm_s": 111,
+    "note": "uv sync --frozen --all-extras --all-packages from job 364061 (venv created 16:56:32, last package installed 17:03:42 UTC) with a partly warm uv cache: other libs had already pulled the torch 2.13/cu130 wheels, so a fully cold install is longer. Clone and submodules were already in place and are not counted. The import check could not finish on hopper-cpu (11+ min before spot preemption) and was timed on a B200 node instead: 378 s cold (job 364203), 111 s warm (job 364218). install_wall_s = uv sync + cold import."
+  },
+  "install_steps": [],
+  "venv_gb": 22,
+  "first_step_s": {
+    "W1-S": 1337,
+    "W1-S_note": "job 364425 (shared arm): job start 19:49:05 UTC to the first trainer step's metrics row; includes the cold vLLM engine start (4 x DP), model download from the warm shared hub cache, FSDP setup and the first 256-rollout batch at up to 16k tokens"
+  },
+  "conflicts": [],
+  "patches": [
+    "tools/convert_dcp_to_bf16.py (DCP -> HF export, run after training): `getattr(model, '_tied_weights_keys', [])` is None for prime-rl's Qwen3.5, so every export raised TypeError. Bench copy with a one-line fix in envs/prime-rl/convert_dcp_to_bf16.py, run by launch/prime-rl/export.sbatch; the prime-rl checkout itself is unmodified (NOTES.md #19)"
+  ],
+  "notes": [
+    "The submodule HTTPS rewrite and the git-lfs skip for deps/prime-envs (NOTES.md #1) are scripted in install.sh, so they are not extra manual steps.",
+    "mamba-ssm (git f577286) builds without its CUDA extension on hopper-cpu; only Nemotron-H needs it, W1 does not (NOTES.md #2).",
+    "On a shared node every fixed port must be overridden (inference 8000, ZMQ rollout transport 5555, NCCL weight broadcast 29501); the launch scripts derive them from the job id (NOTES.md #8)."
+  ]
+}

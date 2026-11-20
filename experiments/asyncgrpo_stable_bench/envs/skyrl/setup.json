@@ -1,0 +1,18 @@
+{
+  "lib": "skyrl",
+  "lib_sha": "d87004689e3a57e4041991a3c4cf71bed333a44d",
+  "install_wall_s": 610,
+  "install_wall_s_note": "measured on the requeued install job 364058 (8 CPUs, hopper-cpu) with every package already in the uv cache from the preempted first attempt; that attempt spent 363 s downloading 73 packages, so a cold-cache install is about 970 s",
+  "install_steps": 0,
+  "install_steps_note": "install.sh is the whole procedure (uv venv + uv sync --frozen --extra fsdp + math-verify for the shared reward); no CUDA extension is compiled, all come as NovaSky prebuilt wheels pinned by hash in uv.lock",
+  "venv_gb": 20,
+  "first_step_s": {
+    "S": null
+  },
+  "conflicts": [
+    "math-verify's antlr4_13_2 extra (antlr4-python3-runtime 4.13.2) breaks omegaconf, which SkyRL imports everywhere; pinned antlr4-python3-runtime==4.9.3 and math-verify[antlr4_9_3]"
+  ],
+  "patches": [],
+  "first_step_s_note": "not measured yet (W1-S run queued). Smoke references: GSM8K Qwen2.5-1.5B on 2 shared GPUs, job start to first optimizer step ~34 min (incl. 8.3 min eval slowed by dataloader worker spawns, since fixed); W1 Qwen3.5-2B on 8 GPUs reached trainer init 17 min after job start",
+  "patches_note": "no SkyRL source patch. W2 with HF Sandboxes would need a Harbor pin >= v0.21.0 and a one-line Harbor patch (hf_sandbox upload_dir without --no-same-owner)"
+}

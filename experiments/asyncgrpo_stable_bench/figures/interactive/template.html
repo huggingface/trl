@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Six RL Libraries, One Node</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column (~46rem) of figures in post order; a sticky library bar doubles as the legend and the series toggles. */
+:root {
+  --bg: #fcfcfb; --surface: #fcfcfb; --raise: #f3f2ee; --ink: #0b0b0b; --ink2: #52514e; --muted: #8a8984;
+  --grid: #e6e5e0; --rule: #d9d8d2; --focus: #2a78d6;
+  --c-trl: #2a78d6; --c-prime-rl: #eb6834; --c-verl: #1baf7a; --c-skyrl: #eda100; --c-miles: #e87ba4; --c-openrlhf: #008300;
+  --sev-blocker: #3d3c38; --sev-major: #8a8984; --sev-minor: #cfcec8; --neutral-1: #bdbcb5; --neutral-2: #d6d5cf; --hatch: #c9c8c2;
+  --font-display: "Charter", "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1a19; --surface: #1a1a19; --raise: #23231f; --ink: #f0efec; --ink2: #c3c2b7; --muted: #8f8e86;
+    --grid: #2e2e2a; --rule: #3a3a35; --focus: #3987e5;
+    --c-trl: #3987e5; --c-prime-rl: #d95926; --c-verl: #199e70; --c-skyrl: #c98500; --c-miles: #d55181; --c-openrlhf: #2f9a2f;
+    --sev-blocker: #e4e3dd; --sev-major: #9a9991; --sev-minor: #55554f; --neutral-1: #6b6a63; --neutral-2: #4d4c47; --hatch: #5a5953;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a1a19; --surface: #1a1a19; --raise: #23231f; --ink: #f0efec; --ink2: #c3c2b7; --muted: #8f8e86;
+  --grid: #2e2e2a; --rule: #3a3a35; --focus: #3987e5;
+  --c-trl: #3987e5; --c-prime-rl: #d95926; --c-verl: #199e70; --c-skyrl: #c98500; --c-miles: #d55181; --c-openrlhf: #2f9a2f;
+  --sev-blocker: #e4e3dd; --sev-major: #9a9991; --sev-minor: #55554f; --neutral-1: #6b6a63; --neutral-2: #4d4c47; --hatch: #5a5953;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+main { max-width: 46rem; margin: 0 auto; padding-block: 2.5rem 4rem; }
+header.top { display: grid; gap: .6rem; padding-bottom: 1.2rem; }
+.eyebrow { font: 600 .72rem/1.2 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font: 600 2.1rem/1.15 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.lede { color: var(--ink2); margin: 0; max-width: 40rem; }
+.meta { font: .78rem/1.4 var(--font-mono); color: var(--muted); }
+h2 { font: 600 1.45rem/1.25 var(--font-display); margin: 3rem 0 .4rem; text-wrap: balance; }
+h2 + p.sec { color: var(--ink2); margin: 0 0 .6rem; }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--rule);
+  padding-block: .55rem; display: flex; flex-wrap: wrap; gap: .4rem .5rem; align-items: center; }
+.bar .lbl { font-size: .75rem; color: var(--muted); margin-right: .2rem; }
+.chip { font: 500 .8rem/1 var(--font-body); color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 999px;
+  padding: .38rem .7rem .38rem .55rem; display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
+.chip .sw { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
+.chip[aria-pressed="false"] { color: var(--muted); }
+.chip[aria-pressed="false"] .sw { background: transparent !important; outline: 1.5px solid var(--muted); outline-offset: -1.5px; }
+.chip:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chip.reset { border-style: dashed; color: var(--ink2); }
+figure.fig { margin: 2rem 0 0; padding: 0; display: grid; gap: .35rem; }
+figure.fig h3 { font: 650 1.02rem/1.35 var(--font-body); margin: 0; text-wrap: balance; }
+figure.fig .sub { color: var(--ink2); font-size: .87rem; margin: 0; }
+.chart { width: 100%; min-width: 0; position: relative; }
+.chart svg { display: block; overflow: visible; }
+figcaption { color: var(--muted); font-size: .78rem; line-height: 1.45; display: grid; gap: .15rem; }
+details.data { font-size: .8rem; }
+details.data summary { cursor: pointer; color: var(--ink2); width: max-content; }
+.tbl { overflow-x: auto; max-height: 22rem; margin-top: .4rem; border: 1px solid var(--rule); border-radius: 4px; }
+.tbl table { border-collapse: collapse; font: .75rem/1.4 var(--font-mono); font-variant-numeric: tabular-nums; width: 100%; }
+.tbl th, .tbl td { padding: .25rem .55rem; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+.tbl th { position: sticky; top: 0; background: var(--raise); color: var(--ink2); font-weight: 600; }
+.tbl td:first-child, .tbl th:first-child { text-align: left; }
+.pending { display: inline-block; font: 600 .66rem/1 var(--font-body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink2);
+  border: 1px dashed var(--muted); border-radius: 3px; padding: .2rem .35rem; vertical-align: .1em; }
+#tip { position: fixed; pointer-events: none; z-index: 20; background: var(--raise); color: var(--ink); border: 1px solid var(--rule);
+  border-radius: 6px; padding: .5rem .65rem; font-size: .78rem; line-height: 1.4; max-width: 19rem; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  font-variant-numeric: tabular-nums; }
+#tip .k { color: var(--ink2); }
+#tip .row { display: flex; gap: .45rem; align-items: baseline; }
+#tip .row .sw { width: .6rem; height: .6rem; border-radius: 2px; flex: none; }
+#tip .row .v { margin-left: auto; padding-left: .8rem; font-family: var(--font-mono); }
+#tip b { font-weight: 600; }
+svg text { fill: var(--ink2); font-family: var(--font-body); }
+svg .ink { fill: var(--ink); }
+svg .muted { fill: var(--muted); }
+svg .ptitle { fill: var(--ink); font-weight: 600; font-size: 12.5px; }
+svg .axis line, svg .axis path { stroke: var(--muted); }
+svg .grid line { stroke: var(--grid); }
+svg .dim { opacity: .14; transition: opacity .12s; }
+svg [data-lib] { transition: opacity .12s; }
+.note { font-size: .82rem; color: var(--ink2); }
+footer { margin-top: 3.5rem; border-top: 1px solid var(--rule); padding-top: 1rem; color: var(--muted); font-size: .8rem; }
+@media (max-width: 560px) { h1 { font-size: 1.65rem; } body { font-size: 14.5px; } }
+@media (prefers-reduced-motion: reduce) { svg .dim, svg [data-lib] { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="eyebrow">TRL 1.18 · AsyncGRPOTrainer stable-release benchmark · figures</div>
+    <h1>Six RL libraries on one B200 node</h1>
+    <p class="lede">TRL, prime-rl, verl, OpenRLHF, SkyRL and miles on the same math and agentic tasks, each on its own built-in options, one 8×B200 node per run (4 GPUs for inference, 4 for training), one eval script for everyone.</p>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div class="bar" role="group" aria-label="Libraries shown in every chart">
+    <span class="lbl">Libraries</span>
+    <span id="chips" style="display:contents"></span>
+    <button class="chip reset" id="reset" type="button">Show all</button>
+  </div>
+
+  <h2>W2: agentic terminal tasks</h2>
+  <p class="sec">TermGrade tasks as Harbor tasks with the terminus-2 agent, 600 s and 30 calls per episode, Qwen3.5-9B full fine-tune (and Qwen3.5-35B-A3B with LoRA, runs landing), 8 tasks × 8 episodes per step, 60 steps. At 9B only TRL and prime-rl ran it on built-in options; verl and miles runs show up here once collected.</p>
+  <div id="figs-w2"></div>
+
+  <h2>Agentic (W2): Qwen3.5-35B-A3B on text-to-SQL</h2>
+  <p class="sec">miles' text-to-SQL recipe (BIRD-based, multi-turn SQL tool calls, up to 5 tool turns and an answer turn) with LoRA r32 on Qwen3.5-35B-A3B. Each library runs its own recommended setup; only the task data, tool, reward and the greedy eval are shared. TRL and prime-rl on 8 B200s, SkyRL on 4.</p>
+  <div id="figs-t2sql"></div>
+
+  <h2>W1: single-turn math</h2>
+  <p class="sec">DAPO-Math-17k, 32 prompts × 8 samples per step, completions up to 16k tokens, 200 steps, Qwen3.5-2B and Qwen3.5-9B (hybrid gated-DeltaNet models). Eval: AIME24 and AIME25 avg@16, MATH-500 avg@1, 16k tokens, thinking off.</p>
+  <div id="figs-w1"></div>
+
+  <h2>MoE: Qwen3.5-35B-A3B on one node</h2>
+  <div id="figs-moe"></div>
+
+  <h2>Robustness</h2>
+  <div id="figs-rob"></div>
+
+  <h2>Release note: the score-centering stall</h2>
+  <div id="figs-pause"></div>
+
+  <footer id="foot"></footer>
+</main>
+<div id="tip" hidden></div>
+
+<script type="application/json" id="bench-data">__BENCH_DATA__</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(() => {
+const D = JSON.parse(document.getElementById("bench-data").textContent);
+const LIBS = ["trl", "prime-rl", "verl", "openrlhf", "skyrl", "miles"];
+const NAME = D.lib_names;
+const BENCHES = [["aime24", "AIME24 (avg@16)"], ["aime25", "AIME25 (avg@16)"], ["math500", "MATH-500 (avg@1)"]];
+const MODEL = { S: "Qwen3.5-2B", M: "Qwen3.5-9B" };
+const hidden = new Set();
+let hl = null;
+
+// ------------------------------------------------------------------ helpers
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = (lib) => css("--c-" + lib);
+const mix = (c, f) => d3.interpolateRgb(css("--surface"), c)(f);
+const toward = (c, f) => d3.interpolateRgb(c, css("--ink"))(f);
+const f2 = d3.format(".2f"), f3 = d3.format(".3f"), fk = (v) => d3.format(".1f")(v / 1e3) + "k", fM = (v) => d3.format(".2f")(v / 1e6) + "M";
+const fs = (v) => d3.format(".0f")(v) + " s";
+const shown = (lib) => !hidden.has(lib);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const tip = document.getElementById("tip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.hidden = false;
+  const r = tip.getBoundingClientRect(), pad = 14;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+function hideTip() { tip.hidden = true; }
+const trow = (lib, k, v, color) => `<div class="row"><span class="sw" style="background:${color || C(lib)}"></span><span>${esc(k)}</span><span class="v">${v}</span></div>`;
+function setHL(lib) { hl = lib; d3.selectAll("[data-lib]").classed("dim", function () { return hl && this.dataset.lib !== hl; }); }
+function hoverable(sel, libOf, html) {
+  sel.on("mouseenter", function (ev, d) { setHL(libOf(d)); showTip(html(d), ev); })
+     .on("mousemove", function (ev, d) { showTip(html(d), ev); })
+     .on("mouseleave", () => { setHL(null); hideTip(); });
+}
+let hatchN = 0;
+function hatch(svg, color) {
+  const id = "h" + (hatchN++);
+  const p = svg.append("defs").append("pattern").attr("id", id).attr("patternUnits", "userSpaceOnUse").attr("width", 6).attr("height", 6)
+    .attr("patternTransform", "rotate(45)");
+  p.append("rect").attr("width", 6).attr("height", 6).style("fill", css("--surface"));
+  p.append("line").attr("x1", 0).attr("y1", 0).attr("x2", 0).attr("y2", 6).style("stroke", color).attr("stroke-width", 2.4);
+  return `url(#${id})`;
+}
+function inProgress(runs, evals = true) {
+  const o = runs.filter((r) => r.status !== "done" && r.status_note && (evals || r.status !== "evals pending")).map((r) => `${NAME[r.lib] || r.label}: ${r.status_note}`);
+  return o.length ? `<span class="pending">in progress</span> ${esc(o.join("; "))}.` : "";
+}
+function wrapText(textSel, width) {
+  textSel.each(function () {
+    const t = d3.select(this), words = t.text().split(/\s+/); t.text(null);
+    let line = [], tsp = t.append("tspan").attr("x", t.attr("x")).attr("dy", 0), n = 0;
+    for (const w of words) {
+      line.push(w); tsp.text(line.join(" "));
+      if (tsp.node().getComputedTextLength() > width && line.length > 1) {
+        line.pop(); tsp.text(line.join(" ")); line = [w]; n++;
+        tsp = t.append("tspan").attr("x", t.attr("x")).attr("dy", "1.15em").text(w);
+      }
+    }
+    t.attr("dy", (-n * 0.575) + 0.32 + "em");
+  });
+}
+
+// ------------------------------------------------------------------ figure shell
+const FIGS = [];
+function figure(container, id, spec) {
+  const el = document.createElement("figure");
+  el.className = "fig"; el.id = id;
+  el.innerHTML = `<h3></h3><p class="sub"></p><div class="chart"></div><figcaption></figcaption>
+    <details class="data"><summary>Data table</summary><div class="tbl"></div></details>`;
+  document.getElementById(container).appendChild(el);
+  FIGS.push({ el, spec });
+}
+function renderFig({ el, spec }) {
+  const box = el.querySelector(".chart");
+  box.innerHTML = "";
+  const width = box.clientWidth || 700;
+  const out = spec.draw(box, width) || {};
+  el.querySelector("h3").textContent = out.title || spec.title;
+  el.querySelector(".sub").textContent = spec.sub;
+  el.querySelector("figcaption").innerHTML = (out.foot || spec.foot || []).filter(Boolean).map((f) => `<div>${f}</div>`).join("");
+  const rows = out.rows || [];
+  const tbl = el.querySelector(".tbl");
+  if (!rows.length) { tbl.innerHTML = '<p class="note" style="padding:.5rem">No data yet.</p>'; return; }
+  const cols = Object.keys(rows[0]);
+  const fmt = (v) => typeof v === "number" ? (Math.abs(v) >= 1000 ? d3.format(",.0f")(v) : d3.format(".4~f")(v)) : (v == null ? "" : esc(v));
+  tbl.innerHTML = `<table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+    rows.map((r) => `<tr>${cols.map((c) => `<td>${fmt(r[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+function renderAll() { hatchN = 0; FIGS.forEach(renderFig); setHL(null); }
+
+// ------------------------------------------------------------------ chart primitives
+// Panel grid: n panels in `cols` columns (one column on phones).
+function grid(box, width, n, colsWanted, panelH, opt = {}) {
+  const cols = width < 560 ? 1 : Math.min(colsWanted, n);
+  const gapX = opt.gapX ?? 28, gapY = opt.gapY ?? 46, top = opt.top ?? 22;
+  const pw = (width - gapX * (cols - 1) - (opt.right ?? 0)) / cols;
+  const rows = Math.ceil(n / cols);
+  const height = rows * (panelH + top) + (rows - 1) * gapY + (opt.bottom ?? 34);
+  const svg = d3.select(box).append("svg").attr("width", width).attr("height", height).attr("role", "img");
+  const panels = d3.range(n).map((i) => ({ x: (i % cols) * (pw + gapX), y: Math.floor(i / cols) * (panelH + top + gapY) + top, w: pw, h: panelH, col: i % cols, row: Math.floor(i / cols), last: i % cols === cols - 1 || cols === 1 }));
+  return { svg, panels, cols };
+}
+
+// Line panel with crosshair tooltip. series: [{lib, label, pts:[{x,y,se}], dash, width, faint, markers}]
+function linePanel(svg, p, o) {
+  const ml = o.ml ?? 38, mr = o.mr ?? 8, mb = 26;
+  const g = svg.append("g").attr("transform", `translate(${p.x},${p.y})`);
+  const iw = p.w - ml - mr, ih = p.h - mb;
+  const x = d3.scaleLinear().domain(o.xDomain).range([ml, ml + iw]);
+  const y = d3.scaleLinear().domain(o.yDomain).range([ih, 0]);
+  if (o.title) g.append("text").attr("class", "ptitle").attr("x", 0).attr("y", -8).text(o.title);
+  g.append("g").attr("class", "grid").selectAll("line").data(y.ticks(o.yTicks ?? 5)).join("line")
+    .attr("x1", ml).attr("x2", ml + iw).attr("y1", (d) => y(d)).attr("y2", (d) => y(d));
+  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`)
+    .call(d3.axisBottom(x).tickValues(o.xTicks || null).ticks(5).tickSize(0).tickPadding(7).tickFormat(o.xFmt || null)).call((a) => a.select(".domain").attr("stroke", css("--muted")));
+  g.append("g").attr("class", "axis").attr("transform", `translate(${ml},0)`)
+    .call(d3.axisLeft(y).ticks(o.yTicks ?? 5).tickSize(0).tickPadding(6).tickFormat(o.yFmt || null)).call((a) => a.select(".domain").remove());
+  if (o.xLabel) g.append("text").attr("x", ml + iw / 2).attr("y", ih + 24).attr("text-anchor", "middle").attr("font-size", 11).text(o.xLabel);
+  if (o.band) g.append("rect").attr("x", ml).attr("width", iw).attr("y", y(o.band[1])).attr("height", y(o.band[0]) - y(o.band[1])).style("fill", css("--raise"));
+  if (o.area) for (const a of o.area) {
+    g.append("path").datum(a.pts).attr("d", d3.area().x((d) => x(d.x)).y0(y(0)).y1((d) => y(d.y))).style("fill", a.fill);
+  }
+  if (o.ref != null) {
+    g.append("line").attr("x1", ml).attr("x2", ml + iw).attr("y1", y(o.ref)).attr("y2", y(o.ref)).style("stroke", css("--ink2")).attr("stroke-dasharray", "4 3");
+    if (o.refLabel) g.append("text").attr("x", ml + iw - 4).attr("y", y(o.ref) + 13).attr("text-anchor", "end").attr("font-size", 10.5).text(o.refLabel);
+  }
+  for (const r of o.hlines || []) {
+    g.append("line").attr("x1", ml).attr("x2", ml + iw).attr("y1", y(r.y)).attr("y2", y(r.y)).style("stroke", css("--ink2")).attr("stroke-dasharray", "4 3");
+    g.append("text").attr("x", ml + 4).attr("y", y(r.y) + 13).attr("font-size", 10.5).text(r.label);
+  }
+  const line = d3.line().x((d) => x(d.x)).y((d) => y(d.y)).defined((d) => d.y != null);
+  const S = o.series;
+  for (const s of S) {
+    const sg = g.append("g").attr("data-lib", s.lib);
+    sg.append("path").datum(s.pts).attr("d", line).style("fill", "none").style("stroke", s.color || C(s.lib))
+      .attr("stroke-width", s.width ?? 2).attr("stroke-dasharray", s.dash || null).attr("stroke-linejoin", "round");
+    if (s.se) sg.selectAll("line.e").data(s.pts.filter((d) => d.se != null)).join("line").attr("x1", (d) => x(d.x)).attr("x2", (d) => x(d.x))
+      .attr("y1", (d) => y(d.y - d.se)).attr("y2", (d) => y(d.y + d.se)).style("stroke", s.color || C(s.lib)).attr("stroke-width", 2);
+    if (s.markers) sg.selectAll("circle").data(s.pts.filter((d) => d.y != null && !d.noMark)).join("circle").attr("cx", (d) => x(d.x)).attr("cy", (d) => y(d.y))
+      .attr("r", 4).style("fill", s.hollow ? css("--surface") : (s.color || C(s.lib))).style("stroke", s.hollow ? (s.color || C(s.lib)) : css("--surface")).attr("stroke-width", s.hollow ? 2 : 1.5);
+  }
+  if (o.endLabels && S.length) {
+    const ends = S.filter((s) => s.endLabel !== false).map((s) => { const q = s.pts.filter((d) => d.y != null); return { s, y: y(q[q.length - 1].y), x: x(q[q.length - 1].x) }; }).sort((a, b) => a.y - b.y);
+    for (let k = 0; k < 40; k++) for (let i = 1; i < ends.length; i++) { const d = ends[i].y - ends[i - 1].y; if (d < 13) { ends[i - 1].y -= (13 - d) / 2; ends[i].y += (13 - d) / 2; } }
+    g.selectAll("text.end").data(ends).join("text").attr("class", "ink").attr("data-lib", (d) => d.s.lib).attr("x", ml + iw + 6).attr("y", (d) => d.y).attr("dy", ".32em")
+      .attr("font-size", 11).text((d) => d.s.endText || d.s.label);
+  }
+  // crosshair
+  const rule = g.append("line").attr("y1", 0).attr("y2", ih).style("stroke", css("--muted")).attr("stroke-width", 1).style("opacity", 0);
+  g.append("rect").attr("x", ml).attr("width", iw).attr("height", ih).style("fill", "transparent")
+    .on("mousemove", (ev) => {
+      const [mx] = d3.pointer(ev); const xv = x.invert(mx);
+      const near = S.map((s) => { const q = s.pts.filter((d) => d.y != null && !d.skipTip); if (!q.length) return null; const d = q.reduce((a, b) => Math.abs(b.x - xv) < Math.abs(a.x - xv) ? b : a); return { s, d }; }).filter(Boolean);
+      if (!near.length) return;
+      const xs = near.reduce((a, b) => Math.abs(b.d.x - xv) < Math.abs(a.d.x - xv) ? b : a).d.x;
+      rule.attr("x1", x(xs)).attr("x2", x(xs)).style("opacity", 1);
+      const rows = near.filter((n) => Math.abs(n.d.x - xs) <= (o.snap ?? 0.5) && !n.s.noTip).sort((a, b) => b.d.y - a.d.y);
+      showTip(`<div class="k">${esc(o.tipHead ? o.tipHead(xs) : (o.xName || "step") + " " + xs)}</div>` + rows.map((n) => trow(n.s.lib, n.s.label, (o.tipFmt || f3)(n.d.y) + (n.d.se != null ? ` ± ${f3(n.d.se)}` : ""), n.s.color)).join(""), ev);
+    })
+    .on("mouseleave", () => { rule.style("opacity", 0); hideTip(); });
+  return { g, x, y };
+}
+
+// Horizontal bar rows. rows: [{lib, label, segs:[{v, fill, tip, text, white}], offset, endText, missing}]
+function hbars(svg, p, rows, o = {}) {
+  const ml = o.ml ?? Math.min(190, p.w * 0.36), rowH = o.rowH ?? 34, bh = Math.min(22, rowH * 0.66);
+  const g = svg.append("g").attr("transform", `translate(${p.x},${p.y})`);
+  const iw = p.w - ml - (o.mr ?? 80), ih = rows.length * rowH;
+  const xmax = o.xmax ?? (d3.max(rows, (r) => (r.offset || 0) + d3.sum(r.segs || [], (s) => s.v)) || 1);
+  const x = d3.scaleLinear().domain([0, xmax]).nice().range([ml, ml + iw]);
+  if (o.title) g.append("text").attr("class", "ptitle").attr("x", 0).attr("y", -8).text(o.title);
+  g.append("g").attr("class", "grid").selectAll("line").data(x.ticks(o.ticks ?? 5)).join("line").attr("x1", (d) => x(d)).attr("x2", (d) => x(d)).attr("y1", 0).attr("y2", ih);
+  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`).call(d3.axisBottom(x).ticks(o.ticks ?? 5).tickSize(0).tickPadding(7).tickFormat(o.fmt || null))
+    .call((a) => a.select(".domain").attr("stroke", css("--muted")));
+  if (o.xLabel) g.append("text").attr("x", ml + iw / 2).attr("y", ih + 30).attr("text-anchor", "middle").attr("font-size", 11).text(o.xLabel);
+  rows.forEach((r, i) => {
+    const cy = i * rowH + rowH / 2;
+    const rg = g.append("g").attr("data-lib", r.lib);
+    if (o.labels !== false) rg.append("text").attr("x", ml - 10).attr("y", cy).attr("text-anchor", "end").attr("font-size", 12).attr("class", "ink").text(r.label).call(wrapText, ml - 14);
+    if (r.missing) { rg.append("text").attr("x", ml + 6).attr("y", cy).attr("dy", ".32em").attr("font-size", 11).attr("font-style", "italic").attr("class", "muted").text(r.missing); return; }
+    let left = r.offset || 0;
+    for (const s of r.segs) {
+      const w = Math.max(0, x(left + s.v) - x(left));
+      const rect = rg.append("rect").attr("x", x(left)).attr("y", cy - bh / 2).attr("width", Math.max(0, w - (s.gap === false ? 0 : 1.5))).attr("height", bh)
+        .attr("rx", 2).style("fill", s.fill).style("stroke", s.stroke || "none").attr("stroke-width", s.stroke ? 1.2 : 0);
+      if (s.tip) hoverable(rect, () => r.lib, () => s.tip);
+      if (s.text) {
+        const t = rg.append("text").attr("x", x(left) + w / 2).attr("y", cy).attr("dy", ".32em").attr("text-anchor", "middle").attr("font-size", 10.5)
+          .style("fill", s.white ? "#fff" : css("--ink")).style("pointer-events", "none").text(s.text);
+        if (t.node().getComputedTextLength() > w - 6) t.remove();
+      }
+      if (s.mark != null) rg.append("line").attr("x1", x(s.mark)).attr("x2", x(s.mark)).attr("y1", cy - bh / 2 - 3).attr("y2", cy + bh / 2 + 3).style("stroke", css("--ink")).attr("stroke-width", 2);
+      left += s.v;
+    }
+    if (r.endText) rg.append("text").attr("x", x(left) + 6).attr("y", cy).attr("dy", ".32em").attr("font-size", 11.5).attr("class", "ink")
+      .attr("font-weight", r.bold ? 600 : 400).text(r.endText);
+  });
+  return { g, x, height: ih };
+}
+
+function keyRow(svg, x, y, items, maxW) {
+  const g = svg.append("g").attr("transform", `translate(${x},${y})`);
+  let cx = 0, cy = 0;
+  for (const it of items) {
+    const sw = it.line ? 24 : 15;
+    const t = g.append("text").attr("x", cx + sw).attr("y", cy).attr("dy", ".32em").attr("font-size", 11).text(it.label);
+    const w = sw + t.node().getComputedTextLength() + 16;
+    if (cx > 0 && cx + w > maxW) { cx = 0; cy += 17; t.attr("x", sw).attr("y", cy); }
+    if (it.cross) g.append("text").attr("x", cx + 5).attr("y", cy).attr("dy", ".34em").attr("text-anchor", "middle").attr("font-size", 13).attr("font-weight", 700).style("fill", it.fill).text("✕");
+    else if (it.line) g.append("line").attr("x1", cx).attr("x2", cx + 18).attr("y1", cy).attr("y2", cy).style("stroke", it.fill).attr("stroke-width", 2.4).attr("stroke-dasharray", it.dash || null);
+    else g.append("rect").attr("x", cx).attr("y", cy - 5.5).attr("width", 11).attr("height", 11).attr("rx", 2).style("fill", it.fill).style("stroke", it.stroke || "none");
+    cx += w;
+  }
+  return cy + 17;
+}
+
+// Step-time parts: hue = library, lightness = component (same mapping as charts.py).
+function partFills(svg, lib) {
+  const c = C(lib);
+  return { train: c, wait: mix(c, 0.38), sync: toward(c, 0.45), other: hatch(svg, css("--hatch")) };
+}
+const PART_NAME = { train: "train (fwd + bwd + optimizer)", wait: "waiting for rollouts", sync: "weight sync", other: "other" };
+function partKey(svg, width) {
+  const g = css("--ink2");
+  return keyRow(svg, 0, 8, [{ label: "train", fill: g }, { label: "waiting for rollouts", fill: mix(g, 0.38) }, { label: "weight sync", fill: toward(g, 0.6) },
+    { label: "other", fill: hatch(svg, css("--hatch")), stroke: css("--rule") }], width);
+}
+function stepRows(svg, runs, labelOf) {
+  return runs.map((r) => {
+    if (!r.parts) return { lib: r.lib, label: labelOf(r), missing: r.status_note || "in progress", segs: [] };
+    const F = partFills(svg, r.lib), P = r.parts, tot = d3.sum(["train", "wait", "sync", "other"], (k) => P[k]);
+    const tipFor = (k) => `<b>${esc(labelOf(r))}</b><div class="k">mean s per optimizer step</div>` +
+      ["train", "wait", "sync", "other"].map((q) => trow(r.lib, PART_NAME[q] + (P.logged && P.logged[q] === false ? " (not logged)" : ""), f2(P[q]) + " s", q === k ? null : mix(C(r.lib), 0.25))).join("") +
+      `<div class="row"><span>total</span><span class="v"><b>${f2(tot)} s</b></span></div>`;
+    return { lib: r.lib, label: labelOf(r), endText: fs(tot), bold: true,
+      segs: ["train", "wait", "sync", "other"].map((k) => ({ v: P[k], fill: F[k], tip: tipFor(k), text: `${k === "wait" ? "waiting" : k} ${d3.format(".0f")(P[k])} s`, white: k === "train" })) };
+  });
+}
+const libLabel = (r) => NAME[r.lib] + (r.collapsed ? " (collapsed)" : "");
+const visRuns = (runs) => runs.filter((r) => shown(r.lib));
+
+// ------------------------------------------------------------------ W1
+const W1 = D.w1;
+const excludedW1 = D.excluded.filter((e) => !e.reason.includes("recommended") && e.run_id.includes("-w1-"));
+const exclNote = `miles: not run as shipped (its only correct attention path on B200 is ~7x slower). Not shown: runs with patched libraries or custom losses (${excludedW1.map((e) => `${NAME[e.lib] || e.lib} ${e.run_id.split("-").pop()}`).join(", ")}) and recommended arms.`;
+
+figure("figs-w1", "w1-eval", {
+  title: "On the same config, the libraries that trained cleanly land within eval noise",
+  sub: "Held-out score per saved checkpoint, W1 math on built-in options. Dashed: base model. AIME has 30 problems, so checkpoints of one run move by about ±0.05.",
+  draw(box, width) {
+    const rows = [];
+    const { svg, panels, cols } = grid(box, width, 6, 3, 190, { right: width < 560 ? 0 : 0, gapX: 18 });
+    let i = 0;
+    for (const size of ["S", "M"]) for (const [k, bn] of BENCHES) {
+      const w = W1[size], p = panels[i++];
+      const lastCol = p.last;
+      const series = visRuns(w.runs).filter((r) => r.evals.length).map((r) => ({
+        lib: r.lib, label: libLabel(r), markers: true, width: r.lib === "trl" ? 2.4 : 1.8, hollow: r.collapsed,
+        endText: NAME[r.lib], pts: [{ x: 0, y: w.base[k], noMark: true }, ...r.evals.map((e) => ({ x: e.step, y: e[k] }))] }));
+      series.forEach((s) => s.pts.forEach((d) => rows.push({ size, lib: s.lib, bench: k, step: d.x, score: d.y })));
+      linePanel(svg, { ...p, w: p.w - (lastCol && cols > 1 ? 0 : 0) }, { title: `${MODEL[size]} · ${bn}`, xDomain: [0, 200], xTicks: [0, 50, 100, 150, 200],
+        yDomain: [0, k === "math500" || size === "M" ? 1 : 0.6], series, ref: w.base[k], refLabel: `base ${f3(w.base[k])}`, endLabels: lastCol && cols > 1 && width > 760,
+        mr: lastCol && cols > 1 && width > 760 ? 70 : 8, snap: 25, xLabel: p.row === (cols === 1 ? 5 : 1) ? "optimizer step" : null,
+        tipHead: (xs) => xs === 0 ? `${MODEL[size]} · ${bn} · base model` : `${MODEL[size]} · ${bn} · step ${xs}` });
+    }
+    return { rows, foot: [inProgress(W1.S.runs), inProgress(W1.M.runs), esc(exclNote)] };
+  },
+});
+
+figure("figs-w1", "w1-step200", {
+  title: "At step 200, the three clean runs sit within ±0.05 of each other",
+  sub: "Score at optimizer step 200, W1 math on built-in options. The line runs from the base model (dashed) to the library's score. Bars would exaggerate gaps this small.",
+  draw(box, width) {
+    const rows = [];
+    const panelsN = 6, cols = width < 560 ? 1 : 3;
+    const labelW = 128, padR = 44;
+    const nS = visRuns(W1.S.runs).length, nM = visRuns(W1.M.runs).length;
+    const rowH = 26, pH = (n) => n * rowH + 26;
+    const pw = cols === 1 ? width : (width - labelW - 2 * 22 - padR) / 3;
+    const blocks = [["S", nS], ["M", nM]];
+    const height = blocks.reduce((a, [, n]) => a + (cols === 1 ? 3 * (pH(n) + 30) : pH(n) + 30), 0) + 10;
+    const svg = d3.select(box).append("svg").attr("width", width).attr("height", height);
+    let y0 = 22;
+    for (const [size, n] of blocks) {
+      const runs = visRuns(W1[size].runs), base = W1[size].base;
+      BENCHES.forEach(([k, bn], j) => {
+        const px = cols === 1 ? labelW : labelW + j * (pw + 22), py = cols === 1 ? y0 + j * (pH(n) + 30) : y0;
+        const iw = (cols === 1 ? width - labelW - padR : pw) - 4;
+        const g = svg.append("g").attr("transform", `translate(${px},${py})`);
+        const x = d3.scaleLinear().domain([0, size === "S" && k !== "math500" ? 0.6 : 1]).range([0, iw]);
+        g.append("text").attr("class", "ptitle").attr("x", cols === 1 || j === 0 ? -labelW : 0).attr("y", -8).text(cols === 1 || j === 0 ? `${MODEL[size]} · ${bn}` : bn);
+        g.append("g").attr("class", "grid").selectAll("line").data(x.ticks(5)).join("line").attr("x1", x).attr("x2", x).attr("y1", 0).attr("y2", n * rowH);
+        g.append("g").attr("class", "axis").attr("transform", `translate(0,${n * rowH})`).call(d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(6)).call((a) => a.select(".domain").attr("stroke", css("--muted")));
+        g.append("line").attr("x1", x(base[k])).attr("x2", x(base[k])).attr("y1", -2).attr("y2", n * rowH).style("stroke", css("--ink2")).attr("stroke-dasharray", "4 3");
+        runs.forEach((r, i) => {
+          const cy = i * rowH + rowH / 2, rg = g.append("g").attr("data-lib", r.lib);
+          if (cols === 1 || j === 0) rg.append("text").attr("x", -10).attr("y", cy).attr("dy", ".32em").attr("text-anchor", "end").attr("font-size", 12).attr("class", "ink").text(libLabel(r));
+          const e = r.evals.find((q) => q.step === 200);
+          if (!e) { rg.append("text").attr("x", 4).attr("y", cy).attr("dy", ".32em").attr("font-size", 10.5).attr("font-style", "italic").attr("class", "muted").text(r.status_note ? "in progress" : "pending"); return; }
+          rows.push({ size, lib: r.lib, bench: k, step200: e[k], base: base[k], delta: e[k] - base[k] });
+          rg.append("line").attr("x1", x(base[k])).attr("x2", x(e[k])).attr("y1", cy).attr("y2", cy).style("stroke", mix(C(r.lib), 0.4)).attr("stroke-width", 2);
+          const dot = rg.append("circle").attr("cx", x(e[k])).attr("cy", cy).attr("r", 6).style("fill", r.collapsed ? css("--surface") : C(r.lib)).style("stroke", r.collapsed ? C(r.lib) : css("--surface")).attr("stroke-width", r.collapsed ? 2 : 1.5);
+          rg.append("circle").attr("cx", x(e[k])).attr("cy", cy).attr("r", 12).style("fill", "transparent").call(hoverable, () => r.lib,
+            () => `<b>${esc(libLabel(r))}</b> · ${MODEL[size]} · ${bn}` + trow(r.lib, "step 200", f3(e[k])) + trow(r.lib, "base model", f3(base[k]), css("--ink2")) + trow(r.lib, "change", d3.format("+.3f")(e[k] - base[k]), "transparent"));
+          const right = e[k] >= base[k] || x(e[k]) < 40;
+          rg.append("text").attr("x", x(e[k]) + (right ? 10 : -10)).attr("y", cy).attr("dy", ".32em").attr("text-anchor", right ? "start" : "end").attr("font-size", 10.5).text(f3(e[k]));
+        });
+      });
+      y0 += cols === 1 ? 3 * (pH(n) + 30) : pH(n) + 30;
+    }
+    return { rows, foot: [inProgress(W1.S.runs), inProgress(W1.M.runs)] };
+  },
+});
+
+figure("figs-w1", "w1-wallclock", {
+  title: "prime-rl reaches step 200 in half TRL's time, with half the data per step",
+  sub: "Hours from the first to the last optimizer step (200 steps), W1 math, one 8×B200 node. TRL's step holds ~2.7M trained tokens, prime-rl's ~1.4M.",
+  foot: ["Training time only: job start-up (model load, vLLM start) is not included. Hatched: run still training, bar ends at its latest step."],
+  draw(box, width) {
+    const rows = [];
+    const n = Math.max(visRuns(W1.S.runs).length, visRuns(W1.M.runs).length);
+    const { svg, panels } = grid(box, width, 2, 2, n * 34 + 30, { gapX: 30 });
+    ["S", "M"].forEach((size, j) => {
+      const runs = visRuns(W1[size].runs);
+      const R = runs.map((r) => {
+        if (r.hours == null) return { lib: r.lib, label: libLabel(r), missing: "in progress", segs: [] };
+        const done = r.last_step >= 200;
+        rows.push({ size, lib: r.lib, run_id: r.run_id, hours: r.hours, last_step: r.last_step, job_hours: r.job_hours });
+        const tip = `<b>${esc(libLabel(r))}</b> · ${MODEL[size]}` + trow(r.lib, "first to last step", f2(r.hours) + " h") + trow(r.lib, "steps", `${r.last_step} of 200`) +
+          (r.job_hours ? trow(r.lib, "whole job", f2(r.job_hours) + " h", "transparent") : "") + (r.parts ? trow(r.lib, "mean step (after 5)", f2(r.parts.step_time) + " s", "transparent") : "");
+        return { lib: r.lib, label: libLabel(r), endText: f2(r.hours) + " h" + (done ? "" : ` · step ${r.last_step}/200`),
+          segs: [{ v: r.hours, fill: done ? C(r.lib) : hatch(svg, C(r.lib)), stroke: done ? null : C(r.lib), tip }] };
+      });
+      hbars(svg, panels[j], R, { title: MODEL[size], xLabel: "hours to step 200", mr: 92, ml: Math.min(130, panels[j].w * 0.38),
+        xmax: d3.max(runs, (r) => r.hours || 0) * 1.05 });
+    });
+    return { rows };
+  },
+});
+
+figure("figs-w1", "w1-throughput", {
+  title: "Per useful trained token, TRL and prime-rl are level",
+  sub: "Qwen3.5-2B, W1 math, steady state (steps after 5), whole 8-GPU job. Useful = tokens of groups with any reward spread (nonzero advantage); the light part is zero-advantage tokens the library still runs a backward on.",
+  foot: ["est.: the library doesn't log its zero-advantage share; it's estimated from the step reward (fit over the steps of the libraries that log it). Definitions: results/tables/throughput_fair.md."],
+  draw(box, width) {
+    const t = D.throughput_S.filter((r) => shown(r.lib));
+    const { svg, panels } = grid(box, width, 2, 2, t.length * 34 + 30, { gapX: 24 });
+    const lbl = (r) => NAME[r.lib] + (r.collapsed ? " (collapsed)" : "");
+    const tipFor = (r) => `<b>${esc(lbl(r))}</b>` + trow(r.lib, "useful trained" + (r.useful_exact ? "" : " (est.)"), fk(r.useful) + " tok/s") +
+      trow(r.lib, "all trained", fk(r.all) + " tok/s", mix(C(r.lib), 0.35)) + trow(r.lib, "generated", fk(r.generated) + " tok/s", "transparent") +
+      trow(r.lib, "zero-advantage groups", d3.format(".0%")(r.zero_adv_frac), "transparent") + trow(r.lib, "step time", f2(r.step_time) + " s", "transparent") +
+      (r.padded_forward ? trow(r.lib, "forwarded incl. padding", fk(r.padded_forward) + " tok/s", "transparent") : "");
+    const A = t.map((r) => r.status !== "done" ? { lib: r.lib, label: lbl(r), missing: "in progress", segs: [] } : { lib: r.lib, label: lbl(r),
+      endText: fk(r.useful) + (r.useful_exact ? "" : " est."), segs: [{ v: r.useful, fill: C(r.lib), tip: tipFor(r) }, { v: r.all - r.useful, fill: mix(C(r.lib), 0.3), tip: tipFor(r) }] });
+    const B = t.map((r) => r.status !== "done" ? { lib: r.lib, label: lbl(r), missing: "", segs: [] } : { lib: r.lib, label: lbl(r), endText: fk(r.generated), segs: [{ v: r.generated, fill: C(r.lib), tip: tipFor(r) }] });
+    const one = panels[0].w === panels[1].w && panels[1].x === 0;
+    hbars(svg, panels[0], A, { title: "Trained tokens / s (light: zero advantage)", fmt: fk, ml: Math.min(130, panels[0].w * 0.38), mr: 70, xmax: d3.max(t, (r) => r.all || 0) });
+    hbars(svg, panels[1], B, { title: "Generated tokens / s", fmt: fk, ml: one ? Math.min(130, panels[1].w * 0.38) : 6, labels: one, mr: 52, xmax: d3.max(t, (r) => r.generated || 0) });
+    return { rows: t.map(({ status, ...r }) => r) };
+  },
+});
+
+figure("figs-w1", "w1-steps", {
+  title: "TRL's step is twice prime-rl's, and 15 s of it is rank-0 packing",
+  sub: "Mean seconds per optimizer step, Qwen3.5-2B, W1 math, steps after 5. Other is the rest of the step: for TRL, mostly rank 0 building the step's packed micro-batches on CPU while the other GPUs wait.",
+  draw(box, width) {
+    const runs = visRuns(W1.S.runs);
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const kh = partKey(svg, width);
+    const p = { x: 0, y: kh + 12, w: width, h: 0 };
+    const { height } = hbars(svg, p, stepRows(svg, runs, libLabel), { xLabel: "seconds per optimizer step", ml: Math.min(140, width * 0.3), mr: 46 });
+    svg.attr("height", p.y + height + 40);
+    return { rows: runs.map((r) => ({ lib: r.lib, run_id: r.run_id, ...(r.parts ? { step_time: r.parts.step_time, train: r.parts.train, wait: r.parts.wait, sync: r.parts.sync, other: r.parts.other } : {}) })),
+      foot: ["OpenRLHF logs no wait or sync time, so everything but train is in other. Weight-sync spans differ: TRL's includes vLLM's pause, prime-rl's is the trainer-side broadcast only.", inProgress(runs, false)] };
+  },
+});
+
+const ema = (ys, a = 0.1) => { let m = null; return ys.map((v) => (m = m == null ? v : a * v + (1 - a) * m)); };
+figure("figs-w1", "w1-reward", {
+  title: "Train reward climbs in every run except SkyRL's",
+  sub: "Mean train reward per optimizer step, W1 math. Thin: per step; thick: moving average (EMA, α = 0.1). Libraries put different numbers of samples in a step, so compare shapes, not levels.",
+  draw(box, width) {
+    const rows = [];
+    const { svg, panels, cols } = grid(box, width, 2, 2, 230, { gapX: 24 });
+    ["S", "M"].forEach((size, j) => {
+      const series = [];
+      for (const r of visRuns(W1[size].runs)) {
+        const st = r.steps.filter((s) => s.reward != null);
+        if (!st.length) continue;
+        const e = ema(st.map((s) => s.reward));
+        series.push({ lib: r.lib, label: NAME[r.lib] + " (per step)", pts: st.map((s) => ({ x: s.step, y: s.reward })), width: 0.8, color: mix(C(r.lib), 0.4), endLabel: false, noTip: true });
+        series.push({ lib: r.lib, label: NAME[r.lib], endText: NAME[r.lib] + (r.last_step >= 200 ? "" : ` (step ${r.last_step})`), pts: st.map((s, i) => ({ x: s.step, y: e[i] })), width: 2.2 });
+        st.forEach((s, i) => rows.push({ size, lib: r.lib, step: s.step, reward: s.reward, ema: e[i] }));
+      }
+      const wide = width > 640;
+      linePanel(svg, panels[j], { title: MODEL[size], xDomain: [0, 200], xTicks: [0, 50, 100, 150, 200], yDomain: [0, 1], series: series.filter((s) => s.width < 1).concat(series.filter((s) => s.width >= 1)),
+        endLabels: wide, mr: wide ? 84 : 8, xLabel: "optimizer step", snap: 1, tipHead: (xs) => `${MODEL[size]} · step ${xs} · reward, EMA` });
+    });
+    return { rows, foot: [inProgress(W1.M.runs, false)] };
+  },
+});
+
+// ------------------------------------------------------------------ W2
+const W2 = D.w2;
+const FAMS = (list) => { const f = [...new Set(list.map((x) => x.family))]; return f.length ? f.sort((a, b) => (a === "9B" ? -1 : 1)) : ["9B"]; };
+figure("figs-w2", "w2-reward", {
+  title: "Train reward per step on the agentic tasks, one run per library",
+  sub: "Mean train reward per optimizer step on the 28 training tasks. Thin: per step; thick: moving average (EMA, α = 0.2). Step sizes differ and TRL's agents lose turns to the 600 s limit, so the held-out eval below is the comparison that counts.",
+  draw(box, width) {
+    const runs = W2.reward.filter((r) => shown(r.lib));
+    const fams = FAMS(runs);
+    const rows = [];
+    const svg0 = d3.select(box).append("svg").attr("width", width);
+    const withData = runs.filter((r) => r.steps.length);
+    const kh = keyRow(svg0, 0, 8, withData.map((r) => ({ label: r.label, fill: C(r.lib), line: true })), width);
+    svg0.attr("height", kh + 4);
+    const { svg, panels } = grid(box, width, fams.length, 2, 230, { gapX: 24 });
+    fams.forEach((fam, j) => {
+      const series = [];
+      for (const r of withData.filter((q) => q.family === fam)) {
+        const e = ema(r.steps.map((s) => s.reward), 0.2);
+        series.push({ lib: r.lib, label: r.label + " (per step)", pts: r.steps.map((s) => ({ x: s.step, y: s.reward })), width: 0.8, color: mix(C(r.lib), 0.4), noTip: true, endLabel: false });
+        series.push({ lib: r.lib, label: r.label, pts: r.steps.map((s, i) => ({ x: s.step, y: e[i] })), width: 2.2 });
+        r.steps.forEach((s, i) => rows.push({ run: r.label, run_id: r.run_id, step: s.step, reward: s.reward, ema: e[i] }));
+      }
+      linePanel(svg, panels[j], { title: `Qwen3.5-${fam}`, xDomain: [0, d3.max(series, (s) => d3.max(s.pts, (d) => d.x)) > 60 ? 200 : 60], yDomain: [0, 1], series,
+        xLabel: "optimizer step", snap: 1, tipHead: (xs) => `Qwen3.5-${fam} · step ${xs} · reward (EMA)` });
+      if (!series.length) svg.append("text").attr("x", panels[j].x + panels[j].w / 2).attr("y", panels[j].y + 100).attr("text-anchor", "middle").attr("class", "muted").attr("font-style", "italic").text("in progress");
+    });
+    return { rows, foot: ["TRL's run is the one with the Harbor server sharded and the call cap passed to the agent (launcher wrapper, no OpenEnv file edited).",
+      ...runs.filter((r) => r.status !== "done").map((r) => `<span class="pending">in progress</span> ${esc(r.label)}: ${esc(r.status_note)}.`)] };
+  },
+});
+figure("figs-w2", "w2-steps", {
+  title: "On agentic tasks, TRL's steps are 3x prime-rl's, most of it waiting for rollouts",
+  sub: "Mean seconds per optimizer step, W2 terminal tasks, steps after 1. Qwen3.5-9B unless the row says 35B-A3B.",
+  draw(box, width) {
+    const runs = W2.step_breakdown.concat((W2.failed || []).map((f) => ({ lib: f.lib, label: NAME[f.lib] + (f.family === "9B" ? "" : `, ${f.family}`), parts: null, status: "failed", status_note: `✕ ${f.note}`, family: f.family }))).filter((r) => shown(r.lib))
+      .map((r, i) => [r, i]).sort((a, b) => (a[0].family !== "9B") - (b[0].family !== "9B") || a[1] - b[1]).map((x) => x[0]);
+    const trlNew = W2.step_breakdown.find((r) => r.lib === "trl" && r.role === "main" && r.parts), trlOld = W2.step_breakdown.find((r) => r.role === "before_fix" && r.parts);
+    const title = trlNew && trlOld ? `Sharding the Harbor server cut TRL's agentic step from ${d3.format(".0f")(trlOld.parts.step_time)} s to ${d3.format(".0f")(trlNew.parts.step_time)} s`
+      : "Before the Harbor fix, TRL's agentic steps were 3x prime-rl's, most of it waiting for rollouts";
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const kh = partKey(svg, width);
+    const p = { x: 0, y: kh + 12, w: width, h: 0 };
+    const { height } = hbars(svg, p, stepRows(svg, runs, (r) => r.label), { xLabel: "seconds per optimizer step", ml: Math.min(200, width * 0.36), mr: 50, rowH: 38 });
+    svg.attr("height", p.y + height + 40);
+    return { title, rows: runs.map((r) => ({ run_id: r.run_id, label: r.label, status: r.status, ...(r.parts ? { step_time: r.parts.step_time, train: r.parts.train, wait: r.parts.wait, sync: r.parts.sync, other: r.parts.other, steps: r.parts.n_steps } : {}) })),
+      foot: ["TRL's run shards the Harbor server and passes the 30-call cap to terminus-2 through a launcher wrapper (no OpenEnv file edited). That's closer to a patch than a built-in option. TRL before the Harbor fix: one Harbor server event loop for all 64 agents.",
+        ...(W2.failed || []).filter((f) => f.detail).map((f) => `<b>${esc(NAME[f.lib])}</b> (${esc(f.family)}): ${esc(f.detail)}`),
+        ...(W2.dropped || []).filter((d) => d.step_time).map((d) => `Not shown: TRL's first W2 run on HF Sandboxes (${d.run_id.split("-").pop()}, ${d3.format(".0f")(d.step_time)} s per step, same single Harbor server).`),
+        ...runs.filter((r) => r.status !== "done" && r.status !== "failed").map((r) => `<span class="pending">in progress</span> ${esc(r.label)}: ${esc(r.status_note)}.`)] };
+  },
+});
+
+figure("figs-w2", "w2-waterfall", {
+  title: "Before the Harbor fix, four causes accounted for TRL's extra 400 s per step; the trainer wasn't one",
+  sub: "Counterfactual chain from prime-rl's step to TRL's before the Harbor fix (local containers, run 366992), using step ≈ episodes per step × episode time / episodes in flight. From envs/trl/W2_STEP_TIME.md.",
+  foot: ["Causes 1, 2 and 4 are fixed in the launcher (shard the Harbor server, pass the call cap): that's TRL's run in the chart above. Cause 3 is the config gap: TRL's step is sized in tokens and refills groups, which is not a speed difference."],
+  draw(box, width) {
+    const wf = W2.waterfall;
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const tPr = C("prime-rl"), tT = C("trl");
+    let left = wf.start;
+    const R = [{ lib: "prime-rl", label: "prime-rl step", endText: wf.start + " s", segs: [{ v: wf.start, fill: tPr, tip: `<b>prime-rl step</b> (modelled ${wf.start} s; measured mean ~185 s)` }] }];
+    wf.causes.forEach((c, i) => {
+      R.push({ lib: "trl", label: `${i + 1}. ${c.label}`, offset: left, endText: `+${c.s} s`, segs: [{ v: c.s, fill: mix(tT, 0.45), stroke: tT, tip: `<b>${i + 1}. ${esc(c.doc_label)}</b><div class="k">+${c.s} s per step (W2_STEP_TIME.md)</div>` }] });
+      left += c.s;
+    });
+    R.push({ lib: "trl", label: "TRL before the Harbor fix, sum of the chain", bold: true, endText: `${left} s (measured ${wf.measured} s)`, segs: [{ v: left, fill: tT, mark: wf.measured, tip: `<b>TRL step</b>` + trow("trl", "sum of the chain", left + " s") + trow("trl", "predicted by the model", wf.predicted + " s", "transparent") + trow("trl", "measured mean", wf.measured + " s", css("--ink")) }] });
+    const p = { x: 0, y: 4, w: width, h: 0 };
+    const { height } = hbars(svg, p, R, { xLabel: "seconds per optimizer step", ml: Math.min(250, width * 0.42), mr: width < 560 ? 60 : 150, rowH: 36, xmax: left });
+    svg.attr("height", p.y + height + 40);
+    return { rows: wf.causes.map((c, i) => ({ cause: `${i + 1}. ${c.doc_label}`, seconds_per_step: c.s })).concat([{ cause: "prime-rl start", seconds_per_step: wf.start }, { cause: "TRL measured", seconds_per_step: wf.measured }]) };
+  },
+});
+
+const EP = [["vllm", "in vLLM"], ["agent", "agent loop, not vLLM"], ["box", "box start + setup"], ["verifier", "verifier"], ["outside", "outside Harbor's phases"]];
+figure("figs-w2", "w2-episode", {
+  title: "Before the Harbor fix, TRL's episodes took 3x longer, and vLLM was only 71 s of the 548",
+  sub: "Mean wall time of one training episode (steady, scored), split by phase. Both libraries run ~23-24 model calls and ~15k sampled tokens per episode with ~62 episodes in flight.",
+  foot: ["TRL's vLLM time is from vLLM's own counters (3.1 s per call); prime-rl's is its interception span (4.5 s per call). 47% of TRL's episodes end at the 600 s agent limit, none of prime-rl's. Most of TRL's agent-loop time is waiting on the Harbor server's single event loop."],
+  draw(box, width) {
+    const eps = W2.episode.filter((e) => shown(e.lib));
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const g = css("--ink2");
+    const kh = keyRow(svg, 0, 8, [{ label: "in vLLM", fill: g }, { label: "agent loop, not vLLM", fill: mix(g, 0.38) }, { label: "box start + setup", fill: css("--neutral-1") },
+      { label: "verifier", fill: css("--neutral-2") }, { label: "outside Harbor's phases", fill: hatch(svg, css("--hatch")), stroke: css("--rule") }], width);
+    const R = eps.map((e) => {
+      const c = C(e.lib), fills = { vllm: c, agent: mix(c, 0.38), box: css("--neutral-1"), verifier: css("--neutral-2"), outside: hatch(svg, css("--hatch")) };
+      const tip = `<b>${esc(e.label)}</b><div class="k">mean seconds per episode</div>` + EP.map(([k, n]) => trow(e.lib, n, f2(e.parts[k]) + " s", typeof fills[k] === "string" && !fills[k].startsWith("url") ? fills[k] : css("--hatch"))).join("") +
+        `<div class="row"><span>episode wall</span><span class="v"><b>${f2(e.wall)} s</b></span></div>` + trow(e.lib, "model calls", f2(e.calls), "transparent") + trow(e.lib, "ended by the 600 s limit", d3.format(".0%")(e.timeout_frac), "transparent");
+      return { lib: e.lib, label: e.label, endText: fs(e.wall), bold: true, segs: EP.map(([k, n]) => ({ v: e.parts[k], fill: fills[k], tip, text: `${n} ${d3.format(".0f")(e.parts[k])} s`, white: k === "vllm" })) };
+    });
+    const p = { x: 0, y: kh + 12, w: width, h: 0 };
+    const { height } = hbars(svg, p, R, { xLabel: "seconds per episode", ml: Math.min(190, width * 0.34), mr: 50, rowH: 42 });
+    svg.attr("height", p.y + height + 40);
+    return { rows: eps.map((e) => ({ lib: e.lib, run_id: e.run_id, wall: e.wall, ...e.parts })) };
+  },
+});
+
+figure("figs-w2", "w2-heldout", {
+  title: "Held-out pass rate moves by about one standard error; nothing separates the runs yet",
+  sub: "14 held-out terminal tasks × 4 episodes (56 per point), one eval script (TRL's probe on HF Sandboxes) for every checkpoint. Bars: ±1 binomial standard error (~0.065). Dashed line and grey band: base model ±1 SE.",
+  draw(box, width) {
+    const H = W2.heldout;
+    const fams = FAMS(H.base.concat(H.series));
+    const rows = [];
+    const allSer = H.series.filter((s) => shown(s.lib));
+    const svg0 = d3.select(box).append("svg").attr("width", width);
+    const failed = (W2.failed || []).filter((f) => shown(f.lib));
+    const kh = keyRow(svg0, 0, 8, allSer.map((s) => ({ label: s.label + (s.points.some((q) => q.status === "done") ? "" : " (evals in progress)"), fill: C(s.lib), line: true, dash: s.reference ? "6 4" : null }))
+      .concat(failed.map((f) => ({ label: `${NAME[f.lib]}${f.family === "9B" ? "" : ", " + f.family}: ${f.note}, no checkpoints`, fill: C(f.lib), cross: true }))), width);
+    svg0.attr("height", kh + 4);
+    const { svg, panels } = grid(box, width, fams.length, 2, 280, { gapX: 24 });
+    fams.forEach((fam, j) => {
+      const base = H.base.find((b) => b.family === fam && b.mean != null);
+      const ser = allSer.filter((s) => s.family === fam);
+      if (base) rows.push({ model: fam, run: "base", step: 0, mean: base.mean, se: base.se, se_task: base.se_task, scored: base.n, unscored: base.unscored });
+      const series = (ser.map((s, k) => {
+        const off = (k - (ser.length - 1) / 2) * 1.3;
+        const pts = s.points.filter((q) => q.status === "done").map((q) => ({ x: q.step + off, y: q.mean, se: q.se, q }));
+        pts.forEach((d) => rows.push({ model: fam, run: s.label, run_id: s.run_id, step: d.q.step, mean: d.q.mean, se: d.q.se, se_task: d.q.se_task, scored: d.q.n, unscored: d.q.unscored }));
+        return { lib: s.lib, label: s.label, markers: true, se: true, width: 1.8, off, pending: s.reference ? [] : s.pending, dash: s.reference ? "6 4" : null, hollow: !!s.reference, pts: (base ? [{ x: 0, y: base.mean, noMark: true, skipTip: true }] : []).concat(pts) };
+      }));
+      const fl = failed.filter((f) => f.family === fam);
+      const { g, x, y } = linePanel(svg, panels[j], { title: `Qwen3.5-${fam}`, xDomain: [-3, 64], xTicks: [0, 20, 40, 60], xFmt: (d) => d === 0 ? "base" : d,
+        yDomain: [0, 0.8], series, band: base ? [base.mean - base.se, base.mean + base.se] : null, ref: base ? base.mean : null,
+        refLabel: base ? `base model ${f3(base.mean)} ± ${f3(base.se)}` : null, xLabel: "training step of the checkpoint", snap: 3, xName: "checkpoint",
+        tipHead: (xs) => `Qwen3.5-${fam} · checkpoint step ${Math.round(xs / 20) * 20} · pass rate ± 1 SE`, yFmt: d3.format(".1f") });
+      if (!base && !series.some((q) => q.pts.some((d) => d.y != null && !d.noMark))) g.append("text").attr("x", x(30)).attr("y", y(0.4)).attr("text-anchor", "middle").attr("class", "muted").attr("font-style", "italic").text("in progress");
+      fl.forEach((f, i) => {
+        const fy = y(0.78) + i * 15, fx = x(62);
+        const fg = g.append("g").attr("data-lib", f.lib);
+        fg.append("text").attr("x", fx).attr("y", fy).attr("dy", ".32em").attr("text-anchor", "end").attr("font-size", 10.5).attr("class", "ink")
+          .text(`✕ ${NAME[f.lib]}: ${f.note}`).style("fill", css("--ink")).call(hoverable, () => f.lib, () => `<b>${esc(NAME[f.lib])}</b> · no checkpoints<div>${esc(f.detail)}</div>`);
+      });
+      series.forEach((s) => s.pending.forEach((st) => {
+        g.append("circle").attr("data-lib", s.lib).attr("cx", x(st + s.off)).attr("cy", y(0.02)).attr("r", 4).style("fill", "none").style("stroke", C(s.lib)).attr("stroke-dasharray", "2 2")
+          .call(hoverable, () => s.lib, () => `<b>${esc(s.label)}</b><div class="k">step ${st}: eval in progress</div>`);
+      }));
+    });
+    const pend = allSer.filter((s) => s.pending.length).map((s) => `${s.label}: step ${s.pending.join(", ")}`)
+      .concat(H.base.filter((b) => b.status !== "done").map((b) => `base ${b.family}`));
+    if (!fams.includes("35B-A3B")) pend.push("Qwen3.5-35B-A3B base model and LoRA runs");
+    return { rows, foot: ["TRL: the sharded-Harbor run at max_staleness 8 (prime-rl's setting)." + (H.series.some((x) => x.reference) ? " Dashed \"TRL, staleness 4\": the earlier staleness-4 run, shown only until the staleness-8 evals land." : ""), ...(H.notes || []).map(esc),
+      ...((H.other_splits || []).length ? [esc("Not in this chart: evals on other task splits (" + [...new Set(H.other_splits.map((p) => p.split))].join(", ") + "), in progress"
+        + H.other_splits.filter((p) => !p.run_id && p.mean != null).map((p) => `; ${p.split} base ${p.family}: ${f3(p.mean)}`).join("") + ".")] : []), "Episodes of one task are correlated, so the real uncertainty is larger: ±1 SE over per-task means is ~0.08-0.10 (in the data table).",
+      pend.length ? `<span class="pending">in progress</span> ${esc(pend.join("; "))} (hollow markers on the axis are pending checkpoints).` : ""] };
+  },
+});
+
+figure("figs-w2", "w2-prefix", {
+  title: "prime-rl shares prefixes 16x, TRL's tree packing 7.6x",
+  sub: "Tokens per optimizer step, W2, steps after 1. Light: every model call as its own sample, which is what a trainer would forward without prefix sharing. Solid: what the trainer actually forwarded.",
+  foot: ["terminus-2 re-renders the chat every turn, so each call forks TRL's prefix tree. prime-rl appends sampled token ids and keeps one branch per episode."],
+  draw(box, width) {
+    const P = W2.prefix.filter((p) => shown(p.lib));
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const R = P.map((p) => {
+      if (!p.trained) return { lib: p.lib, label: p.label, missing: p.status_note || "in progress", segs: [] };
+      const tip = `<b>${esc(p.label)}</b>` + trow(p.lib, "forwarded per step", fM(p.forwarded)) + trow(p.lib, "every call as its own sample", fM(p.trained), mix(C(p.lib), 0.3)) + trow(p.lib, "shared", d3.format(".1f")(p.ratio) + "x", "transparent");
+      return { lib: p.lib, label: p.label, endText: `${d3.format(".1f")(p.trained / 1e6)}M · ${d3.format(".1f")(p.ratio)}x shared`,
+        segs: [{ v: p.forwarded, fill: C(p.lib), tip, text: fM(p.forwarded), white: true }, { v: p.trained - p.forwarded, fill: mix(C(p.lib), 0.28), tip }] };
+    });
+    const p = { x: 0, y: 4, w: width, h: 0 };
+    const { height } = hbars(svg, p, R, { xLabel: "tokens per optimizer step", fmt: (v) => v / 1e6 + "M", ml: Math.min(200, width * 0.36), mr: width < 560 ? 70 : 150, rowH: 38 });
+    svg.attr("height", p.y + height + 40);
+    return { rows: P.map((q) => ({ run_id: q.run_id, label: q.label, trained: q.trained, forwarded: q.forwarded, ratio: q.ratio })),
+      foot: P.filter((q) => q.status !== "done").map((q) => `<span class="pending">in progress</span> ${esc(q.label)}: ${esc(q.status_note)}.`) };
+  },
+});
+
+// ------------------------------------------------------------------ text-to-SQL 35B
+const T2 = D.t2sql;
+const t2Note = () => {
+  if (!T2) return [];
+  const gp = Object.fromEntries(T2.runs.map((r) => [r.lib, r.gpus]));
+  const live = T2.runs.filter((r) => r.last_step < T2.planned_steps).map((r) => `${NAME[r.lib]}: training, step ${r.last_step} of ${T2.planned_steps}`);
+  return [`GPUs per run: TRL ${gp.trl}, prime-rl ${gp["prime-rl"]}, SkyRL ${gp.skyrl} (SkyRL's recipe assumes 8; it ran on the 4 that were free). Hours count from job start, so they include startup (model load, vLLM, first rollouts).`,
+    live.length ? `<span class="pending">in progress</span> ${esc(live.join("; "))}. Later checkpoints are added as their evals land.` : ""];
+};
+if (T2) figure("figs-t2sql", "t2sql-heldout", {
+  title: "Held-out SQL accuracy: all three libraries land within about one SE, TRL in far fewer hours",
+  sub: "Greedy pass rate of each saved checkpoint (number above the point: its step), one eval script for every model. Top: wall-clock hours since the job started; bottom: GPU-hours. Bars: ±1 binomial SE (~0.017). Dashed line and grey band: base model ±1 SE.",
+  draw(box, width) {
+    const rows = [];
+    const runs = T2.runs.filter((r) => shown(r.lib) && r.evals.length);
+    const svg0 = d3.select(box).append("svg").attr("width", width);
+    const kh = keyRow(svg0, 0, 8, runs.map((r) => ({ label: `${NAME[r.lib]} (${r.gpus} GPUs)`, fill: C(r.lib), line: true })), width);
+    svg0.attr("height", kh + 4);
+    const SPL = [["validation", "validation (398 tasks)"], ["arcwise", "arcwise (498 tasks)"]], XS = [["hours", "hours since job start"], ["gpu_hours", "GPU-hours since job start"]];
+    const { svg, panels } = grid(box, width, 4, 2, 220, { gapX: 24 });
+    let i = 0;
+    for (const [xk, xname] of XS) for (const [k, kname] of SPL) {
+      const p = panels[i++], b = T2.base;
+      const xmax = (d3.max(T2.runs.flatMap((r) => r.evals.map((e) => e[xk]))) || 1) * 1.06;
+      const series = runs.map((r) => ({ lib: r.lib, label: `${NAME[r.lib]} step`, markers: true, se: true, width: 1.8,
+        pts: [{ x: 0, y: b ? b[k] : null, noMark: true, skipTip: true }, ...r.evals.filter((e) => e[xk] != null).map((e) => ({ x: e[xk], y: e[k], se: e[k + "_se"], e }))] }));
+      const { g, x, y } = linePanel(svg, p, { title: `${kname} · vs ${xk === "hours" ? "hours" : "GPU-hours"}`, xDomain: [0, xmax], yDomain: [0.7, 0.92], series,
+        band: b ? [b[k] - b[k + "_se"], b[k] + b[k + "_se"]] : null, ref: b ? b[k] : null, refLabel: b ? `base ${f3(b[k])}` : null,
+        xLabel: xname, snap: xmax / 25, yFmt: d3.format(".2f"), tipHead: (xs) => `${kname} · ${d3.format(".1f")(xs)} ${xk === "hours" ? "h" : "GPU-h"} · pass rate ± 1 SE` });
+      for (const s of series) g.append("g").attr("data-lib", s.lib).selectAll("text").data(s.pts.filter((d) => d.e)).join("text").attr("x", (d) => x(d.x)).attr("y", (d) => y(d.y) - 8)
+        .attr("text-anchor", "middle").attr("font-size", 9.5).attr("class", "muted").text((d) => d.e.step);
+    }
+    for (const r of runs) for (const e of r.evals) rows.push({ lib: NAME[r.lib], step: e.step, hours: e.hours, gpu_hours: e.gpu_hours, episodes_trained: e.episodes_trained,
+      validation: e.validation, validation_se: e.validation_se, arcwise: e.arcwise, arcwise_se: e.arcwise_se, hard_in_train: e.hard, hard_se: e.hard_se });
+    if (T2.base) rows.unshift({ lib: "base", step: 0, hours: 0, gpu_hours: 0, episodes_trained: 0, validation: T2.base.validation, validation_se: T2.base.validation_se,
+      arcwise: T2.base.arcwise, arcwise_se: T2.base.arcwise_se, hard_in_train: T2.base.hard, hard_se: T2.base.hard_se });
+    return { rows, foot: [...t2Note(), "Each library runs its own recipe (loss, lr, samples per question, staleness): results/tables/t2sql_35b.md. The hard split (in the data table) overlaps the train split."] };
+  },
+});
+if (T2) figure("figs-t2sql", "t2sql-train", {
+  title: "TRL's step time stays flat; prime-rl's grows 6x as its episodes lengthen and saturate",
+  sub: "Per optimizer step. Thin: per step; thick: moving average (EMA, α = 0.2). Step 1 (startup) is left out of the step time. Steps hold different numbers of episodes and SkyRL samples 5 per question at T = 0.6 (the others 16 at T = 1.0), so compare reward shapes, not levels.",
+  draw(box, width) {
+    const rows = [];
+    const runs = T2.runs.filter((r) => shown(r.lib) && r.steps.length);
+    const svg0 = d3.select(box).append("svg").attr("width", width);
+    const kh = keyRow(svg0, 0, 8, runs.map((r) => ({ label: `${NAME[r.lib]} (${r.gpus} GPUs)`, fill: C(r.lib), line: true })), width);
+    svg0.attr("height", kh + 4);
+    const { svg, panels } = grid(box, width, 2, 2, 230, { gapX: 24 });
+    const rew = [], tim = [];
+    for (const r of runs) {
+      const e = ema(r.steps.map((s) => s.reward), 0.2);
+      rew.push({ lib: r.lib, label: NAME[r.lib] + " (per step)", pts: r.steps.map((s) => ({ x: s.step, y: s.reward })), width: 0.8, color: mix(C(r.lib), 0.4), noTip: true });
+      rew.push({ lib: r.lib, label: NAME[r.lib], pts: r.steps.map((s, i) => ({ x: s.step, y: e[i] })), width: 2.2 });
+      const st = r.steps.filter((s) => s.step > 1 && s.step_s != null), et = ema(st.map((s) => s.step_s), 0.2);
+      tim.push({ lib: r.lib, label: NAME[r.lib] + " (per step)", pts: st.map((s) => ({ x: s.step, y: s.step_s })), width: 0.8, color: mix(C(r.lib), 0.4), noTip: true });
+      tim.push({ lib: r.lib, label: NAME[r.lib], pts: st.map((s, i) => ({ x: s.step, y: et[i] })), width: 2.2 });
+      r.steps.forEach((s) => rows.push({ lib: NAME[r.lib], step: s.step, hours: s.h, reward: s.reward, step_s: s.step_s, rollout_wait_or_generate_s: s.wait_s }));
+    }
+    linePanel(svg, panels[0], { title: "Train reward (each library's own batch)", xDomain: [0, T2.planned_steps], yDomain: [0.5, 1], series: rew, xLabel: "optimizer step", snap: 1,
+      tipHead: (xs) => `step ${xs} · train reward (EMA)` });
+    linePanel(svg, panels[1], { title: "Seconds per optimizer step", xDomain: [0, T2.planned_steps], yDomain: [0, (d3.max(tim, (s) => d3.max(s.pts, (d) => d.y)) || 1) * 1.05], series: tim,
+      xLabel: "optimizer step", snap: 1, tipFmt: d3.format(".0f"), tipHead: (xs) => `step ${xs} · seconds per step (EMA)` });
+    return { rows, foot: [t2Note()[0], "prime-rl refills zero-advantage groups, so as reward saturates each step needs more rollouts (~3,500 per 912-sample batch by step 30). SkyRL is synchronous on 4 GPUs: its step is generation plus training.", t2Note()[1]] };
+  },
+});
+
+// ------------------------------------------------------------------ MoE
+figure("figs-moe", "moe", {
+  title: "Qwen3.5-35B-A3B trains on one node: flat weight sync and memory over 200 steps",
+  sub: D.moe ? `TRL, LoRA r=32, EP=4 × FSDP=4 on 4 trainer GPUs, vLLM on the other 4, W1 math with 16k completions, staleness 4. ${d3.format(".1f")(D.moe.hours)} h for 200 steps (run ${D.moe.run_id.split("-").pop()}).` : "",
+  draw(box, width) {
+    const M = D.moe; if (!M) return {};
+    const st = M.steps.filter((s) => s.step_time != null);
+    const { svg, panels } = grid(box, width, 4, 2, 170, { gapX: 26 });
+    const c = C("trl"), E = (k) => ema(st.map((s) => s[k]));
+    const eS = E("step_time"), eZ = E("zero_std");
+    linePanel(svg, panels[0], { title: "Step time (s)", xDomain: [0, 200], yDomain: [0, d3.max(st, (s) => s.step_time) * 1.08], xTicks: [0, 50, 100, 150, 200],
+      area: [{ pts: st.map((s) => ({ x: s.step, y: s.fwd_bwd + (s.optimizer || 0) })), fill: mix(c, 0.3) }],
+      series: [{ lib: "trl", label: "step", pts: st.map((s) => ({ x: s.step, y: s.step_time })), width: 0.8, color: mix(c, 0.55) },
+        { lib: "trl", label: "step (EMA)", pts: st.map((s, i) => ({ x: s.step, y: eS[i] })), width: 2.2 },
+        { lib: "trl", label: "train (fwd+bwd+opt)", pts: st.map((s) => ({ x: s.step, y: s.fwd_bwd + (s.optimizer || 0) })), width: 0, color: mix(c, 0.3) },
+        { lib: "trl", label: "waiting for rollouts", pts: st.map((s) => ({ x: s.step, y: s.wait })), width: 0, color: "transparent" }],
+      snap: 1, tipFmt: (v) => d3.format(".1f")(v) + " s" });
+    linePanel(svg, panels[1], { title: "Weight sync (s)", xDomain: [0, 200], yDomain: [0, d3.max(st, (s) => s.sync) * 1.5], xTicks: [0, 50, 100, 150, 200],
+      series: [{ lib: "trl", label: "weight sync", pts: st.map((s) => ({ x: s.step, y: s.sync })), width: 1.8 }], snap: 1, tipFmt: (v) => d3.format(".2f")(v) + " s" });
+    linePanel(svg, panels[2], { title: "Peak memory per trainer GPU (GB)", xDomain: [0, 200], yDomain: [0, 190], xTicks: [0, 50, 100, 150, 200], hlines: [{ y: 180, label: "B200: 180 GB" }],
+      series: [{ lib: "trl", label: "reserved", pts: st.map((s) => ({ x: s.step, y: s.peak_reserved_gb })), width: 1.4, color: mix(c, 0.5) },
+        { lib: "trl", label: "peak allocated", pts: st.map((s) => ({ x: s.step, y: s.peak_alloc_gb })), width: 2 }], xLabel: "optimizer step", snap: 1, tipFmt: (v) => d3.format(".1f")(v) + " GB" });
+    linePanel(svg, panels[3], { title: "Groups with all-equal rewards (no gradient)", xDomain: [0, 200], yDomain: [0, 1], xTicks: [0, 50, 100, 150, 200], yFmt: d3.format(".0%"),
+      series: [{ lib: "trl", label: "per step", pts: st.map((s) => ({ x: s.step, y: s.zero_std })), width: 0.8, color: mix(c, 0.45) },
+        { lib: "trl", label: "EMA", pts: st.map((s, i) => ({ x: s.step, y: eZ[i] })), width: 2.2 },
+        { lib: "trl", label: "train reward", pts: st.map((s) => ({ x: s.step, y: s.reward })), width: 0, color: "transparent" }], xLabel: "optimizer step", snap: 1, tipFmt: d3.format(".2f") });
+    return { rows: st, foot: ["Weight sync sends the merged LoRA plus every frozen tensor. Memory: max over the 4 trainer ranks of torch's peak. Needed TRL fixes that have since landed on main (#8236, #8294, #8295). The run saved no checkpoints, so there's no AIME eval.",
+      M.w2_runs_seen && M.w2_runs_seen.length ? `W2 runs on the 35B: ${esc(M.w2_runs_seen.join(", "))}.` : `<span class="pending">in progress</span> 35B-A3B on the agentic tasks (W2): base eval, smoke and LoRA run.`] };
+  },
+});
+
+// ------------------------------------------------------------------ robustness
+const CATS = ["install_break", "missing_dep", "docs_or_example_mismatch", "unclear_setup", "config_trap", "crash", "hang", "silent_correctness", "perf_trap", "cluster_unfriendly"];
+const robR = D.robustness.libs, robTop = robR.reduce((a, b) => b.failures > a.failures ? b : a), robTrl = robR.find((r) => r.lib === "trl");
+figure("figs-rob", "robustness", {
+  title: `TRL logged ${robTrl.failures} library failures, none silent; ${NAME[robTop.lib]} logged ${robTop.failures}, ${robTop.silent} of them silent`,
+  sub: `Failures per library in the robustness ledger (${D.robustness.n_rows} rows): the library broke, hung, crashed, gave wrong numbers, or its docs, defaults, lock or image didn't work as written. Our own mistakes and cluster problems aren't counted. Hover a bar or cell for the entries.`,
+  foot: ["TRL is the subject of this benchmark, so its code and logs were read far more closely than anyone else's; a problem elsewhere is more likely to have gone unnoticed."],
+  draw(box, width) {
+    const R = robR.filter((r) => shown(r.lib));
+    const cats = CATS.filter((c) => R.some((r) => r.categories[c]));
+    const narrow = width < 640;
+    const svg = d3.select(box).append("svg").attr("width", width);
+    const kh = keyRow(svg, 0, 8, [{ label: "blocker", fill: css("--sev-blocker") }, { label: "major", fill: css("--sev-major") }, { label: "minor", fill: css("--sev-minor") },
+      { label: "cause not attributed", fill: hatch(svg, css("--hatch")), stroke: css("--rule") }], width);
+    const list = (rows) => rows.map((x) => `<div style="margin-top:.3rem"><b>${esc(x.id)}</b> <span class="k">${esc(x.severity)} · ${esc(x.category.replace(/_/g, " "))}</span><br>${esc(x.symptom)}</div>`).join("");
+    const pw = narrow ? width : width * 0.46;
+    const bars = R.map((r) => ({ lib: r.lib, label: NAME[r.lib], endText: String(r.failures), bold: true,
+      segs: ["blocker", "major", "minor"].filter((s) => r[s]).map((s) => ({ v: r[s], fill: css("--sev-" + s), text: String(r[s]), white: s === "blocker" && !matchDark(),
+        tip: `<b>${NAME[r.lib]}</b> · ${r[s]} ${s}` + list(r.rows.filter((x) => x.severity === s)) })).concat(r.unattributed ? [{ v: r.unattributed, fill: hatch(svg, css("--hatch")), stroke: css("--rule"),
+        tip: `<b>${NAME[r.lib]}</b> · ${r.unattributed} failure(s) with the cause not attributed (our code was in the failing path)` }] : []) }));
+    const p = { x: 0, y: kh + 26, w: pw, h: 0 };
+    const hb = hbars(svg, p, bars, { title: "By severity", ml: 86, mr: 30, rowH: 30, ticks: 4, fmt: d3.format("d"), xLabel: "failures" });
+    // heatmap
+    const hx = narrow ? 0 : pw + 24, hy = narrow ? p.y + hb.height + 74 : p.y;
+    const hw = (narrow ? width : width - hx) - 46, labW = narrow ? 86 : 0;
+    const cw = (hw - labW) / cats.length, chh = 30;
+    const g = svg.append("g").attr("transform", `translate(${hx},${hy})`);
+    g.append("text").attr("class", "ptitle").attr("x", 0).attr("y", -8).text("By kind");
+    const vmax = d3.max(R, (r) => d3.max(cats, (c) => r.categories[c] || 0)) || 1;
+    const ramp = d3.interpolateRgb(css("--surface"), css("--sev-blocker"));
+    R.forEach((r, i) => {
+      const rg = g.append("g").attr("data-lib", r.lib);
+      if (narrow) rg.append("text").attr("x", labW - 10).attr("y", i * chh + chh / 2).attr("dy", ".32em").attr("text-anchor", "end").attr("font-size", 12).attr("class", "ink").text(NAME[r.lib]);
+      cats.forEach((c, j) => {
+        const v = r.categories[c] || 0;
+        const cell = rg.append("rect").attr("x", labW + j * cw + 1).attr("y", i * chh + 1).attr("width", cw - 2).attr("height", chh - 2).attr("rx", 2)
+          .style("fill", v ? ramp(0.25 + 0.75 * v / vmax) : css("--raise"));
+        if (v) {
+          rg.append("text").attr("x", labW + j * cw + cw / 2).attr("y", i * chh + chh / 2).attr("dy", ".32em").attr("text-anchor", "middle").attr("font-size", 11)
+            .style("fill", v / vmax > 0.5 ? css("--surface") : css("--ink")).style("pointer-events", "none").text(v);
+          hoverable(cell, () => r.lib, () => `<b>${NAME[r.lib]}</b> · ${c.replace(/_/g, " ")}` + list(r.rows.filter((x) => x.category === c)));
+        }
+      });
+    });
+    g.selectAll("text.cat").data(cats).join("text").attr("transform", (c, j) => `translate(${labW + j * cw + cw / 2},${R.length * chh + 8}) rotate(40)`)
+      .attr("font-size", 10.5).text((c) => c.replace(/_/g, " ").replace("docs or example mismatch", "docs mismatch"));
+    svg.attr("height", Math.max(p.y + hb.height + 44, hy + R.length * chh + 96));
+    return { rows: R.map((r) => ({ lib: r.lib, failures: r.failures, blocker: r.blocker, major: r.major, minor: r.minor, unattributed: r.unattributed, silent: r.silent, ...Object.fromEntries(cats.map((c) => [c, r.categories[c] || 0])) })) };
+  },
+});
+function matchDark() { const t = document.documentElement.dataset.theme; return t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches); }
+
+// ------------------------------------------------------------------ pause
+figure("figs-pause", "pause", {
+  title: "Top-8 sampler log-probs stall vLLM's pause for 12 s and cost a third of throughput",
+  sub: "TRL's default score centering asks vLLM for the top-8 log-probs of every token. Standalone vLLM 0.33 repro, no trainer: Qwen3.5-2B, 8 API servers, 688 requests in flight, /pause + /resume every 20 s, 600 s per arm (job 365055).",
+  foot: ["From envs/trl/PAUSE_STALL.md. With 16 API servers, top-8 pauses 0.06 s on average at 89.5k tok/s. Every run in these charts has score centering off."],
+  draw(box, width) {
+    const t = D.pause, c = C("trl");
+    const { svg, panels } = grid(box, width, 2, 2, t.length * 32 + 30, { gapX: 24 });
+    const tip = (r) => `<b>${esc(r.option)}</b>` + trow("trl", "mean /pause", r.pause_mean_s + " s") + trow("trl", "max /pause", r.pause_max_s + " s", "transparent") + trow("trl", "generated", r.gen_ktok_s + "k tok/s", "transparent");
+    hbars(svg, panels[0], t.map((r) => ({ lib: "trl", label: r.option, endText: `${r.pause_mean_s} s`, segs: [{ v: r.pause_mean_s, fill: c, tip: tip(r) }] })), { title: "Mean /pause latency (s)", ml: 110, mr: 46, rowH: 32, xmax: 14 });
+    const one = panels[1].x === 0;
+    hbars(svg, panels[1], t.map((r) => ({ lib: "trl", label: r.option, endText: `${r.gen_ktok_s}k`, segs: [{ v: r.gen_ktok_s, fill: c, tip: tip(r) }] })), { title: "Generated tokens / s (thousands)", ml: one ? 110 : 6, labels: one, mr: 40, rowH: 32 });
+    return { rows: t };
+  },
+});
+
+// ------------------------------------------------------------------ chips, meta, render
+const chips = document.getElementById("chips");
+const libsPresent = LIBS.filter((l) => l !== "miles");
+for (const lib of libsPresent) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "chip"; b.id = "chip-" + lib; b.setAttribute("aria-pressed", "true"); b.dataset.lib = lib;
+  b.innerHTML = `<span class="sw" style="background:var(--c-${lib})"></span>${esc(NAME[lib])}`;
+  b.addEventListener("click", () => { hidden.has(lib) ? hidden.delete(lib) : hidden.add(lib); b.setAttribute("aria-pressed", String(!hidden.has(lib))); renderAll(); });
+  b.addEventListener("mouseenter", () => setHL(lib)); b.addEventListener("mouseleave", () => setHL(null));
+  chips.appendChild(b);
+}
+document.getElementById("reset").addEventListener("click", () => { hidden.clear(); chips.querySelectorAll(".chip").forEach((b) => b.setAttribute("aria-pressed", "true")); renderAll(); });
+document.getElementById("meta").textContent = `Data built ${D.generated_utc} from results/raw, the robustness ledger and the W2 eval logs. Runs still in flight are marked in progress.`;
+document.getElementById("foot").innerHTML = `Only runs on each library's built-in options count (SHARED_W1 rev. 8): runs with patched libraries or custom losses are left out, and so are the libraries' recommended arms. One seed per run. Figures built by <code>figures/build.sh</code> in <code>experiments/asyncgrpo_stable_bench</code>; static versions in <code>figures/post/</code>.`;
+renderAll();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+new MutationObserver(renderAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,143 @@
+# Text-to-SQL (miles' River recipe: TRL run 373132's data, episode, reward and evals) on Qwen3.5-35B-A3B with LoRA,
+# verl v0.9.1 as shipped, at verl's own recommended settings (coordinator 2026-11-12 ~20:40Z: verl's recipe, not TRL's
+# hyperparameters). Sources for every "verl:" line: the FSDP2 LoRA-merge example examples/tuning/lora/run_qwen3_8b_merge_fsdp.sh
+# + docs/advance/ppo_lora.rst (r32/alpha64, all-linear, lr 1e-5, bf16 model, KL loss 0.001 low_var_kl, n=8, merge,
+# load_format safetensors, layered_summon) and the V1 doc's own Qwen3.5-35B-A3B benchmark docs/advance/v1_async_trainer.md
+# (train_batch_size 64, ppo_mini_batch_size 16, parameter_sync_step 4, decoupled PPO) + the W1 recommended arm.
+# V1 separate_async, hybrid_engine=false: 4 standalone vLLM GPUs (4 x TP1 replicas) + 4 FSDP2 trainer GPUs.
+# Not expert parallel: verl's EP lives only on its Megatron backend, which doesn't install as shipped (NOTES.md "MoE
+# 35B-A3B", ledger verl-022/023/024). FSDP2 shards the packed expert tensors like any other weight; they stay frozen.
+# The episode is configs/verl/t2sql_agent_loop.py over workloads/text2sql/t2sql_episode.py.
+# Launch: launch/verl/w2_t2sql.sbatch. Mapping to TRL's run: envs/verl/NOTES.md "35B text-to-SQL / W2".
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  # written by the launcher (t2sql_agent_loop.py data): train split 2,033 tasks, shuffled as TRL's run (seed 42)
+  train_files: null
+  val_files: null
+  prompt_key: prompt
+  return_raw_chat: true
+  # V1 separate_async invariant: train_batch_size = parameter_sync_step x ppo_mini_batch_size (prompts).
+  # verl (V1 doc 35B benchmark): 64 prompts per global step = 4 optimizer steps of 16 prompts, weights synced every 4.
+  train_batch_size: 64
+  gen_batch_size: 1
+  # opening prompt (system + few-shot + task + tool block): max 13.5k tokens; an episode is <= 29,696 tokens in all
+  max_prompt_length: 16384
+  max_response_length: 29696
+  filter_overlong_prompts: true
+  truncation: error
+  # thinking on (the template default), as miles' and TRL's runs; the episode renders its own prompt anyway
+  apply_chat_template_kwargs: {}
+  shuffle: false
+
+algorithm:
+  adv_estimator: grpo
+  # verl: GRPO default, advantage divided by the group std
+  norm_adv_by_std_in_grpo: true
+  use_kl_in_reward: false
+  rollout_correction:
+    # verl default: the trainer recomputes old logprobs, pi_old fixed across the 4 mini-batches ("decoupled PPO")
+    bypass_mode: false
+
+actor_rollout_ref:
+  hybrid_engine: false
+  model:
+    path: Qwen/Qwen3.5-35B-A3B
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+    # verl: r32 / alpha 64, target_modules all-linear (the default). On this model that is TRL's 310 language-model
+    # Linears + the 40 shared_expert_gate Linears + the vision tower's Linears (no gradient on text-only data). Routed
+    # experts and the router are nn.Parameter, so they stay frozen either way.
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: all-linear
+    lora:
+      # separate_async with merge=false never ships the adapters to vLLM (ledger verl-021)
+      merge: true
+  actor:
+    strategy: fsdp2
+    fsdp_config:
+      # verl: LoRA merge example trains on a bf16 base (adapters are cast to it)
+      model_dtype: bf16
+    optim:
+      # verl: LoRA merge example lr 1e-5, constant; AdamW defaults (betas 0.9/0.999, weight decay 0.01)
+      lr: 1.0e-5
+      clip_grad: 1.0
+    grad_clip: 1.0
+    ppo_mini_batch_size: 16
+    ppo_epochs: 1
+    use_dynamic_bsz: true
+    # one whole episode (<= 29,696 tokens) per micro-batch at most; TRL's TOKEN_BUDGET
+    ppo_max_token_len_per_gpu: 32768
+    # verl defaults: symmetric clip 0.2, dual-clip 3.0, token-mean
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.2
+    loss_agg_mode: token-mean
+    entropy_coeff: 0
+    # verl: GRPO doc + LoRA example; with LoRA the reference is the base model (adapter disabled), no extra copy
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    checkpoint:
+      # adapters only (+ scheduler/rng); merged into the base for the evals by launch/verl/t2sql_merge.sh
+      save_contents: [model, extra]
+      save_lora_only: true
+  ref:
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 32768
+  rollout:
+    name: vllm
+    # verl LoRA doc: required / recommended
+    load_format: safetensors
+    layered_summon: true
+    mode: async
+    nnodes: 1
+    n_gpus_per_node: 4
+    tensor_model_parallel_size: 1
+    max_model_len: 32768
+    gpu_memory_utilization: 0.85
+    # verl: LoRA merge example n=8
+    n: 8
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    calculate_log_probs: true
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 32768
+    checkpoint_engine:
+      backend: nccl
+    agent:
+      default_agent_loop: t2sql
+      agent_loop_config_path: /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/configs/verl/t2sql_agent_loop.yaml
+
+trainer:
+  use_v1: true
+  v1:
+    trainer_mode: separate_async
+    separate_async:
+      num_warmup_batches: 1
+      # verl default (and its 35B benchmark)
+      parameter_sync_step: 4
+    sampler:
+      # verl defaults
+      max_off_policy_threshold: 8
+      max_off_policy_strategy: drop
+  nnodes: 1
+  n_gpus_per_node: 4
+  total_epochs: 10
+  # global steps of 64 prompts (= 4 optimizer steps); 100 global steps = 6,400 prompts, TRL's 100 x ~64 groups
+  total_training_steps: 100
+  save_freq: 20
+  test_freq: -1
+  val_before_train: false
+  logger: [console, file]
+  project_name: asyncgrpo-stable-bench
+
+transfer_queue:
+  enable: true

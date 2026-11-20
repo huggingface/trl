@@ -1,0 +1,5 @@
+repo: https://github.com/OpenRLHF/OpenRLHF
+tag: v0.11.2
+sha: 17fd4a79cc87dfb2f6185ffac634066525bcd917
+checked out at: /fsx/amine_dirhoussi/stable-bench-src/openrlhf
+patches: none

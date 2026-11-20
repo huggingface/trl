@@ -1,0 +1,106 @@
+# W2-M default-loss arm for SkyRL (audit F2 rerun, 2026-11-14), built from w2-M-recommended-c64.overrides. Was: "recommended" arm for SkyRL (main d8700468): SkyRL's own multi-turn agentic recipe,
+# examples/train_integrations/harbor/run_codecontest_fully_async.sh (Qwen3-8B, "tuned for 1x8xH100"), run through the stock
+# entrypoint examples.train_integrations.harbor.entrypoints.main_harbor_fully_async (stock HarborGenerator, Harbor from
+# SkyRL's own `harbor` extra pin, default.yaml deep-merged with the overrides below). One key=value per line, # = comment.
+# Every line marked DEVIATION is forced by the workload; the rest is the recipe's value. launch/skyrl/w2-rec.sbatch appends
+# the run paths (data, trials dir, ckpt/export/log dirs, run name). See envs/skyrl/NOTES.md "W2 recommended".
+
+# model. DEVIATION: Qwen3.5-9B (W2-M model) instead of Qwen3-8B; Qwen3.5 is a VLM checkpoint, so text-only in trainer and vLLM
+trainer.policy.model.path=Qwen/Qwen3.5-9B
+generator.inference_engine.served_model_name=Qwen3.5-9B
+trainer.policy.language_model_only=true
+trainer.ref.language_model_only=true
+generator.inference_engine.language_model_only=true
+trainer.strategy=fsdp
+
+# fully async (recipe)
+trainer.fully_async.enabled=true
+trainer.fully_async.max_staleness_steps=4
+# AUDIT F2 rerun: workers count GROUPS. 8 groups x 8 episodes = 64 in flight, SHARED_W2's cap and what TRL/prime-rl/verl ran.
+# The recipe's 32 workers x 8 = 256 trajectories competed for 64 rate-limiter slots in 377353, so groups finished late (no step 1 in 90 min).
+trainer.fully_async.num_parallel_generation_workers=8
+trainer.fully_async.clear_kv_cache_on_weight_sync=false
+
+# AUDIT F2 rerun (2026-11-14): SkyRL's default loss instead of the recipe's rollout_is + geometric mask.
+# dppo + prompt_mean are SkyRL main's defaults since #2635 (and what trained W1-S cleanly in 365171); the geometric
+# sequence mask is dropped with rollout_is (library default: no sequence mask). GRPO without std (default), no KL (recipe + SHARED_W2).
+trainer.algorithm.policy_loss_type=dppo
+trainer.algorithm.advantage_estimator=grpo
+trainer.algorithm.loss_reduction=prompt_mean
+trainer.algorithm.grpo_norm_by_std=false
+trainer.algorithm.use_kl_loss=false
+
+# placement: 4 FSDP2 trainer GPUs + 4 vLLM engines at TP1. AUDIT F2 rerun DEVIATION from the recipe's 2 x TP2: every other
+# library (and SkyRL's own W2 shared run 365144) served the 9B as 4 x TP1 at 65k context.
+trainer.placement.colocate_all=false
+trainer.placement.policy_num_nodes=1
+trainer.placement.ref_num_nodes=1
+trainer.placement.policy_num_gpus_per_node=4
+trainer.placement.ref_num_gpus_per_node=4
+generator.inference_engine.num_engines=4
+generator.inference_engine.tensor_parallel_size=1
+generator.inference_engine.gpu_memory_utilization=0.9
+generator.inference_engine.engine_init_kwargs.enable_log_requests=false
+generator.inference_engine.backend=vllm
+generator.inference_engine.run_engines_locally=true
+generator.inference_engine.weight_sync_backend=nccl
+generator.inference_engine.enforce_eager=false
+# DEVIATION: the recipe passes its Qwen3 template (qwen3_acc_thinking.jinja2) and says to change it for another model. The
+# Qwen3.5 checkpoint's own template is kept: for terminus-2's plain user/assistant turns both render the same history, and
+# with thinking off neither lets SkyRL merge consecutive calls (the generation prompt ends with an empty think block that
+# the next call's history doesn't carry).
+# DEVIATION: max_model_len 65,536 (SHARED_W2, prompt + completion of one call) instead of 32,768
+generator.inference_engine.engine_init_kwargs.max_model_len=65536
+trainer.algorithm.max_seq_len=65536
+
+# batch: AUDIT F2 rerun DEVIATION from the recipe's 16 tasks: SHARED_W2's 8 tasks x 8 episodes per step, one optimizer step per batch, micro-batch 1
+trainer.train_batch_size=8
+trainer.policy_mini_batch_size=8
+generator.n_samples_per_prompt=8
+trainer.update_epochs_per_batch=1
+trainer.micro_forward_batch_size_per_gpu=1
+trainer.micro_train_batch_size_per_gpu=1
+trainer.policy.optimizer_config.lr=1.0e-6
+
+# generator (recipe)
+generator.step_wise_trajectories=true
+generator.merge_stepwise_output=true
+generator.apply_overlong_filtering=true
+generator.batched=false
+generator.rate_limit.enabled=true
+generator.rate_limit.trajectories_per_second=5
+# SHARED_W2 caps episodes in flight at 64 (recipe 128).
+generator.rate_limit.max_concurrency=64
+
+# Harbor trial config, deep-merged into SkyRL's default.yaml.
+# DEVIATION (sandbox): local Apptainer through Harbor's singularity environment instead of Daytona; the Daytona resource
+# overrides (1 CPU, 1 GB memory, 1 GB storage) are nulled because Harbor's singularity env enforces override_memory_mb with
+# a watchdog that kills the box, and TRL/prime-rl's local boxes run without limits. singularity_no_mount=home,tmp is
+# Harbor's shipped kwarg for this Apptainer (ledger all-020). auto_stop_interval_mins (Daytona-only) stays: it can't be
+# removed through overrides and the singularity env ignores unknown kwargs.
+harbor_trial_config.environment.type=singularity
+harbor_trial_config.environment.override_cpus=null
+harbor_trial_config.environment.override_memory_mb=null
+harbor_trial_config.environment.override_storage_mb=null
+harbor_trial_config.environment.kwargs.singularity_no_mount=home,tmp
+# DEVIATION (SHARED_W2 budgets): 600 s agent wall clock, 30 model calls, 8192 output tokens per call, 65,536 context
+harbor_trial_config.agent.override_timeout_sec=600
+harbor_trial_config.agent.kwargs.max_turns=30
+harbor_trial_config.agent.kwargs.model_info.max_input_tokens=65536
+harbor_trial_config.agent.kwargs.model_info.max_output_tokens=8192
+harbor_trial_config.agent.kwargs.llm_kwargs.max_tokens=8192
+# DEVIATION (SHARED_W2): thinking off, sent with each request since vLLM renders the chat
+harbor_trial_config.agent.kwargs.llm_kwargs.extra_body.chat_template_kwargs.enable_thinking=false
+
+# run length and checkpoints. DEVIATION: 60 steps, HF exports at 20/40/60, no in-training eval (the held-out eval runs
+# separately on the exports). Resumable checkpoints every 5 steps (recipe's ckpt_interval), latest kept only (101 GB each).
+trainer.epochs=1
+trainer.max_training_steps=60
+trainer.hf_save_interval=20
+trainer.ckpt_interval=5
+trainer.max_ckpts_to_keep=1
+trainer.resume_mode=latest
+trainer.eval_interval=-1
+trainer.eval_before_train=false
+# DEVIATION: tensorboard instead of wandb
+trainer.logger=tensorboard

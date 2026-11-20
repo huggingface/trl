@@ -1,0 +1,108 @@
+# W2-M shared config for SkyRL (main d8700468), one key=value override per line, passed to launch/skyrl/skyrl_w2_main.py
+# (SkyRL's fully async Harbor trainer, HarborGenerator, terminus-2 on HF Sandboxes). Lines starting with # are ignored.
+# The Harbor trial config (agent budgets, sandbox backend) is configs/skyrl/w2-M.harbor.yaml.
+# Run-specific paths (data, trials dir, ckpt/export/log dirs, run name) are appended by launch/skyrl/w2.sbatch.
+# See EQUIVALENCE.md (W2) for the knob-by-knob mapping.
+
+# model: Qwen3.5 VLM checkpoint, text-only (vision tower never built) in trainer and vLLM
+trainer.policy.model.path=Qwen/Qwen3.5-9B
+trainer.policy.language_model_only=true
+trainer.ref.language_model_only=true
+generator.inference_engine.language_model_only=true
+# LiteLLM routes hosted_vllm/<name>; HarborGenerator refuses a '/' in it
+generator.inference_engine.served_model_name=Qwen3.5-9B
+trainer.strategy=fsdp
+trainer.bf16=true
+# One sequence per micro-batch, unpadded. With remove_microbatch_padding=false SkyRL keeps every micro-batch at the
+# step's global padded width (max prompt + max response over the whole batch), i.e. ~65k tokens per sample here.
+# Unpadding one sequence is not packing: the GDN state leak (envs/skyrl/NOTES.md item 15) needs 2+ samples in a row.
+trainer.remove_microbatch_padding=true
+trainer.micro_forward_batch_size_per_gpu=1
+trainer.micro_train_batch_size_per_gpu=1
+
+# placement: 4 trainer GPUs (FSDP2, DP=4) + 4 vLLM engines (TP=1)
+trainer.placement.colocate_all=false
+trainer.placement.colocate_policy_ref=true
+trainer.placement.policy_num_nodes=1
+trainer.placement.policy_num_gpus_per_node=4
+trainer.placement.ref_num_gpus_per_node=4
+generator.inference_engine.num_engines=4
+generator.inference_engine.tensor_parallel_size=1
+generator.inference_engine.backend=vllm
+generator.inference_engine.run_engines_locally=true
+generator.inference_engine.weight_sync_backend=nccl
+generator.inference_engine.gpu_memory_utilization=0.85
+# SHARED_W2: 65,536 = prompt + completion of one call
+generator.inference_engine.engine_init_kwargs.max_model_len=65536
+trainer.algorithm.max_seq_len=65536
+
+# step-wise training: every terminus-2 call is a (prompt, completion) sample; SkyRL's prefix-aware merge joins consecutive
+# calls when call t's prompt + completion is a token prefix of call t+1's prompt (see EQUIVALENCE.md W2 for how often)
+generator.step_wise_trajectories=true
+generator.merge_stepwise_output=true
+generator.batched=false
+# SHARED_W2: a context overflow is verified as-is and trained; SkyRL gives it reward 0 and trains it (no overlong filter)
+generator.apply_overlong_filtering=false
+
+# async: fully async, library-default staleness 4. One generation worker runs one group (8 episodes), so 8 workers =
+# 64 episodes in flight = 64 live sandboxes (SHARED_W2 cap). The rate limiter caps concurrent trial.run() at 64 as well.
+trainer.fully_async.enabled=true
+trainer.fully_async.max_staleness_steps=4
+trainer.fully_async.num_parallel_generation_workers=8
+generator.rate_limit.enabled=true
+generator.rate_limit.max_concurrency=64
+
+# batch: 8 tasks x 8 episodes, one optimizer step per batch
+trainer.train_batch_size=8
+trainer.policy_mini_batch_size=8
+generator.n_samples_per_prompt=8
+trainer.update_epochs_per_batch=1
+
+# sampling: terminus-2 sends temperature/top_p/top_k/min_p (w2-M.harbor.yaml); this sets the trainer's logit temperature
+generator.sampling_params.temperature=1.0
+generator.sampling_params.top_p=1.0
+generator.sampling_params.top_k=-1
+generator.sampling_params.min_p=0.0
+generator.sampling_params.max_generate_length=8192
+
+# optimizer: AdamW, constant lr 1e-6, no warmup, no weight decay, clip 1.0
+trainer.policy.optimizer_config.lr=1.0e-6
+trainer.policy.optimizer_config.num_warmup_steps=0
+trainer.policy.optimizer_config.scheduler=constant_with_warmup
+trainer.policy.optimizer_config.weight_decay=0.0
+trainer.policy.optimizer_config.max_grad_norm=1.0
+
+# loss: GRPO, group-mean advantage without std, one-sided PPO-clip 0.2/0.28 against the sampler's logprobs (`ppo_rollout`,
+# registered by skyrl_w2_main.py; main's fix for the W1 rollout_is collapse, envs/skyrl/COLLAPSE_364970.md), token mean
+# over the step's loss tokens, no KL, no entropy
+trainer.algorithm.advantage_estimator=grpo
+trainer.algorithm.grpo_norm_by_std=false
+trainer.algorithm.policy_loss_type=ppo_rollout
+trainer.algorithm.eps_clip_low=0.2
+trainer.algorithm.eps_clip_high=0.28
+trainer.algorithm.loss_reduction=token_mean
+trainer.algorithm.use_kl_loss=false
+trainer.algorithm.use_kl_in_reward=false
+trainer.algorithm.use_entropy_loss=false
+# batch composition: the next 8 complete groups, no refill of zero-advantage groups
+trainer.algorithm.zero_variance_filter=false
+trainer.fully_async.sample_full_batch=false
+
+data.dataloader.num_workers=0
+
+# run length, checkpoints (HF export at 20/40/60), no in-training eval (eval runs probe.py on the exports)
+# one epoch over the 28 train tasks repeated 18x (w2.sbatch passes the task dir 18 times: 504 entries = 63 steps), so the
+# fully async pipeline never drains at an epoch boundary (28 tasks would be 3 steps per epoch, 4 groups discarded each time)
+trainer.epochs=1
+trainer.max_training_steps=60
+trainer.hf_save_interval=20
+# resumable checkpoints at the same steps (latest one kept): the run is ~60 h (smoke: ~1 h of training per 64-episode step)
+# and hopper-b200 is PreemptMode=REQUEUE, so a requeued job resumes instead of restarting
+trainer.ckpt_interval=20
+trainer.max_ckpts_to_keep=1
+trainer.eval_interval=-1
+trainer.eval_before_train=false
+trainer.seed=42
+trainer.logger=tensorboard
+trainer.enable_ray_gpu_monitor=false
+trainer.resume_mode=latest

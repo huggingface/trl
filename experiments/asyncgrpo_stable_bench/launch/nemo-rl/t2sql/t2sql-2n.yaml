@@ -1,0 +1,47 @@
+# NeMo-RL v0.8.0 on text-to-SQL, Qwen3.5-35B-A3B, TWO 8xB200 nodes: NeMo-RL's own 2-node recipe for this model,
+# grpo-qwen3.5-35ba3b-2n8g-automodel-ep16.yaml (Automodel full fine-tune, EP16, TE attention/linear/norm, hybridep
+# dispatcher, activation checkpointing, expandable_segments, dynamic batching, FusedAdam with bf16 moments, colocated
+# vLLM TP8 eager; loss and optimizer defaults from grpo_math_1B: KL 0.01 k3, clip 0.2, lr 5e-6 with 50 warmup steps,
+# std-normalized leave-one-out GRPO, synchronous). Third attempt after nemo-rl-001 (1-node full FT OOM at step 1) and
+# nemo-rl-002 (1-node LoRA rejected by FSDP at setup).
+# Changed, and only these: our model (the post-trained Qwen3.5-35B-A3B that TRL trains, not -Base); the workload
+# (29,696-token sequences, 3,072 per turn, 6 turns, 64 x 16 per step, 100 steps, our env and data, no validation);
+# checkpoints every 20 steps, all kept, consolidated HF for the shared eval.
+defaults: /opt/nemo-rl/examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-automodel-ep16.yaml
+grpo:
+  num_prompts_per_step: 64
+  num_generations_per_prompt: 16
+  max_rollout_turns: 6          # 5 SQL tool turns + 1 answer turn
+  max_num_steps: 100
+  max_num_epochs: 100
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+checkpointing:
+  enabled: true
+  checkpoint_dir: ${oc.env:RUN_DIR}/checkpoints
+  metric_name: null
+  keep_top_k: null
+  save_period: 20
+  save_optimizer: false
+policy:
+  model_name: Qwen/Qwen3.5-35B-A3B
+  train_global_batch_size: 1024  # = prompts x generations, as the recipe's parent (512 = 32 x 16)
+  max_total_sequence_length: 29696  # t2sql_episode MAX_SEQ_LEN
+  automodel_cfg:
+    env_vars:
+      # Recipe sets expandable_segments:True; colocated vLLM then loads weights via CUDA IPC (pidfd_getfd), which the
+      # Pyxis container is not permitted to do (run 374000: "pidfd_getfd: Operation not permitted"). Off here.
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:False
+    checkpoint:
+      save_consolidated: "every"   # HF safetensors (<ckpt>/policy/weights/model/consolidated) for the shared vLLM eval
+  generation:
+    max_new_tokens: 3072        # t2sql_episode MAX_TOKENS_PER_TURN; NeMo-RL clamps to max_model_len - input
+data:
+  max_input_seq_length: 29696
+  shuffle: true
+logger:
+  log_dir: ${oc.env:RUN_DIR}/logs
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true

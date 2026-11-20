@@ -1,0 +1,6 @@
+lib,run_id,step_time,train,wait,sync,other,logged,n_steps
+trl,trl-w1-S-shared-builtin-365436,50.96,21.43,14.19,0.22,15.12,"{'train': True, 'wait': True, 'sync': True}",195
+prime-rl,prime-rl-w1-S-shared-builtin-365448,25.23,18.74,5.6,0.71,0.17,"{'train': True, 'wait': True, 'sync': True}",195
+verl,verl-w1-S-shared-370023,48.0,24.67,20.36,2.18,0.79,"{'train': True, 'wait': True, 'sync': True}",195
+openrlhf,openrlhf-w1-S-shared-364905,71.0,30.98,0.0,0.0,40.01,"{'train': True, 'wait': False, 'sync': False}",195
+skyrl,skyrl-w1-S-shared-364970,36.64,34.5,0.42,1.15,0.57,"{'train': True, 'wait': True, 'sync': True}",195

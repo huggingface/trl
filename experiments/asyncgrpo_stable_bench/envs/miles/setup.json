@@ -1,0 +1,42 @@
+{
+  "lib": "miles",
+  "install_method": "Docker image radixark/miles:v0.1.3 (upstream-recommended), imported with enroot into a squashfs, run with Pyxis; no venv",
+  "install_wall_s": 122,
+  "install_wall_s_notes": "envs/miles/install.sh on a B200 node (job 364156): enroot import of the 23.3 GB image (114 layers) to a 46.0 GB .sqsh, with the source checkout already in place. The first git clone + checkout of the source on /fsx took about 4 more min. The same import on hopper-cpu (low QOS, spot) was preempted twice at ~18 min each, so it now runs inside the first GPU job. Import OK = `import torch, sglang, megatron.core, transformer_engine, fla, causal_conv1d` inside the container, about 1 min after container start.",
+  "install_steps": 7,
+  "install_steps_list": [
+    "Write Megatron model args for Qwen3.5-2B (miles ships 0.8B/4B/9B/27B only): 0.8B args with hidden 2048 / ffn 6144 (launch/miles/common.sh:model_args)",
+    "Convert the HF checkpoint to Megatron torch_dist (tools/convert_hf_to_torch_dist.py under torchrun; 52 s for 2B on 2 B200s); scripted in convert_ckpt",
+    "Bypass miles' Python launchers, which pkill ray/sglang/miles/redis for the whole user on the node; start a private Ray head on job-derived ports and run train_async.py directly (launch/miles/common.sh)",
+    "Install math-verify for the shared reward (not in the image): uv --target overlay /fsx/amine_dirhoussi/envs/bench-miles",
+    "Convert W1 data to miles' input format (messages + label) and wrap the shared reward as a miles custom RM (configs/miles/prepare_w1_data.py, w1_reward.py)",
+    "Patch FA4 window handling so TE's flash attention is correct on Blackwell (configs/miles/fa4_window_fix/sitecustomize.py)",
+    "Complete each HF export with the frozen vision/MTP tensors from the base checkpoint so eval can load it (configs/miles/complete_hf_export.py)"
+  ],
+  "venv_gb": 46.0,
+  "venv_gb_notes": "size of the imported squashfs image (/fsx/amine_dirhoussi/stable-bench-src/images/miles-v0.1.3.sqsh); the math-verify overlay is < 5 MB",
+  "first_step_s": {
+    "S": 452
+  },
+  "first_step_s_notes": "W1-S shared run 364471: job start 20:04:55Z -> first optimizer step logged 20:12:27Z. Breakdown: 49 s container start + version print + cached torch_dist check, then Ray/SGLang/Megatron init and the first 32-group rollout batch at up to 16384 tokens (step 0 step_time 259 s). Excludes queue time and the one-time HF->torch_dist conversion (52 s for 2B, cached).",
+  "conflicts": [],
+  "patches": [
+    {
+      "what": "runtime wrapper around flash_attn.cute.interface._resolve_causal_local_window (FA4 4.0.0b35) mapping a negative window side to None",
+      "why": "TE 2.17.0+miles calls FA4 with window_size=(-1, 0) for causal attention; FA4 reads that as local attention with left window -1: wrong forward (max abs error 3.9 vs SDPA at head_dim 256) and the SM100 head_dim-256 backward asserts. Breaks miles' recommended --attention-backend flash on B200.",
+      "how": "configs/miles/fa4_window_fix/sitecustomize.py on PYTHONPATH (post-import hook); no files in the image are modified",
+      "verified": "launch/miles/fa4_check.py in smoke 364268: patched forward error 0.0039, backward runs; trainer vs SGLang logprob abs diff 0.012 at step 0"
+    }
+  ],
+  "versions": {
+    "miles": "ace18d49e9c942bfa45451b12ac3bbbc7486969a (v0.1.3 image; tag v0.1.3 + hotfix #4337)",
+    "megatron": "radixark/Megatron-LM@2fbe25a442a5 (mcore 0.19.0)",
+    "sglang": "0.5.23.dev51+g3a93821 (sglang-miles@3a938213)",
+    "torch": "2.14.1+cu130",
+    "transformer_engine": "2.17.0+miles",
+    "flash_linear_attention": "0.5.2",
+    "causal_conv1d": "1.6.1",
+    "flash_attn_4": "4.0.0b35",
+    "transformers": "5.19.0"
+  }
+}

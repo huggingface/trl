@@ -1,0 +1,9 @@
+run_id,label,step_time,train,wait,sync,other,logged,n_steps
+trl-w2-M-local-366992,TRL before the Harbor fix,586.51,96.36,440.23,0.27,49.64,"{'train': True, 'wait': True, 'sync': True}",59.0
+trl-w2-M-local-sharded-st8-372267,TRL,194.21,96.89,47.06,0.3,49.96,"{'train': True, 'wait': True, 'sync': True}",59.0
+prime-rl-w2-M-shared-368590,prime-rl,184.75,62.0,119.92,1.57,1.25,"{'train': True, 'wait': True, 'sync': True}",59.0
+verl-w2-M-shared-371895,verl,205.81,63.87,135.14,1.98,4.82,"{'train': True, 'wait': True, 'sync': True}",59.0
+,SkyRL,,,,,,,
+miles-w2-M-shared-372222,miles,,,,,,,
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,"TRL, 35B-A3B LoRA",349.07,142.32,160.99,3.89,41.86,"{'train': True, 'wait': True, 'sync': True}",59.0
+prime-rl-w2-moe-shared-371663,"prime-rl, 35B-A3B LoRA",338.83,41.13,294.99,2.69,0.02,"{'train': True, 'wait': True, 'sync': True}",59.0

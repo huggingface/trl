@@ -1,0 +1,43 @@
+#!/bin/bash
+#SBATCH --job-name=verl-moe-smoke
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:8
+#SBATCH --exclusive
+#SBATCH --time=04:00:00
+#SBATCH --output=/fsx/amine_dirhoussi/stable-bench-runs/verl/logs/%x-%j.out
+# verl Megatron backend + expert parallel on Qwen3.5-35B-A3B: systems smoke (EP works? step time, memory, sync, mismatch).
+# Venv bench-verl-mcore = verl v0.9.1 lock with the vllm + megatron + math extras (envs/verl/install_mcore.sh + install_mcore_fla.sh).
+# The official image verlai/verl:vllm024.dev2 was tried first and lacks megatron.bridge's modelopt, fla, causal-conv1d (envs/verl/NOTES.md).
+#   PRIO_TAG=PRIO_TRAIN b200-queue launch/verl/moe_smoke.sbatch [extra hydra overrides]   (env CONFIG, TAG, MAX_STEPS)
+set -uo pipefail
+CONFIG=${CONFIG:-w1-moe-megatron}; TAG=${TAG:-smoke}
+export VERL_LOGGING_LEVEL=${VERL_LOGGING_LEVEL:-WARN} CUDA_DEVICE_MAX_CONNECTIONS=1
+RUN_ID=verl-w1-moe-$TAG-$SLURM_JOB_ID
+RUN_DIR=/fsx/amine_dirhoussi/stable-bench-runs/verl/$RUN_ID
+mkdir -p "$RUN_DIR"
+export VERL_FILE_LOGGER_PATH=$RUN_DIR/metrics.jsonl
+source /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/launch/verl/common.sh
+# common.sh activated bench-verl (FSDP venv) and started Ray from it; switch to the Megatron venv and restart Ray with it.
+ray stop --force >/dev/null 2>&1 || true
+deactivate 2>/dev/null || true
+source /fsx/amine_dirhoussi/envs/bench-verl-mcore/bin/activate
+ray start --head --port=$BASE --node-manager-port=$((BASE+1)) --object-manager-port=$((BASE+2)) \
+  --ray-client-server-port=$((BASE+3)) --dashboard-port=$((BASE+4)) --dashboard-agent-listen-port=$((BASE+5)) \
+  --dashboard-agent-grpc-port=$((BASE+6)) --metrics-export-port=$((BASE+7)) --runtime-env-agent-port=$((BASE+8)) \
+  --min-worker-port=$((BASE+100)) --max-worker-port=$((BASE+999)) \
+  --temp-dir="$RAY_TMPDIR" --num-gpus="$NGPU" --num-cpus="${SLURM_CPUS_ON_NODE:-32}" --include-dashboard=false \
+  --disable-usage-stats >/dev/null
+cp "$BENCH/configs/verl/$CONFIG.yaml" "$RUN_DIR/config.yaml"; echo "$CONFIG" > "$RUN_DIR/config_name"; echo "$*" > "$RUN_DIR/overrides"
+git -C "$SRC" rev-parse HEAD > "$RUN_DIR/verl_sha"
+echo "$SLURM_JOB_NODELIST" > "$RUN_DIR/nodes"
+python -c "import torch, vllm, transformers, megatron.core, megatron.bridge, transformer_engine, fla; print('torch', torch.__version__, 'vllm', vllm.__version__, 'transformers', transformers.__version__, 'mcore', megatron.core.__version__, 'te', transformer_engine.__version__, 'fla', fla.__version__)" 2>&1 | tail -1 | tee "$RUN_DIR/versions.txt"
+OVR=(); [ -n "${MAX_STEPS:-}" ] && OVR+=(trainer.total_training_steps=$MAX_STEPS)
+echo "TRAIN_START_EPOCH $(date +%s.%N)"
+python -m verl.trainer.main_ppo --config-path="$BENCH/configs/verl" --config-name="$CONFIG" model_engine=megatron \
+  trainer.experiment_name="$RUN_ID" trainer.default_local_dir="$RUN_DIR/ckpt" \
+  "${OVR[@]}" "$@" 2>&1 | perl -MTime::HiRes=time -ne '$|=1; printf "%.3f %s", time, $_' | tee -a "$RUN_DIR/stdout.log"
+RC=${PIPESTATUS[0]}
+echo "EXIT $RC"
+cp -r "$RAY_TMPDIR/session_latest/logs" "$RUN_DIR/raylogs" 2>/dev/null
+cleanup
+exit $RC

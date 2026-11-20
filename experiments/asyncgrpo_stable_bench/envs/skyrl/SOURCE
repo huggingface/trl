@@ -1,0 +1,7 @@
+repo: https://github.com/NovaSky-AI/SkyRL
+ref: main
+sha: d87004689e3a57e4041991a3c4cf71bed333a44d
+date: 2026-11-06
+checkout: /fsx/amine_dirhoussi/stable-bench-src/skyrl
+lock: uv.lock at that sha, installed with `uv sync --frozen --extra fsdp` (+ math-verify for the shared reward)
+key versions: torch 2.13.0+cu130, vllm 0.33.0, transformers 5.16.1, ray 2.57.0, flash-attn 2.8.3 (NovaSky prebuilt), flash-linear-attention 0.6.0, fla-core 0.6.0, causal-conv1d 1.6.2.post1 (NovaSky prebuilt), flashinfer 0.7.2.post1, python 3.12

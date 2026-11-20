@@ -1,0 +1,10 @@
+size,lib,run_id,hours,last_step
+S,trl,trl-w1-S-shared-builtin-365436,2.8,200
+S,prime-rl,prime-rl-w1-S-shared-builtin-365448,1.409,200
+S,verl,verl-w1-S-shared-370023,2.666,200
+S,openrlhf,openrlhf-w1-S-shared-364905,3.929,200
+S,skyrl,skyrl-w1-S-shared-364970,2.068,200
+M,trl,trl-w1-M-shared-370844,2.309,75
+M,prime-rl,prime-rl-w1-M-shared-367203,1.495,200
+M,openrlhf,openrlhf-w1-M-shared-368302,6.192,200
+M,skyrl,skyrl-w1-M-shared-366119,3.916,200

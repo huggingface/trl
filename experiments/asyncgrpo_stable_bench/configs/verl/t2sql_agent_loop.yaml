@@ -1,0 +1,2 @@
+- name: t2sql
+  _target_: t2sql_agent_loop.Text2SQLAgentLoop

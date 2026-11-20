@@ -1,0 +1,45 @@
+# W2 Harbor TrialConfig for SkyRL's HarborGenerator (configs/SHARED_W2.md). Used instead of SkyRL's
+# examples/train_integrations/harbor/harbor_trial_config/default.yaml (Daytona, 1 CPU / 1 GB overrides, 32 turns, 1200 s),
+# not merged with it. SkyRL injects task.path, agent.model_name (hosted_vllm/<served_model_name>), agent.kwargs.api_base and
+# agent.kwargs.session_id per trial; launch/skyrl/w2.sbatch sets trials_dir.
+timeout_multiplier: 1.0
+
+agent:
+  name: terminus-2
+  # SHARED_W2: 600 s of agent wall clock per episode (the task.toml says the same)
+  override_timeout_sec: 600
+  kwargs:
+    # SHARED_W2: 30 model calls per episode (TRL: the OpenEnv capture proxy stops the 31st call)
+    max_turns: 30
+    suppress_max_turns_warning: true
+    # summarisation off (SHARED_W2): a context overflow ends the episode
+    enable_summarize: false
+    proactive_summarization_threshold: 0
+    # token ids + logprobs per call: SkyRL trains on these
+    collect_rollout_details: true
+    temperature: 1.0
+    # same model_info as OpenEnv's terminus-2 seam (litellm needs it to route a local model name)
+    model_info:
+      max_input_tokens: 65536
+      max_output_tokens: 8192
+      input_cost_per_token: 0.0
+      output_cost_per_token: 0.0
+    llm_kwargs:
+      timeout: 900
+      max_retries: 0
+      top_p: 1.0
+      top_k: -1
+      min_p: 0.0
+      # SHARED_W2: 8192 output tokens per call (TRL: OpenEnv --max-output-tokens 8192)
+      max_tokens: 8192
+      extra_body:
+        # thinking off (SHARED_W2); vLLM renders the chat, so the template kwarg goes with each request
+        chat_template_kwargs:
+          enable_thinking: false
+
+environment:
+  # HF Sandboxes, default flavor (cpu-basic), no resource overrides, as on the TRL side (OpenEnv passes none)
+  type: hf-sandbox
+
+verifier:
+  disable: false

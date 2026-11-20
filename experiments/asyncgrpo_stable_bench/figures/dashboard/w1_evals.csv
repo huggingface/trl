@@ -1,0 +1,91 @@
+run,lib,model,arm,note,step,aime24,aime25,math500
+base-Qwen3.5-2B,base,2B,base,,0,0.2125,0.17083333333333334,0.776
+base-Qwen3.5-9B,base,9B,base,,0,0.7,0.6,0.956
+miles-w1-S-recommended-364729,miles,2B,recommended,patched lib (excluded),50,0.34375,0.29791666666666666,0.882
+miles-w1-S-recommended-364729,miles,2B,recommended,patched lib (excluded),150,0.3375,0.30625,0.904
+miles-w1-S-recommended-364729,miles,2B,recommended,patched lib (excluded),100,0.34791666666666665,0.2791666666666667,0.88
+miles-w1-S-recommended-364729,miles,2B,recommended,patched lib (excluded),200,0.375,0.3020833333333333,0.898
+miles-w1-S-shared-364471,miles,2B,shared,patched lib (excluded),200,0.3854166666666667,0.31666666666666665,0.916
+miles-w1-S-shared-364471,miles,2B,shared,patched lib (excluded),50,0.3104166666666667,0.2625,0.842
+miles-w1-S-shared-364471,miles,2B,shared,patched lib (excluded),100,0.35208333333333336,0.3125,0.894
+miles-w1-S-shared-364471,miles,2B,shared,patched lib (excluded),150,0.45,0.3125,0.924
+openrlhf-w1-M-shared-368302,openrlhf,9B,shared,,50,0.7979166666666667,0.6395833333333333,0.978
+openrlhf-w1-M-shared-368302,openrlhf,9B,shared,,100,0.8020833333333334,0.6875,0.994
+openrlhf-w1-M-shared-368302,openrlhf,9B,shared,,150,0.8041666666666667,0.6729166666666667,0.978
+openrlhf-w1-M-shared-368302,openrlhf,9B,shared,,200,0.8020833333333334,0.6833333333333333,0.98
+openrlhf-w1-S-recommended-365026,openrlhf,2B,recommended,,100,0.3854166666666667,0.31666666666666665,0.906
+openrlhf-w1-S-recommended-365026,openrlhf,2B,recommended,,150,0.475,0.35,0.922
+openrlhf-w1-S-recommended-365026,openrlhf,2B,recommended,,200,0.46041666666666664,0.3729166666666667,0.922
+openrlhf-w1-S-recommended-365026,openrlhf,2B,recommended,,50,0.33958333333333335,0.27291666666666664,0.89
+openrlhf-w1-S-shared-364905,openrlhf,2B,shared,,100,0.4166666666666667,0.35625,0.898
+openrlhf-w1-S-shared-364905,openrlhf,2B,shared,,50,0.38125,0.30833333333333335,0.902
+openrlhf-w1-S-shared-364905,openrlhf,2B,shared,,150,0.3625,0.33958333333333335,0.908
+openrlhf-w1-S-shared-364905,openrlhf,2B,shared,,200,0.4041666666666667,0.3645833333333333,0.908
+prime-rl-w1-M-shared-367203,prime-rl,9B,shared,,200,0.8291666666666667,0.6916666666666667,0.98
+prime-rl-w1-M-shared-367203,prime-rl,9B,shared,,100,0.76875,0.6666666666666666,0.974
+prime-rl-w1-M-shared-367203,prime-rl,9B,shared,,150,0.7791666666666667,0.6625,0.976
+prime-rl-w1-M-shared-367203,prime-rl,9B,shared,,50,0.7770833333333333,0.6833333333333333,0.98
+prime-rl-w1-S-recommended-364392,prime-rl,2B,recommended,,100,0.43333333333333335,0.3229166666666667,0.918
+prime-rl-w1-S-recommended-364392,prime-rl,2B,recommended,,50,0.33958333333333335,0.3,0.884
+prime-rl-w1-S-recommended-364392,prime-rl,2B,recommended,,200,0.45208333333333334,0.32916666666666666,0.91
+prime-rl-w1-S-recommended-364392,prime-rl,2B,recommended,,150,0.4479166666666667,0.37083333333333335,0.91
+prime-rl-w1-S-shared-364425,prime-rl,2B,shared,custom code (excluded),100,0.30625,0.25625,0.872
+prime-rl-w1-S-shared-364425,prime-rl,2B,shared,custom code (excluded),50,0.25833333333333336,0.24791666666666667,0.856
+prime-rl-w1-S-shared-364425,prime-rl,2B,shared,custom code (excluded),200,0.33541666666666664,0.29375,0.878
+prime-rl-w1-S-shared-364425,prime-rl,2B,shared,custom code (excluded),150,0.3,0.2625,0.862
+prime-rl-w1-S-shared-builtin-365448,prime-rl,2B,shared-builtin,,100,0.30833333333333335,0.2875,0.882
+prime-rl-w1-S-shared-builtin-365448,prime-rl,2B,shared-builtin,,50,0.3416666666666667,0.2708333333333333,0.866
+prime-rl-w1-S-shared-builtin-365448,prime-rl,2B,shared-builtin,,150,0.3416666666666667,0.34375,0.888
+prime-rl-w1-S-shared-builtin-365448,prime-rl,2B,shared-builtin,,200,0.35208333333333336,0.3020833333333333,0.9
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,50,0.80625,0.6791666666666667,0.972
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,100,0.81875,0.6958333333333333,0.984
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,150,0.8083333333333333,0.7145833333333333,0.988
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,201,0.8,0.6770833333333334,0.982
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,200,0.8020833333333334,0.6770833333333334,0.99
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),100,0.09375,0.10833333333333334,0.584
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),200,0.39375,0.33125,0.874
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),150,0.37083333333333335,0.3416666666666667,0.802
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),201,0.3875,0.3229166666666667,0.872
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),50,0.7770833333333333,0.66875,0.986
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,100,0.425,0.35208333333333336,0.894
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,201,0.41041666666666665,0.32916666666666666,0.906
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,200,0.41041666666666665,0.32916666666666666,0.916
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,150,0.4708333333333333,0.33958333333333335,0.93
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,50,0.3375,0.3,0.864
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),200,0.00625,0.022916666666666665,0.248
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),201,0.00625,0.022916666666666665,0.252
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),100,0.027083333333333334,0.020833333333333332,0.12
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),50,0.12291666666666666,0.15,0.772
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),150,0.12708333333333333,0.15,0.77
+trl-w1-M-shared-370844,trl,9B,shared,cancelled at step 75: node moved to agentic,50,0.8270833333333333,0.6895833333333333,0.978
+trl-w1-S-recommended-364705,trl,2B,recommended,,50,0.36666666666666664,0.29791666666666666,0.874
+trl-w1-S-recommended-364705,trl,2B,recommended,,100,0.375,0.30625,0.9
+trl-w1-S-recommended-364705,trl,2B,recommended,,150,0.36875,0.37916666666666665,0.91
+trl-w1-S-recommended-364705,trl,2B,recommended,,200,0.49375,0.3625,0.912
+trl-w1-S-recommended-aligned-366044,trl,2B,recommended-aligned,,200,0.40208333333333335,0.3541666666666667,0.928
+trl-w1-S-recommended-aligned-366044,trl,2B,recommended-aligned,,150,0.3958333333333333,0.3375,0.908
+trl-w1-S-recommended-aligned-366044,trl,2B,recommended-aligned,,100,0.30833333333333335,0.2916666666666667,0.894
+trl-w1-S-recommended-aligned-366044,trl,2B,recommended-aligned,,50,0.32916666666666666,0.2833333333333333,0.898
+trl-w1-S-shared-364895,trl,2B,shared,custom code (excluded),50,0.2916666666666667,0.26666666666666666,0.86
+trl-w1-S-shared-364895,trl,2B,shared,custom code (excluded),100,0.3541666666666667,0.28541666666666665,0.902
+trl-w1-S-shared-364895,trl,2B,shared,custom code (excluded),150,0.3645833333333333,0.28125,0.902
+trl-w1-S-shared-364895,trl,2B,shared,custom code (excluded),200,0.35208333333333336,0.31666666666666665,0.91
+trl-w1-S-shared-builtin-365436,trl,2B,shared-builtin,,50,0.2625,0.22916666666666666,0.844
+trl-w1-S-shared-builtin-365436,trl,2B,shared-builtin,,100,0.32708333333333334,0.2791666666666667,0.878
+trl-w1-S-shared-builtin-365436,trl,2B,shared-builtin,,150,0.3541666666666667,0.28958333333333336,0.902
+trl-w1-S-shared-builtin-365436,trl,2B,shared-builtin,,200,0.3875,0.30416666666666664,0.904
+trl-w1-S-smoke-364223,trl,2B,smoke,smoke,15,0.12916666666666668,0.12916666666666668,0.74
+trl-w1-S-smoke-364223,trl,2B,smoke,smoke,10,0.12708333333333333,0.14166666666666666,0.722
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),48,0.29791666666666666,0.25,0.862
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),192,0.3854166666666667,0.3229166666666667,0.908
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),200,0.42083333333333334,0.33125,0.902
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),144,0.3625,0.30625,0.884
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),96,0.32708333333333334,0.25833333333333336,0.866
+verl-w1-S-shared-364733,verl,2B,shared,patched lib (excluded),100,0.3333333333333333,0.3,0.874
+verl-w1-S-shared-364733,verl,2B,shared,patched lib (excluded),50,0.30833333333333335,0.29375,0.864
+verl-w1-S-shared-364733,verl,2B,shared,patched lib (excluded),150,0.3625,0.30625,0.89
+verl-w1-S-shared-364733,verl,2B,shared,patched lib (excluded),200,0.35,0.3104166666666667,0.894
+verl-w1-S-shared-370023,verl,2B,shared,,150,0.35625,0.2916666666666667,0.892
+verl-w1-S-shared-370023,verl,2B,shared,,50,0.27708333333333335,0.26875,0.856
+verl-w1-S-shared-370023,verl,2B,shared,,200,0.35,0.3,0.892
+verl-w1-S-shared-370023,verl,2B,shared,,100,0.31875,0.2604166666666667,0.874

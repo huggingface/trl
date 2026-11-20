@@ -1,0 +1,5 @@
+start,label,doc_label,s
+187,Harbor server: one event loop for all 64 agents,The Harbor server's single event loop,240
+187,"Box start, setup and verifier",Box lifecycle outside the agent,87
+187,Bigger steps (refilled to a token budget),Episodes per step,48
+187,30-call cap never reached the agent,Budget tail,34

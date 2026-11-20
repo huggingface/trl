@@ -1,0 +1,27 @@
+{
+  "install_wall_s": 802,
+  "install_wall_s_breakdown": {
+    "uv_sync_plus_flash_attn_s": 144,
+    "import_check_s": 67,
+    "install_sh_total_s": 211,
+    "causal_conv1d_build_s": 591,
+    "note": "install.sh total from job 364118 with a warm uv cache (earlier attempts had downloaded the wheels). The failed attempt 364072 on a mostly cold cache spent about 5.5 min in uv sync."
+  },
+  "install_steps": [
+    "causal-conv1d has to be compiled on a GPU node (hopper-cpu has no g++/CUDA): envs/verl/build_causal_conv1d.sh via b200-queue, or reuse /fsx/amine_dirhoussi/stable-bench-src/wheels/torch2.11-cu130-py312/causal_conv1d-1.7.0-cp312-cp312-linux_x86_64.whl"
+  ],
+  "venv_gb": 11,
+  "first_step_s": {
+    "smoke_qwen2.5-0.5b_2+2gpu": "~960 (job start 17:29:04 to step 1 at ~17:45, job 364181)",
+    "recipe_qwen2-7b_8gpu_sync": 1196,
+    "recipe_note": "job 364302: step-0 validation at +1073 s, first optimizer step at +1196 s; most of it is cold imports from /fsx in every Ray worker plus vLLM torch.compile/CUDA-graph capture",
+    "S": null
+  },
+  "conflicts": [
+    "flash-attn 2.8.3: the v0.9.1 uv.lock wheel URL (verl wheelhouse release `flash-attention-v2.8.3`) returns 404; installed the same build from the renamed release `flash-attention-v2.8.3-py3.12-torch2.11.0` (sha256 578253f9...) with `uv sync --no-install-package flash-attn` + `uv pip install --no-deps`",
+    "causal-conv1d 1.7.0 added on top of the lock (not a verl dependency); no prebuilt wheel for torch 2.11, compiled for sm_100 on a GPU node"
+  ],
+  "patches": [
+    "verl/trainer/ppo/v1/trainer_separate_async.py: drop `flush=True` from logger.info in the hybrid_engine=False setup path (TypeError at init in v0.9.1); same change as upstream ace775e8 (#7926)"
+  ]
+}

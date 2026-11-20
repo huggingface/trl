@@ -1,0 +1,2 @@
+- name: harbor
+  _target_: w2_agent_loop.HarborAgentLoop

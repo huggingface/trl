@@ -1,0 +1,130 @@
+# W1 math, size M, recommended arm (SHARED_W1 rev. 2), verl v0.9.1: w1-M.yaml with loss, advantage, async/off-policy,
+# batching and zero-advantage handling at verl's own defaults (docs/algo/grpo.md, docs/advance/v1_async_trainer.md,
+# ppo_trainer.yaml). Every line that differs from w1-S.yaml is marked "# recommended:". Diff table in EQUIVALENCE.md.
+# Launch: python -m verl.trainer.main_ppo --config-path=<this dir> --config-name=w1-M-recommended (see launch/verl/w1.sbatch).
+# Paths that depend on the run (data dir, checkpoint dir, experiment name) are passed on the command line.
+# M = S with only the model changed (Qwen3.5-9B); every other knob, incl. micro-batch token budgets, is the S value. The
+# launcher adds PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for M. See EQUIVALENCE.md "M".
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  train_files: /fsx/amine_dirhoussi/stable-bench-runs/verl/data/w1/train.parquet
+  val_files: /fsx/amine_dirhoussi/stable-bench-runs/verl/data/w1/val.parquet
+  prompt_key: prompt
+  return_raw_chat: true
+  # V1 separate_async invariant: train_batch_size = parameter_sync_step x ppo_mini_batch_size (prompts).
+  # recommended: separate_async default parameter_sync_step=4 -> 4 optimizer steps of 32 prompts per global step.
+  train_batch_size: 128
+  gen_batch_size: 1
+  max_prompt_length: 2048
+  max_response_length: 16384
+  filter_overlong_prompts: true
+  truncation: error
+  # Passed to tokenizer.apply_chat_template both by the dataset (length filter) and by the agent loop that renders the
+  # prompt sent to vLLM (verl/experimental/agent_loop/agent_loop.py:242-251). rev. 2: thinking off, set explicitly.
+  apply_chat_template_kwargs:
+    enable_thinking: false
+  # train.parquet is already deduplicated and shuffled with seed 42 by workloads/math/prepare.py: keep that order.
+  shuffle: false
+
+reward:
+  custom_reward_function:
+    path: /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/configs/verl/w1_reward.py
+    name: compute_score
+
+algorithm:
+  adv_estimator: grpo
+  # recommended: GRPO default, advantage divided by the group std.
+  norm_adv_by_std_in_grpo: true
+  use_kl_in_reward: false
+  rollout_correction:
+    # recommended: verl default (false). The trainer recomputes old logprobs and keeps pi_old fixed across the 4
+    # mini-batches of a sync cycle ("decoupled PPO" in the V1 doc).
+    bypass_mode: false
+
+actor_rollout_ref:
+  # Trainer GPUs never host a vLLM engine: 4 standalone rollout GPUs + 4 FSDP2 trainer GPUs.
+  hybrid_engine: false
+  model:
+    path: Qwen/Qwen3.5-9B
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+  actor:
+    strategy: fsdp2
+    optim:
+      lr: 1.0e-6
+      lr_warmup_steps: 0
+      lr_scheduler_type: constant
+      weight_decay: 0.0
+      betas: [0.9, 0.999]
+      clip_grad: 1.0
+    grad_clip: 1.0
+    ppo_mini_batch_size: 32
+    ppo_epochs: 1
+    use_dynamic_bsz: true
+    ppo_max_token_len_per_gpu: 36864
+    clip_ratio_low: 0.2
+    # recommended: verl default symmetric clip (no clip-higher).
+    clip_ratio_high: 0.2
+    loss_agg_mode: token-mean
+    entropy_coeff: 0
+    # recommended: GRPO doc "Please set it to True for GRPO", coef 0.001, low_var_kl as in every verl GRPO example.
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    checkpoint:
+      save_contents: [model, optimizer, extra, hf_model]
+  # recommended: reference model for the KL loss (lives on the trainer GPUs).
+  ref:
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 36864
+  rollout:
+    name: vllm
+    mode: async
+    nnodes: 1
+    n_gpus_per_node: 4
+    tensor_model_parallel_size: 1
+    # prompt 2048 + completion 16384 (rev. 2)
+    max_model_len: 18432
+    gpu_memory_utilization: 0.85
+    n: 8
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    calculate_log_probs: true
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 36864
+    checkpoint_engine:
+      backend: nccl
+
+trainer:
+  use_v1: true
+  v1:
+    trainer_mode: separate_async
+    separate_async:
+      num_warmup_batches: 1
+      # recommended: verl default.
+      parameter_sync_step: 4
+    sampler:
+      max_off_policy_threshold: 8
+      max_off_policy_strategy: drop
+  nnodes: 1
+  n_gpus_per_node: 4
+  total_epochs: 1
+  # recommended: global steps (4 optimizer steps each); 50 = 200 optimizer steps. Checkpoints only land on global steps:
+  # 12/24/36/48 + final 50 = optimizer steps 48/96/144/192/200.
+  total_training_steps: 50
+  save_freq: 12
+  test_freq: -1
+  val_before_train: false
+  logger: [console, file]
+  project_name: asyncgrpo-stable-bench
+
+transfer_queue:
+  enable: true

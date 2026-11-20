@@ -1,0 +1,101 @@
+# miles W2 on Qwen3.5-35B-A3B (hybrid GDN + MoE, 256 experts), LoRA via Megatron-Bridge, as shipped. Flags for train_async.py
+# after model_args qwen3.5-35B-A3B_lora. Launcher: launch/miles/w2.sbatch MOE=1 ($RUN, $STEPS, $DATA filled in).
+# = w1-moe.args (LoRA r32/alpha 64/lr 1e-5, attn + GDN + shared expert, bridge mode, bshd + micro-batch 1) with the W2 data,
+# agentic wiring and rollout block of w2-M.args. Parallelism: TP2 + SP x EP4 on 4 GPUs (the shipped LoRA launcher
+# scripts/run_qwen3_5_35b_a3b_lora.py uses TP2 + SP x EP8 on 8; 2 KV heads cap TP at 2). Attention: unfused (B200).
+# --- checkpoints (bridge loads the HF checkpoint directly)
+--hf-checkpoint /fsx/amine_dirhoussi/stable-bench-runs/miles/models/Qwen3.5-35B-A3B/
+--megatron-to-hf-mode bridge
+--save $RUN/megatron
+--save-interval 20
+--save-hf $RUN/hf/step_{rollout_id}
+# --- LoRA (docs/advanced/lora.md; target groups from miles/utils/lora/hf_lora_targets.py:_qwen3_5_moe_targets)
+# attn = q/k/v/o (full-attention layers) + linear_attn in_proj_qkv/z/b/a + out_proj (GDN layers); plus the shared expert.
+# Routed experts (mlp.experts.gate_up_proj/down_proj) are left out, as in TRL.
+--lora-rank 32
+--lora-alpha 64
+--lora-dropout 0.0
+--target-modules attn,mlp.shared_expert.gate_proj,mlp.shared_expert.up_proj,mlp.shared_expert.down_proj
+--no-gradient-accumulation-fusion
+--sglang-lora-backend triton
+--update-weight-buffer-size 536870912
+# --- data: one row per train task, metadata.instance_id = Harbor task dir, agent_name = terminus-2
+--prompt-data $DATA/w2_train.jsonl
+--input-key prompt
+--metadata-key metadata
+--rollout-shuffle
+--apply-chat-template-kwargs {"enable_thinking":false}
+# --- agentic wiring (examples/experimental/harbor): Harbor Trial.run() in-process, TITO session server
+--custom-generate-function-path miles.rollout.generate_hub.agentic_tool_call.generate
+--custom-agent-function-path harbor_agent_function.run
+--custom-rm-path generate.reward_func
+--dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted
+--tito-model qwen35
+--use-session-server
+--session-server-workers 32
+# --- rollout (fully async): 8 tasks x 8 episodes, at most one batch (64 episodes) in flight
+--fully-async
+--pause-generation-mode in_place
+# fully async + in_place defaults to --namespaced-radix-cache, which miles then rejects with the v1 session server the
+# Harbor example ships ("requires --use-session-server v2"; run 372132). Opt out explicitly, as the assert's sibling
+# message suggests; prefix KV from older weights may then serve later calls (TIS still corrects against rollout logprobs).
+--no-namespaced-radix-cache
+--num-rollout $STEPS
+--rollout-batch-size 8
+--n-samples-per-prompt 8
+--global-batch-size 64
+--rollout-max-response-len 8192
+--max-seq-len 65536
+--rollout-max-context-len 65536
+--rollout-temperature 1.0
+--rollout-top-p 1.0
+--rollout-top-k -1
+--rollout-seed 42
+--balance-data
+# --- GRPO loss
+--advantage-estimator grpo
+--disable-grpo-std-normalization
+--calculate-per-token-loss
+--eps-clip 0.2
+--eps-clip-high 0.28
+--kl-loss-coef 0.0
+--kl-coef 0.0
+--entropy-coef 0.0
+--use-tis
+# --- optimizer (LoRA lr as in TRL's 35B run)
+--optimizer adam
+--lr 1e-5
+--lr-decay-style constant
+--lr-warmup-iters 0
+--weight-decay 0.0
+--adam-beta1 0.9
+--adam-beta2 0.999
+--clip-grad 1.0
+--seed 42
+# --- Megatron parallelism: TP2 + SP x EP4 (DP2) on 4 GPUs; bshd + mbs 1 (bridge GatedDeltaNet rejects thd)
+--tensor-model-parallel-size 2
+--sequence-parallel
+--pipeline-model-parallel-size 1
+--context-parallel-size 1
+--expert-model-parallel-size 4
+--expert-tensor-parallel-size 1
+--moe-token-dispatcher-type alltoall
+--recompute-granularity full
+--recompute-method uniform
+--recompute-num-layers 1
+--qkv-format bshd
+--micro-batch-size 1
+--attention-dropout 0.0
+--hidden-dropout 0.0
+--accumulate-allreduce-grads-in-fp32
+--attention-softmax-in-fp32
+--attention-backend unfused
+# --- SGLang: 4 engines x TP1 (the whole 35B fits one B200), mem fraction as W1
+--rollout-num-gpus-per-engine 1
+--sglang-mem-fraction-static 0.7
+--check-weight-update-skip-list visual
+# --- placement: 4 train + 4 rollout GPUs on one node
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+--num-gpus-per-node 8
+--rollout-num-gpus 4

@@ -1,0 +1,102 @@
+# W1-S shared config for SkyRL (main d8700468), one key=value override per line, passed to
+# launch/skyrl/skyrl_w1_main.py (SkyRL's fully async trainer + the W1 math env). Lines starting with # are ignored.
+# Run-specific paths (data, ckpt/export/log dirs, run name) are appended by launch/skyrl/w1.sbatch.
+# See EQUIVALENCE.md for the knob-by-knob mapping.
+
+# model: Qwen3.5 VLM checkpoint, text-only (vision tower never built) in trainer, ref and vLLM
+trainer.policy.model.path=Qwen/Qwen3.5-2B
+trainer.policy.language_model_only=true
+trainer.ref.language_model_only=true
+generator.inference_engine.language_model_only=true
+trainer.strategy=fsdp
+trainer.bf16=true
+# FSDP packing leaks GDN state across samples for Qwen3.5 (envs/skyrl/NOTES.md); SkyRL's own Qwen3.5 FSDP example disables it
+trainer.remove_microbatch_padding=false
+
+# placement: 4 trainer GPUs (FSDP2, DP=4) + 4 vLLM engines (TP=1)
+trainer.placement.colocate_all=false
+trainer.placement.colocate_policy_ref=true
+trainer.placement.policy_num_nodes=1
+trainer.placement.policy_num_gpus_per_node=4
+trainer.placement.ref_num_gpus_per_node=4
+generator.inference_engine.num_engines=4
+generator.inference_engine.tensor_parallel_size=1
+generator.inference_engine.backend=vllm
+generator.inference_engine.run_engines_locally=true
+generator.inference_engine.weight_sync_backend=nccl
+generator.inference_engine.gpu_memory_utilization=0.85
+generator.inference_engine.engine_init_kwargs.max_model_len=18432
+
+# async: SkyRL's recommended fully async mode (in-flight weight updates), library-default staleness 4,
+# workers = B * (S + 1) as in examples/train/fully_async
+trainer.fully_async.enabled=true
+trainer.fully_async.max_staleness_steps=4
+trainer.fully_async.num_parallel_generation_workers=160
+generator.batched=false
+
+# batch: 32 prompts x 8 generations, one optimizer step per batch
+trainer.train_batch_size=32
+trainer.policy_mini_batch_size=32
+generator.n_samples_per_prompt=8
+trainer.update_epochs_per_batch=1
+# one sequence per micro-batch: no packing for Qwen3.5 (see top), so this avoids padding, and full logits at
+# 18k tokens x 248k vocab are ~9 GB per sequence in bf16
+trainer.micro_forward_batch_size_per_gpu=1
+trainer.micro_train_batch_size_per_gpu=1
+
+# lengths (SHARED_W1 rev. 2: completion 16384; rev. 1: prompts up to 2048, never truncated; SkyRL filters longer prompts at load, none exceed 2048)
+trainer.max_prompt_length=2048
+generator.sampling_params.max_generate_length=16384
+
+# chat template (rev. 2): thinking off, set explicitly. SkyRL renders the prompt with these kwargs and sends token ids to vLLM.
+generator.chat_template_kwargs.enable_thinking=false
+
+# sampling
+generator.sampling_params.temperature=1.0
+generator.sampling_params.top_p=1.0
+generator.sampling_params.top_k=-1
+generator.sampling_params.min_p=0.0
+
+# optimizer: AdamW, constant lr 1e-6, no warmup, no weight decay, clip 1.0
+trainer.policy.optimizer_config.lr=1.0e-6
+trainer.policy.optimizer_config.num_warmup_steps=0
+trainer.policy.optimizer_config.scheduler=constant_with_warmup
+trainer.policy.optimizer_config.weight_decay=0.0
+trainer.policy.optimizer_config.max_grad_norm=1.0
+
+# loss: GRPO, group-mean advantage without std, clip band 0.2/0.28 against the sampler, token mean over the step's tokens, no KL, no entropy
+trainer.algorithm.advantage_estimator=grpo
+trainer.algorithm.grpo_norm_by_std=false
+# Fully async refuses `regular` (it would recompute the old logprobs with the current weights, not the stale sampler's).
+# rollout_is = PPO-style ratio against the rollout (sampler) logprobs, eps 0.2/0.28: inside the band the gradient
+# equals PPO-clip's (r * A * grad log pi); outside it the token is masked on both sides (PPO clips one side only).
+# closest built-in to PPO-clip in fully async mode (which refuses 'regular'); run 364970 collapsed with it (envs/skyrl/COLLAPSE_364970.md). No custom losses: the shared arm only uses what SkyRL ships.
+trainer.algorithm.policy_loss_type=rollout_is
+trainer.algorithm.eps_clip_low=0.2
+trainer.algorithm.eps_clip_high=0.28
+trainer.algorithm.loss_reduction=token_mean
+trainer.algorithm.use_kl_loss=false
+trainer.algorithm.use_kl_in_reward=false
+trainer.algorithm.use_entropy_loss=false
+# batch composition (rev. 1): the next 32 complete groups, no refill of zero-advantage groups. Library default:
+# zero-variance groups stay in the batch with advantage 0 and their tokens count in the token-mean denominator.
+trainer.algorithm.zero_variance_filter=false
+trainer.fully_async.sample_full_batch=false
+
+# env
+environment.env_class=w1_math
+# in-process prompt loading: the default 8 spawn workers each re-import the 20 GB venv from /fsx (minutes each)
+data.dataloader.num_workers=0
+
+# run length, checkpoints (HF export every 50 steps), no in-training eval (eval runs on the exports)
+trainer.epochs=1
+trainer.max_training_steps=200
+trainer.hf_save_interval=50
+trainer.ckpt_interval=-1
+trainer.eval_interval=-1
+trainer.eval_before_train=false
+trainer.seed=42
+trainer.logger=tensorboard
+# Ray GPU monitor scrapes the Ray dashboard metrics endpoint, which our private head does not start; it only feeds wandb
+trainer.enable_ray_gpu_monitor=false
+trainer.resume_mode=null

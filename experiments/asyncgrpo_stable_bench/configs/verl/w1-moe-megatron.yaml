@@ -1,0 +1,142 @@
+# verl W1 data on Qwen3.5-35B-A3B (MoE) with the Megatron backend + expert parallel: EP systems smoke (not a learning run).
+# Launch with the hydra group override model_engine=megatron (launch/verl/moe_smoke.sbatch passes it), inside verl's
+# official image verlai/verl:vllm024.dev2 (envs/verl/install_image.sh).
+# Base: w1-M.yaml's data / reward / algorithm / V1 separate_async (4 vLLM + 4 trainer GPUs, hybrid_engine=False), not
+# inherited because the Megatron optimizer schema differs (no lr_scheduler_type). Megatron settings from verl's own
+# examples/grpo_trainer/run_qwen3_5_35b_megatron.sh (Megatron-Bridge, bshd: use_remove_padding=False and
+# use_dynamic_bsz=False because Megatron's GDN has no thd; micro-batch 1; full recompute; attention_backend auto;
+# grouped GEMM + permute fusion), with EP4 on 4 GPUs instead of TP2 x EP8 on 8.
+# LoRA via Megatron-Bridge (docs/advance/ppo_lora.rst "Megatron Backend"): r32 / alpha 64 / lr 1e-5 as TRL, on attention
+# (linear_qkv, linear_proj), GDN (in_proj, out_proj) and the shared expert; routed experts and router frozen.
+# lora.merge=true: in separate_async the sync calls get_per_tensor_param() with defaults (engine_workers.py:766),
+# and with merge=false the Megatron engine then exports base weights without the adapters (transformer_impl.py:1033-1055).
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  train_files: /fsx/amine_dirhoussi/stable-bench-runs/verl/data/w1/train.parquet
+  val_files: /fsx/amine_dirhoussi/stable-bench-runs/verl/data/w1/val.parquet
+  prompt_key: prompt
+  return_raw_chat: true
+  train_batch_size: 32
+  gen_batch_size: 1
+  max_prompt_length: 2048
+  max_response_length: 16384
+  filter_overlong_prompts: true
+  truncation: error
+  apply_chat_template_kwargs:
+    enable_thinking: false
+  shuffle: false
+
+reward:
+  custom_reward_function:
+    path: /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/configs/verl/w1_reward.py
+    name: compute_score
+
+algorithm:
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: false
+  use_kl_in_reward: false
+  rollout_correction:
+    bypass_mode: true
+
+actor_rollout_ref:
+  hybrid_engine: false
+  model:
+    path: Qwen/Qwen3.5-35B-A3B
+    use_remove_padding: false
+    trust_remote_code: true
+    lora:
+      type: lora
+      merge: true
+      rank: 32
+      alpha: 64
+      dropout: 0.0
+      target_modules: [linear_qkv, linear_proj, in_proj, out_proj, "*.shared_experts.linear_fc1", "*.shared_experts.linear_fc2"]
+  actor:
+    strategy: megatron
+    optim:
+      lr: 1.0e-5
+      lr_warmup_steps: 0
+      lr_decay_style: constant
+      weight_decay: 0.0
+      betas: [0.9, 0.999]
+      clip_grad: 1.0
+    ppo_mini_batch_size: 32
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_epochs: 1
+    use_dynamic_bsz: false
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.28
+    loss_agg_mode: token-mean
+    entropy_coeff: 0
+    use_kl_loss: false
+    checkpoint:
+      save_contents: [model, extra]
+    megatron:
+      use_mbridge: true
+      vanilla_mbridge: false
+      use_remove_padding: false
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 4
+      expert_tensor_parallel_size: 1
+      sequence_parallel: false
+      param_offload: false
+      optimizer_offload: false
+      dtype: bfloat16
+      override_transformer_config:
+        attention_backend: auto
+        recompute_method: uniform
+        recompute_granularity: full
+        recompute_num_layers: 1
+        recompute_modules: null
+        moe_permute_fusion: true
+        moe_grouped_gemm: true
+  rollout:
+    name: vllm
+    mode: async
+    nnodes: 1
+    n_gpus_per_node: 4
+    tensor_model_parallel_size: 1
+    max_model_len: 18432
+    gpu_memory_utilization: 0.85
+    n: 8
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    calculate_log_probs: true
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_use_dynamic_bsz: false
+    checkpoint_engine:
+      backend: nccl
+      update_weights_bucket_megabytes: 4096
+
+trainer:
+  use_v1: true
+  v1:
+    trainer_mode: separate_async
+    separate_async:
+      num_warmup_batches: 1
+      parameter_sync_step: 1
+    sampler:
+      max_off_policy_threshold: 8
+      max_off_policy_strategy: drop
+  nnodes: 1
+  n_gpus_per_node: 4
+  total_epochs: 1
+  total_training_steps: 3
+  save_freq: -1
+  test_freq: -1
+  val_before_train: false
+  logger: [console, file]
+  project_name: asyncgrpo-stable-bench
+
+transfer_queue:
+  enable: true

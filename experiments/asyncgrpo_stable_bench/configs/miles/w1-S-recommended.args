@@ -1,0 +1,79 @@
+# miles W1-S recommended arm (Qwen3.5-2B): w1-S.args with loss/advantage at miles recipe defaults (SHARED_W1 rev. 1).
+# Base: miles' fully async Qwen3.5 recipe (examples/infra_features/fully_async/run_qwen3_5_4b_fully_async_eval.py) and
+# scripts/run_qwen3_dense.py, with SHARED_W1 values substituted. Every deviation from the recipe is in EQUIVALENCE.md.
+# $RUN and $STEPS are filled in by launch/miles/w1.sbatch.
+# --- checkpoints
+--hf-checkpoint /fsx/amine_dirhoussi/stable-bench-runs/miles/models/Qwen3.5-2B/
+--ref-load /fsx/amine_dirhoussi/stable-bench-runs/miles/ckpt/Qwen3.5-2B_torch_dist
+--load $RUN/megatron
+--save $RUN/megatron
+--save-interval 50
+--save-hf $RUN/hf/step_{rollout_id}
+# --- data, prompt, reward
+--prompt-data /fsx/amine_dirhoussi/stable-bench-runs/miles/data/w1_train.parquet
+--input-key messages
+--label-key label
+--apply-chat-template
+--apply-chat-template-kwargs {"enable_thinking":false}
+--rollout-max-prompt-len 2048
+--custom-rm-path w1_reward.reward
+# --- rollout (fully async, recipe settings)
+--fully-async
+--pause-generation-mode in_place
+--num-rollout $STEPS
+--rollout-batch-size 32
+--n-samples-per-prompt 8
+--global-batch-size 256
+--rollout-max-response-len 16384
+--rollout-temperature 1.0
+--rollout-top-p 1.0
+--rollout-top-k -1
+--rollout-seed 42
+--balance-data
+# --- GRPO loss
+--advantage-estimator grpo
+--eps-clip 0.2
+--eps-clip-high 0.28
+--kl-loss-coef 0.0
+--kl-coef 0.0
+--entropy-coef 0.0
+--use-tis
+# --- optimizer (Megatron "adam" is AdamW: decoupled weight decay)
+--optimizer adam
+--lr 1e-6
+--lr-decay-style constant
+--lr-warmup-iters 0
+--weight-decay 0.0
+--adam-beta1 0.9
+--adam-beta2 0.999
+--clip-grad 1.0
+--seed 42
+# --- Megatron parallelism (recipe for small Qwen3.5 dense: TP=2 + SP, full recompute, dynamic batch)
+--tensor-model-parallel-size 2
+--sequence-parallel
+--pipeline-model-parallel-size 1
+--context-parallel-size 1
+--expert-model-parallel-size 1
+--expert-tensor-parallel-size 1
+--recompute-granularity full
+--recompute-method uniform
+--recompute-num-layers 1
+--use-dynamic-batch-size
+--max-tokens-per-gpu 18432
+--attention-dropout 0.0
+--hidden-dropout 0.0
+--accumulate-allreduce-grads-in-fp32
+--attention-softmax-in-fp32
+# As shipped on B200 (envs/miles/NOTES.md "As shipped (2026-11-10)"): the recipe's flash backend goes TE -> FA4 with a wrong
+# causal window (wrong forward, no head_dim-256 backward), fused has no sm100 head_dim-256 backward. unfused is a shipped
+# Megatron/TE backend (miles uses it for Gemma 4); it keeps thd packing and matches SGLang (smoke 368249). ~7x slower train.
+--attention-backend unfused
+# --- SGLang (recipe: TP=1 engines for Qwen3.5)
+--rollout-num-gpus-per-engine 1
+--sglang-mem-fraction-static 0.7
+--check-weight-update-skip-list visual
+# --- placement: 4 train + 4 rollout GPUs on one node
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+--num-gpus-per-node 8
+--rollout-num-gpus 4

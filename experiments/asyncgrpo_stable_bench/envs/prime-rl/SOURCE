@@ -1,0 +1,16 @@
+# prime-rl: pinned to main (167 commits after v0.10.0); see NOTES.md for why. Checkout used by every job:
+repo             https://github.com/PrimeIntellect-ai/prime-rl
+sha              cbd3702237bc7d4e01ed8ff003e46b2a7d56c951   # main, committed 2026-11-07T18:24:14-08:00; pyproject says 0.10.0
+checkout         /fsx/amine_dirhoussi/stable-bench-src/prime-rl
+deps/verifiers        72d08a0b656284a2e83e7e45f512297119a29b7a   # v0.4.0-163-g72d08a0b6
+deps/renderers        a9d16769865bba7506f3a7ce91d34c25b9ae7365   # renderers-v0.2.0
+deps/prime-envs       f34b8612d19c24491afc1b322b8278a1c184b3ee   # git-lfs files not fetched (NOTES.md #1)
+deps/pydantic-config  65b15dffba82d4be19efdaf8b2b9705cc1756be8   # v0.4.3
+deps/prime-kernels    b52bd9dd4fb8f1c8b14bc5bc7c7155f9b62dde17   # v0.1.0-b050074
+venv             /fsx/amine_dirhoussi/envs/bench-prime-rl   # uv sync --frozen --all-extras --all-packages (install.sh)
+torch            2.13.0+cu130
+vllm             0.32.0
+transformers     5.19.0
+flash_linear_attention 0.6.0 (git 413ad2c)
+flash_attn       2.8.3; flash-attn-4 4.0.0b27 (attn = "auto" -> FA4 on B200)
+causal_conv1d    not installed (prime-rl uses fla's Triton causal_conv1d; NOTES.md #4)

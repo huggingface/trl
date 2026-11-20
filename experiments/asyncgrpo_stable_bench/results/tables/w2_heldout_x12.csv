@@ -1,0 +1,18 @@
+family,lib,step,model,eval_job,mean,scored,episodes,se_binomial,se_task,tasks,old_eval_job,old_mean,old_scored,old_se_binomial,old_se_task
+9B,base,0,Qwen/Qwen3.5-9B,373569,0.3012,166,168,0.0356,0.0705,14,365489,0.3704,54,0.0657,0.0837
+9B,TRL (st8),20,/fsx/amine_dirhoussi/stable-bench-runs/trl/trl-w2-M-local-sharded-st8-372267/checkpoint-20,373606,0.3855,166,168,0.0378,0.0726,14,372718,0.3818,55,0.0655,0.0881
+9B,TRL (st8),40,/fsx/amine_dirhoussi/stable-bench-runs/trl/trl-w2-M-local-sharded-st8-372267/checkpoint-40,373791,0.4167,168,168,0.0380,0.0688,14,372768,0.4643,56,0.0666,0.0780
+9B,TRL (st8),60,/fsx/amine_dirhoussi/stable-bench-runs/trl/trl-w2-M-local-sharded-st8-372267/checkpoint-60,373571,0.4431,167,168,0.0384,0.0668,14,372785,0.4286,56,0.0661,0.0995
+9B,prime-rl,20,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-M-shared-368590/hf/step_20,373679,0.3373,166,168,0.0367,0.0723,14,370583,0.4107,56,0.0657,0.1035
+9B,prime-rl,40,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-M-shared-368590/hf/step_40,373806,0.4048,168,168,0.0379,0.0869,14,372305,0.5000,56,0.0668,0.0869
+9B,prime-rl,60,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-M-shared-368590/hf/step_60,373572,0.4107,168,168,0.0380,0.0840,14,371700,0.4821,56,0.0668,0.0997
+9B,verl,20,/fsx/amine_dirhoussi/stable-bench-runs/verl/verl-w2-M-shared-371895/ckpt/global_step_20/actor/huggingface,373746,0.3690,168,168,0.0372,0.0634,14,372154,0.4000,55,0.0661,0.0721
+9B,verl,40,/fsx/amine_dirhoussi/stable-bench-runs/verl/verl-w2-M-shared-371895/ckpt/global_step_40/actor/huggingface,373826,0.3697,165,168,0.0376,0.0726,14,372207,0.4182,55,0.0665,0.0931
+9B,verl,60,/fsx/amine_dirhoussi/stable-bench-runs/verl/verl-w2-M-shared-371895/ckpt/global_step_60/actor/huggingface,373637,0.4286,168,168,0.0382,0.0659,14,372379,0.4643,56,0.0666,0.1010
+35B-A3B,base,0,Qwen/Qwen3.5-35B-A3B,373570,0.5774,168,168,0.0381,0.1046,14,372068,0.5179,56,0.0668,0.0806
+35B-A3B,TRL (st8),20,/fsx/amine_dirhoussi/stable-bench-runs/trl-moe-ep/merged/trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251-checkpoint-20,373756,0.5952,168,168,0.0379,0.0976,14,372719,0.5893,56,0.0657,0.0967
+35B-A3B,TRL (st8),40,/fsx/amine_dirhoussi/stable-bench-runs/trl-moe-ep/merged/trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251-checkpoint-40,373828,0.5542,166,168,0.0386,0.0935,14,372774,0.5636,55,0.0669,0.1155
+35B-A3B,TRL (st8),60,/fsx/amine_dirhoussi/stable-bench-runs/trl-moe-ep/merged/trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251-checkpoint-60,373681,0.6071,168,168,0.0377,0.0779,14,372836,0.6071,56,0.0653,0.1134
+35B-A3B,prime-rl,20,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-moe-shared-371663/hf/step_20,373761,0.5536,168,168,0.0384,0.1065,14,372600,0.5893,56,0.0657,0.1100
+35B-A3B,prime-rl,40,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-moe-shared-371663/hf/step_40,373833,0.5595,168,168,0.0383,0.1046,14,372662,0.5179,56,0.0668,0.0925
+35B-A3B,prime-rl,60,/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/prime-rl-w2-moe-shared-371663/hf/step_60,373680,0.5833,168,168,0.0380,0.0981,14,372663,0.6250,56,0.0647,0.0936

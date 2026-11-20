@@ -1,0 +1,6 @@
+lib,run_id,label,long_label,status,last_step,family,status_note,role,trained,forwarded,ratio
+trl,trl-w2-M-local-sharded-st8-372267,TRL,"TRL, local Apptainer containers, Harbor server sharded, call cap passed through a launcher wrapper",done,60,9B,,main,27498538.0,3563471.0,7.72
+prime-rl,prime-rl-w2-M-shared-368590,prime-rl,"prime-rl, local podman containers",done,60,9B,,main,28966734.0,1784776.0,16.23
+verl,verl-w2-M-shared-371895,verl,verl (verl-w2-M-shared-371895),done,60,9B,,main,32674696.0,2019342.0,16.18
+trl,trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,"TRL, 35B-A3B LoRA","TRL, 35B-A3B LoRA (trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251)",in progress,60,35B-A3B,"training, step 60",main,25794784.0,3553171.0,7.26
+prime-rl,prime-rl-w2-moe-shared-371663,"prime-rl, 35B-A3B LoRA","prime-rl, 35B-A3B LoRA (prime-rl-w2-moe-shared-371663)",done,60,35B-A3B,,main,13191029.0,953708.0,13.83

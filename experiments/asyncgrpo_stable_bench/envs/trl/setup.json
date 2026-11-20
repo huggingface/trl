@@ -1,0 +1,15 @@
+{
+ "lib": "trl",
+ "lib_version": "1.18.0.dev0",
+ "lib_sha": "5623e8b63",
+ "install_wall_s": 727,
+ "install_wall_s_note": "clean venv to passing import: 107 s for venv + 228 packages with a warm uv cache on /fsx (job 364109) + 620 s to build the causal-conv1d wheel on hopper-dev (job 364159). With the shared wheel already in stable-bench-src/wheels/torch2.14-cu130-py312 it is ~2 min.",
+ "install_steps": 0,
+ "install_steps_note": "install.sh is one script, but it has to run on hopper-dev (or a GPU node), not hopper-cpu: the causal-conv1d build needs a CUDA toolkit",
+ "venv_gb": 9.5,
+ "versions": {"vllm": "0.33.0", "torch": "2.14.0+cu130", "transformers": "5.20.2", "flash-linear-attention": "0.6.0", "fla-core": "0.6.0", "causal-conv1d": "1.7.0 (built sm_90+sm_100)", "kernels": "0.17.3", "triton": "3.8.0", "flashinfer-python": "0.7.2.post1", "flashinfer-jit-cache": "0.7.2.post1+cu130", "trackio": "0.45.0", "math-verify": "0.9.0", "python": "3.12.12"},
+ "first_step_s": {"S": 944},
+ "first_step_s_note": "W1-S smoke job 364223 (2 vLLM + 2 train B200): vLLM healthy at 357 s (warm torch.compile + FlashInfer caches; 922 s on a fully cold start), first optimizer step at 944 s (first rollouts are up to 8192 tokens; step 1 also autotunes the Triton tree kernels)",
+ "conflicts": [],
+ "patches": []
+}

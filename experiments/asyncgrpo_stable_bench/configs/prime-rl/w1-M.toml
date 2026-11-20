@@ -1,0 +1,70 @@
+# W1 math, size M, prime-rl. Mapping of every SHARED_W1 knob: configs/prime-rl/EQUIVALENCE.md.
+# M = w1-S.toml with only [model] name changed: FSDP2 over 4 GPUs, full activation checkpointing and CPU-offloaded AdamW
+# (prime-rl defaults) already fit 9B on 4 B200, so no knob needed changing. See EQUIVALENCE.md, section "M".
+# Launch: launch/prime-rl/w1.sbatch (puts configs/prime-rl on PYTHONPATH for the taskset and the loss).
+max_steps = 200
+
+[model]
+name = "Qwen/Qwen3.5-9B"
+# No [model.vlm]: text-only on the VLM checkpoint, the trainer freezes the vision encoder itself.
+
+[deployment]
+num_train_gpus = 4
+num_infer_gpus = 4
+
+[ckpt]
+interval = 50 # DCP checkpoints at 50/100/150/200, exported to HF safetensors by w1.sbatch
+
+[orchestrator]
+batch_size = 256 # rollouts per step = 32 prompts x 8
+constant_trainer_batch_size = false # SHARED_W1 rev. 1: the next 32 groups as they come, no refill of zero-advantage groups (lib default true refills)
+seq_len = 18432 # max prompt (2048, rev. 1) + max completion (16384, rev. 2); longest W1 prompt is 1517 tokens, so nothing is truncated
+# max_staleness left at the lib default (8 policy versions, token-level masking)
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = false # SHARED_W1 rev. 2: passed explicitly; prompt ends with <|im_start|>assistant\n<think>\n\n</think>\n\n
+
+[orchestrator.train]
+group_size = 8
+
+[orchestrator.train.algo]
+type = "grpo" # reward minus group mean, no std normalization, token-level aggregation (the defaults)
+
+[orchestrator.train.sampling]
+temperature = 1.0
+top_p = 1.0
+max_completion_tokens = 16384 # SHARED_W1 rev. 2
+
+# Untruncated sampling stated explicitly, as prime-rl's examples/extra/vlm/rl-qwen3.5.toml does. Qwen3.5-2B and -9B ship no
+# generation_config.json, so vLLM's defaults (top_k off, min_p 0) would apply anyway; this pins them.
+[orchestrator.train.sampling.extra_body]
+top_k = -1
+min_p = 0.0
+
+[[orchestrator.train.source]]
+name = "w1-math"
+env.taskset.id = "bench_w1_math"
+env.agent.harness.id = "null"
+env.agent.runtime.type = "subprocess"
+
+[trainer.model]
+seq_len = 18432 # packed micro-batch length = orchestrator.seq_len (1x, not the 2x of hendrycks-sanity: 36k-token micro-batches would
+# need ~37 GB of fp32 logits alone with Qwen3.5's 248k vocab)
+
+[trainer.optim]
+type = "adamw"
+lr = 1e-6
+weight_decay = 0.0
+betas1 = 0.9
+betas2 = 0.999
+max_norm = 1.0
+
+[trainer.scheduler]
+type = "constant"
+
+# loss: prime-rl's built-in default (IPO), SHARED_W1 rev. 8 (built-in options only; the custom PPO-clip loss is no longer used)
+
+[inference.vllm]
+max_model_len = 18432
+seed = 42

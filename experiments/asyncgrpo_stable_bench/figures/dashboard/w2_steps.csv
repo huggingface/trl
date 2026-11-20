@@ -1,0 +1,1135 @@
+run,lib,model,arm,note,task,step,hours,step_time_s,train_reward
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,1,0.0,729.4131451920257,0.375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,2,0.03,109.0883962190128,0.515625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,3,0.043,45.26929778899648,0.4375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,4,0.082,141.44927477798774,0.390625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,5,0.135,191.4519311840122,0.453125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,6,0.189,194.7947382950224,0.546875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,7,0.245,198.74071048697806,0.4166666666666667
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,8,0.287,153.87680967099732,0.515625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,9,0.337,178.6550245899998,0.53125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,10,0.381,159.0578424219857,0.484375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,11,0.44,211.26469483898836,0.375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,12,0.49,179.6607957050146,0.59375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,13,0.537,169.81878765998408,0.4375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,14,0.589,187.43116865699994,0.40625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,15,0.646,205.69571252999594,0.40625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,16,0.687,148.22381817901623,0.53125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,17,0.734,167.32972475100541,0.53125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,18,0.801,241.97484372198232,0.46875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,19,0.851,181.3320877760125,0.453125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,20,0.9,175.1332766879932,0.65625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,21,0.958,208.33201103800093,0.609375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,22,0.992,121.68557770198095,0.453125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,23,1.057,235.88384745101212,0.640625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,24,1.096,137.9780330240028,0.609375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,25,1.159,228.9670484100061,0.4444444444444444
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,26,1.227,243.43537179200212,0.609375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,27,1.264,132.5421339420136,0.65625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,28,1.326,222.72518323801341,0.5625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,29,1.364,136.75632226199377,0.625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,30,1.436,260.760883223993,0.609375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,31,1.481,163.35979673601105,0.65625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,32,1.543,220.63446551800007,0.5625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,33,1.589,168.5415373829892,0.640625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,34,1.622,116.21368902700488,0.703125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,35,1.703,292.33331482697395,0.578125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,36,1.734,111.95850942100515,0.5
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,37,1.796,224.04136699502124,0.90625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,38,1.861,231.47707415398327,0.640625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,39,1.896,128.84720050901524,0.59375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,40,1.963,238.58902732099523,0.65625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,41,2.001,136.40048686700175,0.8125
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,42,2.077,276.11543043897836,0.5625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,43,2.112,124.5410804010171,0.59375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,44,2.174,223.47066407700186,0.734375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,45,2.224,180.35853856100584,0.765625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,46,2.281,204.5864751530171,0.546875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,47,2.337,201.23502544901567,0.75
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,48,2.374,135.64792952500284,0.765625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,49,2.454,285.1535954840074,0.546875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,50,2.48,93.02478813199559,0.671875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,51,2.547,244.20710332202725,0.84375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,52,2.575,100.05649924700265,0.6875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,53,2.652,277.88599544900353,0.609375
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,54,2.715,226.97129628798575,0.75
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,55,2.759,157.38574959500693,0.765625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,56,2.823,229.98716377999517,0.5625
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,57,2.865,150.06948266900145,0.71875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,58,2.919,194.93875308000133,0.875
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,59,2.953,123.60963012001594,0.75
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,TermGrade,60,3.028,269.06708548401366,0.640625
+prime-rl-w2-M-shared-smoke-368237,prime-rl,9B,shared-smoke,smoke,TermGrade,1,0.0,1193.226083993999,0.28125
+prime-rl-w2-M-shared-smoke-368237,prime-rl,9B,shared-smoke,smoke,TermGrade,2,0.055,198.98535880001145,0.6875
+prime-rl-w2-M-shared-smoke-368237,prime-rl,9B,shared-smoke,smoke,TermGrade,3,0.215,576.487948627997,0.578125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,1,0.0,1612.5637793259812,0.609375
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,2,0.037,133.3814156689914,0.75
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,3,0.104,241.79311024799244,0.71875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,4,0.236,475.9606597649981,0.6944444444444444
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,5,0.292,199.74996662899503,0.65625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,6,0.361,248.31670150801074,0.78125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,7,0.509,534.851837980008,0.6875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,8,0.557,171.597479404998,0.65625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,9,0.652,339.98288042499917,0.703125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,10,0.768,418.81421021401184,0.8055555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,11,0.843,270.5390521180234,0.6805555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,12,0.962,428.0162924970209,0.890625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,13,1.017,196.5952221819898,0.8055555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,14,1.129,405.91474004500196,0.6875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,15,1.226,349.27000603999477,0.6388888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,16,1.302,272.668672550004,0.84375
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,17,1.412,395.3282373379916,0.6805555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,18,1.537,451.56254893899313,0.5972222222222222
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,19,1.584,166.72733880300075,0.828125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,20,1.703,427.98298863199307,0.7222222222222222
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,21,1.789,313.0515199530055,0.65625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,22,1.863,265.7319745850109,0.8611111111111112
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,23,1.963,359.79714087900356,0.75
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,24,2.061,351.58445055701304,0.703125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,25,2.169,390.4543727489945,0.828125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,26,2.252,298.65913069900125,0.8055555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,27,2.353,364.1389778289886,0.71875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,28,2.468,413.0369025040127,0.6111111111111112
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,29,2.521,191.32576234801672,0.78125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,30,2.635,408.3879857309803,0.7916666666666666
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,31,2.725,325.496053365001,0.625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,32,2.798,261.453510952997,0.90625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,33,2.924,454.9202687229845,0.734375
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,34,3.001,274.8398404660111,0.5972222222222222
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,35,3.081,288.0549183799885,0.828125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,36,3.174,335.8990337889991,0.7638888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,37,3.293,428.881354844023,0.75
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,38,3.398,376.2874621039955,0.75
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,39,3.442,159.6736822850071,0.921875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,40,3.581,500.34703954000724,0.8055555555555556
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,41,3.662,290.9911537140142,0.78125
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,42,3.74,281.42378978597117,0.890625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,43,3.9,575.7886291029863,0.8
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,44,3.976,273.84817605197895,0.71875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,45,4.071,340.8117106719874,0.8472222222222222
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,46,4.196,451.48117581399856,0.7638888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,47,4.257,218.87105991400313,0.6111111111111112
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,48,4.377,434.4333920450299,0.890625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,49,4.485,386.13099077297375,0.921875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,50,4.571,307.80101884598844,0.6388888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,51,4.696,449.9328311539721,0.75
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,52,4.747,185.1589912790223,0.890625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,53,4.892,521.2746887229732,0.7638888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,54,5.002,396.09386022697436,0.7222222222222222
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,55,5.057,197.52876086201286,0.90625
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,56,5.196,499.69897141796537,0.7375
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,57,5.29,339.93989126902306,0.6388888888888888
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,58,5.359,246.07813432998955,0.7916666666666666
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,59,5.475,420.357454490033,0.796875
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,TermGrade,60,5.554,282.08760039298795,0.6388888888888888
+prime-rl-w2-moe-shared-smoke-371339,prime-rl,35B-A3B,shared-smoke,smoke,TermGrade,1,0.0,1566.7018739829946,0.6805555555555556
+prime-rl-w2-moe-shared-smoke-371339,prime-rl,35B-A3B,shared-smoke,smoke,TermGrade,2,0.063,227.01871552801458,0.78125
+prime-rl-w2-moe-shared-smoke-371339,prime-rl,35B-A3B,shared-smoke,smoke,TermGrade,3,0.155,331.516889438004,0.725
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,1,0.0,2034.094482421875,0.65625
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,2,0.553,1990.881591796875,0.484375
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,3,0.955,1446.6204833984375,0.515625
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,4,1.476,1875.288818359375,0.375
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,5,1.871,1422.3953857421875,0.375
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,TermGrade,6,2.398,1896.343017578125,0.34375
+skyrl-w2-M-smoke-365030,skyrl,9B,smoke,smoke,TermGrade,1,0.0,1149.02734375,0.25
+skyrl-w2-M-smoke-365030,skyrl,9B,smoke,smoke,TermGrade,2,0.109,392.1961364746094,0.5625
+skyrl-w2-M-smoke-365030,skyrl,9B,smoke,smoke,TermGrade,3,0.223,370.7107849121094,0.8125
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,1,0.0,,0.475
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,2,0.073,262.66314648394473,0.425531914893617
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,3,0.243,613.0336071980419,0.30357142857142855
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,4,0.385,508.75985018798383,0.4722222222222222
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,5,0.525,505.4149218489765,0.5272727272727272
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,6,0.652,455.9457756600459,0.38461538461538464
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,7,0.893,868.1612998299534,0.4411764705882353
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,8,1.105,763.9710795690189,0.32051282051282054
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,9,1.25,521.4826899080072,0.3
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,10,1.378,460.0100390909938,0.5125
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,11,1.56,656.6902726269909,0.5555555555555556
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,12,1.707,528.1725504270289,0.4375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,13,1.887,650.3851351169869,0.4375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,14,2.036,536.4054504869855,0.5416666666666666
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,15,2.215,642.3256811010069,0.4583333333333333
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,16,2.441,814.03743428702,0.47126436781609193
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,17,2.629,676.208125412988,0.5340909090909091
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,18,2.748,428.79719059402123,0.325
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,19,2.943,701.7366255749948,0.4722222222222222
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,20,3.114,615.8157821019995,0.525
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,21,3.262,534.6132043320104,0.453125
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,22,3.436,625.8790771809872,0.32142857142857145
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,23,3.593,562.7001964889932,0.5465116279069767
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,24,3.786,697.3150003050105,0.53125
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,25,3.923,491.2976581839612,0.3829787234042553
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,26,4.074,543.6366137909936,0.609375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,27,4.224,542.3828012060258,0.609375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,28,4.372,532.6238724010182,0.42857142857142855
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,29,4.499,454.57184190198313,0.375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,30,4.664,594.3450741320266,0.6944444444444444
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,31,4.848,664.4154165950022,0.4788732394366197
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,32,5.019,615.4271027889918,0.45454545454545453
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,33,5.198,642.4416657809634,0.609375
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,34,5.36,586.0765676560113,0.475
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,35,5.497,490.6060082539916,0.5357142857142857
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,36,5.666,610.10106111801,0.5
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,37,5.857,685.2657446669764,0.65
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,38,6.028,617.1826845280011,0.5211267605633803
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,39,6.142,410.04904633102706,0.5
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,40,6.321,643.2743434939766,0.6875
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,41,6.481,578.5778847270412,0.5
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,42,6.64,572.1344436529907,0.2916666666666667
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,43,6.847,745.116815419984,0.625
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,44,7.018,615.7266006959835,0.53125
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,45,7.127,392.02237961703213,0.525
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,46,7.245,423.0975333940005,0.515625
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,47,7.472,816.7261400179705,0.6666666666666666
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,48,7.628,563.8111994930077,0.5535714285714286
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,49,7.758,468.3743054360384,0.546875
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,50,7.949,687.6666856309748,0.7083333333333334
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,51,8.092,514.0528813449782,0.5178571428571429
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,52,8.292,718.1173044750467,0.3888888888888889
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,53,8.486,698.6866967209498,0.7272727272727273
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,54,8.664,642.027925891045,0.640625
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,55,8.809,523.1336227889988,0.5416666666666666
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,56,8.939,467.0728185889893,0.515625
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,57,9.121,653.3859096600208,0.8
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,58,9.315,699.0691514579812,0.6031746031746031
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,59,9.44,450.0334627190023,0.5625
+trl-w2-M-local-366992,trl,9B,local,,TermGrade,60,9.612,621.2716122929705,0.65625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,1,0.0,,0.4915254237288136
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,2,0.056,202.3112283660157,0.5714285714285714
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,3,0.124,244.4380446949799,0.4270833333333333
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,4,0.216,331.1181447850249,0.3854166666666667
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,5,0.258,151.51789524499327,0.34210526315789475
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,6,0.318,216.42934293599683,0.5
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,7,0.375,205.27461442101048,0.5833333333333334
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,8,0.444,247.94162985798903,0.4
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,9,0.486,149.36951780100935,0.4426229508196721
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,10,0.532,165.04873606699402,0.5694444444444444
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,11,0.598,238.08032803799142,0.46875
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,12,0.646,174.3860260139918,0.43636363636363634
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,13,0.689,153.2757107760117,0.5875
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,14,0.758,251.1415047640039,0.3492063492063492
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,15,0.801,153.12981541099725,0.5384615384615384
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,16,0.885,301.60461845301325,0.453125
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,17,0.948,227.96193165599834,0.3541666666666667
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,18,1.009,219.6214435409929,0.3563218390804598
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,19,1.052,153.9889845380094,0.7142857142857143
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,20,1.104,187.3163870999997,0.4305555555555556
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,21,1.204,359.6883707579982,0.4125
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,22,1.246,153.31423838899354,0.625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,23,1.289,151.91056997899432,0.7
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,24,1.349,218.77463787799934,0.3875
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,25,1.402,190.8457854060107,0.5340909090909091
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,26,1.461,210.12560660298914,0.703125
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,27,1.534,263.5425127609924,0.5138888888888888
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,28,1.583,178.42769283201778,0.4027777777777778
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,29,1.627,155.8689815349935,0.7321428571428571
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,30,1.71,301.30706220300635,0.59375
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,31,1.766,201.6229808589851,0.4647887323943662
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,32,1.809,151.26670208899304,0.546875
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,33,1.85,147.55954671400832,0.6071428571428571
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,34,1.912,225.8021794600063,0.5416666666666666
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,35,1.954,151.86764661900816,0.5833333333333334
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,36,1.997,154.01272432800033,0.625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,37,2.065,242.84086943298462,0.6388888888888888
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,38,2.122,208.1312538050115,0.5625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,39,2.186,229.1047418550006,0.5949367088607594
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,40,2.226,144.56926326200482,0.825
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,41,2.328,365.49795908798114,0.5555555555555556
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,42,2.368,146.2222555509943,0.5384615384615384
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,43,2.41,151.30415293600527,0.5
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,44,2.451,147.11642316600773,0.59375
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,45,2.494,152.12448897599825,0.6388888888888888
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,46,2.534,146.721644817997,0.525
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,47,2.577,155.26889064299758,0.575
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,48,2.619,151.1525437750097,0.5357142857142857
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,49,2.661,148.50846542799263,0.7321428571428571
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,50,2.73,249.24805341899628,0.4126984126984127
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,51,2.773,154.19922666600905,0.5
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,52,2.818,164.05076786701102,0.5694444444444444
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,53,2.868,180.10244945599698,0.8035714285714286
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,54,2.925,205.54809310799465,0.4
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,55,2.966,147.62327355099842,0.625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,56,3.023,203.0167029919976,0.5492957746478874
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,57,3.065,152.55085980900913,0.7678571428571429
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,58,3.132,240.49598320698715,0.5625
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,59,3.217,305.0245895849948,0.6363636363636364
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,TermGrade,60,3.26,153.9928957200027,0.6071428571428571
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,1,0.0,,0.5089285714285714
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,2,0.07,251.8237043810077,0.32857142857142857
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,3,0.113,154.674631724949,0.375
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,4,0.174,220.5560242460342,0.45
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,5,0.218,156.74623294500634,0.475
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,6,0.281,228.30186899693217,0.3670886075949367
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,7,0.325,156.20850645308383,0.5568181818181818
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,8,0.394,251.86023350898176,0.5
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,9,0.438,156.74480427999515,0.3333333333333333
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,10,0.488,178.65727746800985,0.53125
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,11,0.542,195.75652231101412,0.5277777777777778
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,12,0.595,189.68580134701915,0.6
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,13,0.65,200.03682652499992,0.4027777777777778
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,14,0.706,201.92334812297486,0.5774647887323944
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,15,0.769,224.26229078392498,0.4
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,16,0.82,183.55758055206388,0.4722222222222222
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,17,0.885,235.59378116193693,0.4270833333333333
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,18,0.945,216.6898913939949,0.6041666666666666
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,19,0.989,156.11496931500733,0.4090909090909091
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,20,1.053,230.47252495004795,0.6770833333333334
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,21,1.156,372.0354526080191,0.46875
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,22,1.197,148.60641549702268,0.5375
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,23,1.24,152.48070691991597,0.515625
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,24,1.281,150.3418240910396,0.6984126984126984
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,25,1.323,150.45611290901434,0.35443037974683544
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,26,1.365,149.802005287027,0.71875
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,27,1.416,182.99690709391143,0.44642857142857145
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,28,1.475,213.77304788609035,0.578125
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,29,1.516,148.22781537589617,0.5833333333333334
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,30,1.557,145.88965382205788,0.32142857142857145
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,31,1.617,218.6190229599597,0.625
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,32,1.658,147.69141855603084,0.546875
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,33,1.713,197.32884730305523,0.625
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,34,1.754,147.48283304995857,0.4375
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,35,1.81,200.3162222940009,0.4444444444444444
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,36,1.852,152.56808746198658,0.703125
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,37,1.931,283.75235900306143,0.4358974358974359
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,38,1.997,238.56155295297503,0.5416666666666666
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,39,2.036,140.03992725594435,0.7142857142857143
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,40,2.101,233.76908553601243,0.55
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,41,2.203,365.4002110520378,0.6
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,42,2.245,153.1580882659182,0.5982142857142857
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,43,2.288,152.52507652703207,0.375
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,44,2.332,159.4669480570592,0.6041666666666666
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,45,2.372,145.91588885698002,0.5945945945945946
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,46,2.414,147.9458533730358,0.7
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,47,2.464,179.93716392491478,0.515625
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,48,2.507,157.14513812598307,0.525
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,49,2.557,177.51797536108643,0.8392857142857143
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,50,2.613,204.2310078840237,0.5625
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,51,2.672,212.4756775489077,0.5673076923076923
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,52,2.758,309.3879067270318,0.6354166666666666
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,53,2.8,150.31605940905865,0.6808510638297872
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,54,2.846,164.8614427249413,0.5454545454545454
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,55,2.92,266.6688500359887,0.55
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,56,2.967,169.51534748799168,0.675
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,57,3.014,167.87650382204447,0.6022727272727273
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,58,3.073,214.5196693589678,0.8392857142857143
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,59,3.117,159.0788451610133,0.6
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,TermGrade,60,3.183,235.90756782901008,0.609375
+trl-w2-M-localsmoke-366737,trl,9B,localsmoke,smoke,TermGrade,1,0.0,,0.5531914893617021
+trl-w2-M-localsmoke-366737,trl,9B,localsmoke,smoke,TermGrade,2,0.103,370.4711394520127,0.125
+trl-w2-M-localsmoke-366737,trl,9B,localsmoke,smoke,TermGrade,3,0.24,494.0080345499737,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,1,0.0,,0.4330708661417323
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,2,0.083,298.86764625797514,0.5
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,3,0.229,526.0364096540143,0.453125
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,4,0.368,500.56415607599774,0.5396825396825397
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,5,0.54,618.7643668460078,0.4875
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,6,0.631,328.1894262249698,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,7,0.724,335.0164613540401,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,8,0.899,628.9311887410004,0.5555555555555556
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,9,1.066,601.207270451996,0.3888888888888889
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,10,1.235,606.6325706790085,0.296875
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,11,1.429,700.23729073297,0.6022727272727273
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,12,1.543,408.6219160089968,0.34375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,13,1.696,553.0593017759966,0.4642857142857143
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,14,1.807,399.0299387500272,0.3541666666666667
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,15,1.973,597.0099073339952,0.6145833333333334
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,16,2.126,551.397768004972,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,17,2.255,464.6344463429996,0.35
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,18,2.327,257.2708168970421,0.375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,19,2.512,666.3736532649491,0.6375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,20,2.656,520.6494278230239,0.4642857142857143
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,21,2.804,533.035024309007,0.4583333333333333
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,22,2.906,366.1343293329701,0.375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,23,3.067,577.8981563710258,0.5178571428571429
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,24,3.201,484.68373452097876,0.5535714285714286
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,25,3.301,359.77220223704353,0.3958333333333333
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,26,3.443,509.636986796977,0.484375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,27,3.604,581.8303641310195,0.7619047619047619
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,28,3.702,351.57675756397657,0.59375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,29,3.861,572.0587827010313,0.5625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,30,3.997,491.5186230909894,0.3392857142857143
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,31,4.199,724.1937423089985,0.6455696202531646
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,32,4.342,515.702058589959,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,33,4.477,487.68703590804944,0.48936170212765956
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,34,4.622,521.1160058469977,0.39285714285714285
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,35,4.765,514.0364196510054,0.6323529411764706
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,36,4.919,555.1982708619907,0.546875
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,37,5.082,585.6548159099766,0.4583333333333333
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,38,5.283,724.8476060130051,0.5972222222222222
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,39,5.369,310.85042584501207,0.6190476190476191
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,40,5.505,489.2197714719805,0.40625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,41,5.666,579.7115989060258,0.3958333333333333
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,42,5.815,534.5539539059973,0.6363636363636364
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,43,5.964,535.3628969459678,0.45454545454545453
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,44,6.058,340.14521044900175,0.5384615384615384
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,45,6.183,449.707109666022,0.42857142857142855
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,46,6.347,589.9290987509885,0.765625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,47,6.44,335.3571370540303,0.525
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,48,6.58,505.47684489400126,0.609375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,49,6.701,434.8792330150027,0.5
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,50,6.754,188.76910950499587,0.5625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,51,6.921,603.770903119992,0.725
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,52,7.069,531.3718244860065,0.5573770491803278
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,53,7.217,534.0972151999595,0.4375
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,54,7.42,729.6790581470123,0.625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,55,7.507,313.64422067900887,0.625
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,56,7.655,532.9354954459704,0.5833333333333334
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,57,7.743,315.03684176900424,0.8333333333333334
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,58,7.846,372.2526183780283,0.4107142857142857
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,59,7.993,530.4439669040148,0.78125
+trl-w2-M-shared-364987,trl,9B,shared,,TermGrade,60,8.13,492.00945625896566,0.44642857142857145
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,1,0.0,,0.8060344827586207
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,2,0.064,230.42878812702838,0.7
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,3,0.162,353.26043658005074,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,4,0.249,313.5511390939355,0.7279411764705882
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,5,0.375,452.1084685450187,0.65625
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,6,0.431,202.476341622998,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,7,0.546,413.9878984299721,0.7045454545454546
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,8,0.617,255.1082883659983,0.8083333333333333
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,9,0.747,469.01548068306874,0.6805555555555556
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,10,0.815,245.32649882801343,0.8611111111111112
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,11,0.948,475.947406362975,0.70625
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,12,1.011,229.2872819029726,0.6666666666666666
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,13,1.137,454.07346098602284,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,14,1.237,357.01775079604704,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,15,1.345,389.0961605279008,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,16,1.423,280.4755955321016,0.7727272727272727
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,17,1.521,355.40043571789283,0.7109375
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,18,1.592,253.8753209260758,0.7613636363636364
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,19,1.714,441.3253682559589,0.6554621848739496
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,20,1.774,214.7753710320685,0.7596153846153846
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,21,1.906,475.25923190894537,0.7361111111111112
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,22,1.982,273.4575209020404,0.8055555555555556
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,23,2.114,474.683151296922,0.7253521126760564
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,24,2.186,258.5927535829833,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,25,2.287,366.0934341030661,0.6838235294117647
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,26,2.382,338.8267122899415,0.7692307692307693
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,27,2.47,318.40226018300746,0.6274509803921569
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,28,2.584,411.9924515890889,0.8210526315789474
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,29,2.697,404.33399918093346,0.7333333333333333
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,30,2.752,197.32256494998,0.8
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,31,2.864,404.992046408006,0.7605633802816901
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,32,2.973,391.63187938102055,0.8173076923076923
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,33,3.077,376.3925106920069,0.7205882352941176
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,34,3.186,392.01490109297447,0.7307692307692307
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,35,3.263,275.97721765900496,0.7833333333333333
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,36,3.399,488.64132050506305,0.8269230769230769
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,37,3.47,258.254449017928,0.7037037037037037
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,38,3.617,527.184348335024,0.7894736842105263
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,39,3.683,236.72250225197058,0.7368421052631579
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,40,3.822,500.4873440100346,0.7748344370860927
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,41,3.88,210.37218901200686,0.75
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,42,4.006,453.1901524659479,0.7884615384615384
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,43,4.095,319.39826761803124,0.7815126050420168
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,44,4.207,404.0568946900312,0.725
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,45,4.265,208.96730094996747,0.7083333333333334
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,46,4.387,438.35002493707,0.7573529411764706
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,47,4.459,260.4301526820054,0.8522727272727273
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,48,4.62,577.8745299580041,0.7784090909090909
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,49,4.676,202.8855835829163,0.810126582278481
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,50,4.792,417.42236684507225,0.7604166666666666
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,51,4.857,234.0756548969075,0.6517857142857143
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,52,4.966,393.37638803804293,0.7916666666666666
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,53,5.06,337.5892585229594,0.7058823529411765
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,54,5.149,320.2522570010042,0.825
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,55,5.224,271.4382862710627,0.7166666666666667
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,56,5.336,401.91280107200146,0.7708333333333334
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,57,5.42,302.6665197740076,0.7666666666666667
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,58,5.534,409.81278752500657,0.8020833333333334
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,59,5.614,289.84449271694757,0.7569444444444444
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,TermGrade,60,5.707,332.7635915459832,0.828125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,1,0.0,770.6133689300041,0.4285714328289032
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,2,0.042,151.08716136898147,0.390625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,3,0.11,245.21249497198733,0.5396825671195984
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,4,0.146,128.71652534598252,0.484375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,5,0.221,268.6957659199834,0.453125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,6,0.269,174.78848835802637,0.453125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,7,0.322,191.0111856679723,0.453125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,8,0.362,141.85866984300083,0.625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,9,0.444,295.55270852401736,0.375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,10,0.501,203.54331421901588,0.515625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,11,0.552,184.3713151139964,0.53125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,12,0.624,258.42341550899437,0.5714285969734192
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,13,0.692,245.7216698039847,0.4354838728904724
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,14,0.769,276.8133603070164,0.523809552192688
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,15,0.819,179.5628717429936,0.4375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,16,0.866,170.626870631997,0.625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,17,0.923,202.658557502029,0.328125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,18,0.973,181.10689246095717,0.5079365372657776
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,19,1.039,237.9878210099996,0.53125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,20,1.103,230.77972964796936,0.53125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,21,1.163,213.17672822403256,0.515625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,22,1.23,241.72729053598596,0.5873016119003296
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,23,1.281,183.9087857939885,0.31147539615631104
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,24,1.338,206.28785872197477,0.5
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,25,1.389,183.55695688800188,0.390625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,26,1.446,203.0877534050378,0.5625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,27,1.494,172.7369806029601,0.484375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,28,1.544,180.7257802039967,0.609375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,29,1.604,214.90653010102687,0.640625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,30,1.648,159.91839835897554,0.578125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,31,1.718,251.18253799399827,0.4375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,32,1.759,147.4824033160112,0.46875
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,33,1.812,192.10619805398164,0.53125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,34,1.874,222.76376902195625,0.5873016119003296
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,35,1.936,222.13636897900142,0.703125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,36,1.978,151.3440304719843,0.3968254029750824
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,37,2.039,218.07807977497578,0.6875
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,38,2.103,230.04772219405277,0.421875
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,39,2.143,143.71868984401226,0.5555555820465088
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,40,2.245,366.8734629880055,0.5
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,41,2.29,161.19389107299503,0.5079365372657776
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,42,2.346,201.30130500200903,0.5396825671195984
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,43,2.42,266.28897794900695,0.671875
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,44,2.464,159.0702777209808,0.484375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,45,2.522,210.98874186299508,0.5873016119003296
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,46,2.565,151.64152855798602,0.640625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,47,2.636,257.2188690819894,0.5873016119003296
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,48,2.685,174.83247419202235,0.609375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,49,2.743,209.82738768897252,0.4444444477558136
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,50,2.799,200.87661090900656,0.625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,51,2.856,205.84852730302373,0.60317462682724
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,52,2.901,161.73703630600357,0.5714285969734192
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,53,2.953,187.54668438702356,0.6190476417541504
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,54,3.003,177.80981224298012,0.703125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,55,3.067,232.42316835396923,0.484375
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,56,3.135,244.6803229660145,0.640625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,57,3.167,115.06805031001568,0.625
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,58,3.227,215.12023385695647,0.8125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,59,3.288,217.4960872619995,0.453125
+verl-w2-M-shared-371895,verl,9B,shared,,TermGrade,60,3.376,317.3375760590425,0.53125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,1,0.0,,0.7866108786610879
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,2,0.066,239.20770044694655,0.6625
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,3,0.21,516.6623520180001,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,4,0.326,418.2815294820466,0.8392857142857143
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,5,0.4,264.8073484839988,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,6,0.496,346.6704435629654,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,7,0.595,358.0443839140353,0.7058823529411765
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,8,0.691,343.17048213095404,0.71875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,9,0.789,355.14879761403427,0.7647058823529411
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,10,0.874,304.6013424390112,0.8020833333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,11,0.982,389.1253004479804,0.6923076923076923
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,12,1.086,373.289502353,0.6923076923076923
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,13,1.165,284.9142483960022,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,14,1.272,384.4433617829927,0.7416666666666667
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,15,1.375,372.320994329988,0.7111111111111111
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,16,1.471,345.2487279950292,0.7708333333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,17,1.548,278.16356227797223,0.775
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,18,1.68,475.1370468119858,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,19,1.753,260.6067710170173,0.6923076923076923
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,20,1.891,498.02156898600515,0.7828947368421053
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,21,1.947,200.40456589398673,0.75
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,22,2.07,444.31144977902295,0.7578125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,23,2.125,197.31614018802065,0.65
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,24,2.204,283.52916179795284,0.8125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,25,2.293,320.8924313840107,0.7403846153846154
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,26,2.365,258.18354961799923,0.7083333333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,27,2.491,455.5871583420085,0.71875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,28,2.558,242.18446448800387,0.8365384615384616
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,29,2.737,644.2845908090239,0.7277486910994765
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,30,2.843,380.04006109997863,0.8068181818181818
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,31,2.92,275.87781445798464,0.7352941176470589
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,32,3.076,562.7525752520305,0.7573529411764706
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,33,3.14,231.87119369895663,0.71875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,34,3.242,365.02286324399756,0.775
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,35,3.337,341.334007233032,0.7421875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,36,3.467,470.37710713397246,0.7321428571428571
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,37,3.55,297.8081881010439,0.7115384615384616
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,38,3.649,355.4905747359735,0.7410714285714286
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,39,3.76,400.04657559702173,0.8074074074074075
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,40,3.86,360.9560982789844,0.7954545454545454
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,41,3.952,331.6978461720282,0.6875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,42,4.046,337.005619730975,0.7604166666666666
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,43,4.163,423.5234454930178,0.7401574803149606
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,44,4.226,225.9539564709994,0.7875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,45,4.336,393.7956797279767,0.8
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,46,4.407,255.5962597960024,0.7403846153846154
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,47,4.545,499.8747736599762,0.6911764705882353
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,48,4.601,199.30762715102173,0.7916666666666666
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,49,4.726,451.4127471540123,0.7321428571428571
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,50,4.798,257.75562772899866,0.7083333333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,51,4.886,317.3146330669988,0.7788461538461539
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,52,4.977,328.00164047896396,0.7777777777777778
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,53,5.057,286.84958496602485,0.7983193277310925
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,54,5.19,479.8314867520239,0.7604166666666666
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,55,5.254,229.07833364099497,0.7613636363636364
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,56,5.362,391.5247754539596,0.8645833333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,57,5.468,379.58245417504804,0.7142857142857143
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,58,5.532,229.49003634694964,0.859375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,59,5.634,368.851996907033,0.725
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade,60,5.721,312.4858950159978,0.7583333333333333
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,1,0.0,,0.5178571428571429
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,2,0.072,259.709369787015,0.5535714285714286
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,3,0.167,341.64466515392996,0.2767857142857143
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,4,0.247,287.8457058160566,0.5138888888888888
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,5,0.339,331.79919626703486,0.390625
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,6,0.41,254.66378042800352,0.3611111111111111
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,7,0.491,291.0558925459627,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,8,0.594,372.9962029729504,0.33653846153846156
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,9,0.672,279.56084843806457,0.46875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,10,0.775,372.0062945910031,0.40625
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,11,0.847,257.1729375239229,0.5178571428571429
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,12,0.949,367.86229483399075,0.27848101265822783
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,13,1.02,256.3668217570521,0.4125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,14,1.117,349.5455404330278,0.48717948717948717
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,15,1.232,411.8387176019605,0.40229885057471265
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,16,1.308,273.7863781369524,0.27848101265822783
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,17,1.414,382.17739605600946,0.3563218390804598
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,18,1.478,232.19247291306965,0.4827586206896552
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,19,1.587,392.526661832002,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,20,1.669,293.5449628250208,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,21,1.764,340.4428573939949,0.3684210526315789
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,22,1.841,277.66190670395736,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,23,1.938,351.03664555598516,0.4125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,24,2.018,288.3790750600165,0.55
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,25,2.092,264.2108942270279,0.46875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,26,2.208,418.53244703100063,0.30708661417322836
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,27,2.306,352.2273277270142,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,28,2.385,286.68808162398636,0.41818181818181815
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,29,2.459,264.2931682659546,0.5357142857142857
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,30,2.545,311.25727558799554,0.225
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,31,2.613,245.42362881300505,0.32954545454545453
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,32,2.712,353.67709923000075,0.4225352112676056
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,33,2.808,346.39997955202125,0.42105263157894735
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,34,2.889,292.38086911302526,0.3333333333333333
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,35,3.011,438.5897688969271,0.3333333333333333
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,36,3.1,320.2092426310992,0.525
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,37,3.182,294.2788337469101,0.5138888888888888
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,38,3.265,300.7090749760391,0.453125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,39,3.373,387.8358198630158,0.24210526315789474
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,40,3.437,229.41422814200632,0.4027777777777778
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,41,3.57,481.43939110892825,0.3984375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,42,3.682,402.13636820809916,0.2988505747126437
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,43,3.808,454.12191127298865,0.35833333333333334
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,44,3.881,263.447993648937,0.484375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,45,3.971,321.26758616406005,0.4375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,46,4.056,307.15623251500074,0.26785714285714285
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,47,4.135,286.14563253801316,0.3125
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,48,4.216,290.76100795390084,0.4659090909090909
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,49,4.318,364.8449685910018,0.4050632911392405
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,50,4.401,300.2388125770958,0.4166666666666667
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,51,4.512,398.9645687500015,0.3368421052631579
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,52,4.567,199.22144013096113,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,53,4.68,406.3341152409557,0.375
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,54,4.78,360.4323623050004,0.3557692307692308
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,55,4.903,441.7595753730275,0.2916666666666667
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,56,4.959,202.2676292429678,0.46875
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,57,5.067,389.23845570604317,0.4666666666666667
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,58,5.122,197.91071401303634,0.35
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,59,5.226,373.31161520490423,0.30851063829787234
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,TermGrade-hard,60,5.282,202.1770571860252,0.4305555555555556
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,1,0.0,1703.225521460001,0.4027777777777778
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,2,0.13,469.52306764101377,0.375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,3,0.245,412.1313791159773,0.4444444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,4,0.382,494.41263430798426,0.5416666666666666
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,5,0.509,456.9603169920156,0.3375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,6,0.631,440.127347939997,0.25
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,7,0.775,516.1365235790145,0.3611111111111111
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,8,0.873,353.475464379997,0.5694444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,9,1.029,560.9087071980466,0.5277777777777778
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,10,1.161,474.3376374299987,0.4375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,11,1.301,504.5501082210103,0.3125
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,12,1.43,466.532115650014,0.421875
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,13,1.56,467.7538116860087,0.5694444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,14,1.679,425.85573444800684,0.3611111111111111
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,15,1.858,646.1330229780287,0.3977272727272727
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,16,1.973,412.8291036080336,0.2638888888888889
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,17,2.099,453.71659830299905,0.4305555555555556
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,18,2.235,489.86953732999973,0.5125
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,19,2.395,577.9849352699821,0.325
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,20,2.53,483.246367149055,0.2638888888888889
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,21,2.665,486.4874788510497,0.3611111111111111
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,22,2.771,381.9425299419672,0.4722222222222222
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,23,2.917,527.5690003110212,0.5833333333333334
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,24,3.058,505.46677820797777,0.36363636363636365
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,25,3.202,518.4053029600182,0.35
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,26,3.337,484.96512427704874,0.4444444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,27,3.441,376.0405653709895,0.65625
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,28,3.591,541.7791241270024,0.425
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,29,3.733,511.06852232298115,0.35
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,30,3.874,506.73664800601546,0.2916666666666667
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,31,3.98,379.6896142710466,0.4722222222222222
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,32,4.134,556.3729554939782,0.5555555555555556
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,33,4.282,532.9448923820164,0.3625
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,34,4.411,463.9790103670093,0.3194444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,35,4.537,452.5594145159703,0.3472222222222222
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,36,4.64,369.66641907102894,0.5
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,37,4.774,482.71810259803897,0.5
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,38,4.937,588.7484967799974,0.38636363636363635
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,39,5.087,540.7623386610067,0.4166666666666667
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,40,5.213,452.2304611389991,0.375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,41,5.304,327.90654266095953,0.625
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,42,5.426,440.16616137494566,0.5555555555555556
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,43,5.605,642.094060523028,0.36363636363636365
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,44,5.739,483.0617677579867,0.4305555555555556
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,45,5.857,426.0454197819927,0.3333333333333333
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,46,5.981,446.85296025301795,0.625
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,47,6.126,519.1514632740291,0.4625
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,48,6.295,609.7677457460086,0.42045454545454547
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,49,6.429,483.5958880109829,0.3472222222222222
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,50,6.546,418.8371250879718,0.4166666666666667
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,51,6.666,429.53591112495633,0.53125
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,52,6.867,726.5297771919868,0.3541666666666667
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,53,6.989,437.77635751699563,0.375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,54,7.109,431.91201575798914,0.375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,55,7.251,512.3211012409884,0.4722222222222222
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,56,7.362,398.9082313859835,0.5138888888888888
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,57,7.524,582.7582066710456,0.3375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,58,7.63,381.96799211896723,0.4444444444444444
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,59,7.781,541.8265375450137,0.4375
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,TermGrade-hard,60,7.873,333.2606450630119,0.609375
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,1,0.0,,0.7422238372093024
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,2,0.03,109.31182754295878,0.6582142857142858
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,3,0.085,196.19880869507324,0.7051504629629629
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,4,0.116,113.31852562597487,0.674390243902439
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,5,0.15,120.8673058799468,0.7245370370370371
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,6,0.341,687.8089470540872,0.7105872844827585
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,7,0.376,125.89670537493657,0.7042137096774194
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,8,0.412,130.60803893208504,0.6570494186046512
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,9,0.442,107.40752635791432,0.6505993150684931
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,10,0.481,140.7861664480297,0.7273809523809524
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,11,0.53,175.9404029790312,0.7518429487179487
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,12,0.565,124.19276518491097,0.6740530303030302
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,13,0.59,91.0583709870698,0.7827205882352942
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,14,0.68,325.4661895360332,0.7244791666666667
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,15,0.713,119.02743760193698,0.7525219298245613
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,16,0.75,133.08319822396152,0.7421195652173913
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,17,0.785,125.60416016506497,0.7744791666666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,18,0.841,200.10145814402495,0.7453846153846154
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,19,0.873,116.58176876592916,0.7965865384615385
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,20,0.969,343.80069306702353,0.73046875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,21,1.012,155.3221167550655,0.750974025974026
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,22,1.045,120.15751925995573,0.7232469512195122
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,23,1.11,232.83644652704243,0.6689903846153846
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,24,1.153,153.8752055009827,0.752116935483871
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,25,1.278,452.06292723701335,0.7175
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,26,1.491,766.936763283913,0.7680555555555555
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,27,1.521,106.19177569809835,0.6979166666666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,28,1.549,101.93238093692344,0.7135174418604651
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,29,1.582,117.57288079196587,0.6548611111111111
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,30,1.614,116.44509717507754,0.7227083333333333
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,31,1.75,488.75913071399555,0.6758522727272728
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,32,1.785,125.35041464993265,0.7926682692307693
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,33,1.814,107.59129498701077,0.7659598214285713
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,34,1.849,124.01137061498594,0.8113520408163266
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,35,1.882,118.75086620403454,0.8104166666666667
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,36,1.924,152.07624676800333,0.6793042452830188
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,37,1.954,107.70250381203368,0.7507211538461539
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,38,2.006,185.85899805394,0.784051724137931
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,39,2.037,112.31080739502795,0.8959558823529411
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,40,2.308,976.7835676219547,0.7552083333333334
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,41,2.339,110.71493842208292,0.7795258620689655
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,42,2.378,139.1617882869905,0.90546875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,43,2.41,115.73018111393321,0.740625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,44,2.461,183.49342459707987,0.778
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,45,2.501,144.49227368994616,0.7691576086956522
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,46,2.535,123.25547053804621,0.8299395161290322
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,47,2.569,121.04674599692225,0.6953947368421053
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,48,2.647,281.2145165530965,0.7896075581395349
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,49,2.677,106.71050112799276,0.66015625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,50,2.707,111.34148262499366,0.8025
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,51,2.742,124.94548362295609,0.768014705882353
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,52,2.793,181.89972024096642,0.7983333333333333
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,53,2.823,110.49790679803118,0.784543918918919
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,54,2.911,314.8683289180044,0.8039473684210526
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,55,2.944,119.64754320005886,0.7772865853658536
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,56,2.976,113.42777103290427,0.757375
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,57,3.014,137.62906331010163,0.8119565217391305
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,58,3.047,118.15618456993252,0.7661637931034483
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,59,3.16,409.8939972020453,0.7297619047619047
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,60,3.364,733.2925030379556,0.7847222222222222
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,61,3.39,94.09181249700487,0.7421195652173914
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,62,3.418,100.20363701600581,0.7369932432432432
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,63,3.456,135.8218846960226,0.6949448529411765
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,64,3.488,115.22688033198938,0.7191666666666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,65,3.527,139.76045903295744,0.7778716216216216
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,66,3.785,928.1008557970636,0.6763257575757576
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,67,3.817,117.81168972991873,0.7
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,68,3.851,119.92950669000857,0.8990625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,69,3.883,116.84850938199088,0.6843750000000001
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,70,3.917,123.83986123499926,0.78675
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,71,3.979,220.7407494110521,0.808875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,72,4.012,121.24216490797698,0.6687500000000001
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,73,4.044,112.63961542502511,0.7330729166666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,74,4.074,110.06472344498616,0.7428571428571429
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,75,4.27,703.1670312039787,0.8044117647058824
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,76,4.301,111.94344472198281,0.8
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,77,4.342,149.99610130907968,0.8113636363636364
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,78,4.368,90.76594304502942,0.8037500000000001
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,79,4.41,153.06946143193636,0.8420212765957448
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,80,4.447,133.4701681700535,0.7849137931034482
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,81,4.481,121.07595503900666,0.70625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,82,4.506,92.38607375195716,0.756547619047619
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,83,4.575,247.1318915609736,0.8208333333333333
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,84,4.615,144.80619902699254,0.7303865131578947
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,85,4.646,111.1848261289997,0.8160239361702127
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,86,4.692,165.5029817650793,0.7170138888888888
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,87,4.737,162.60905571794137,0.8435450819672131
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,88,4.77,116.33405889605638,0.7871775793650794
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,89,4.86,325.35581689397804,0.804375
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,90,4.888,102.28865340491757,0.7784090909090909
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,91,4.927,137.40820842806716,0.7889344262295082
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,92,4.964,133.4529453519499,0.7463785046728971
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,93,4.995,113.09152455907315,0.8020833333333334
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,94,5.049,192.2871793420054,0.769758064516129
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,95,5.422,1345.6619686679915,0.757
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,96,5.454,114.5223026300082,0.9296875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,97,5.48,91.86439282190986,0.7355229591836734
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,98,5.516,129.60336591606028,0.751278409090909
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,99,5.544,102.15853339293972,0.7660845588235294
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,Text-to-SQL,100,5.58,128.30025736801326,0.8176704545454545
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,1,0.0,,0.700297619047619
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,2,0.031,112.86865868791938,0.6942307692307692
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,3,0.072,146.96277909807395,0.7548415492957746
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,4,0.106,120.98303567292169,0.698991935483871
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,5,0.139,119.83214952808339,0.7224038461538461
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,6,0.282,514.0120784209576,0.6688089622641509
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,7,0.315,121.04138125095051,0.6892530487804879
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,8,0.355,143.73704528005328,0.6785205696202532
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,9,0.389,119.3484413200058,0.6140943877551021
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,10,0.424,129.15994805202354,0.7912234042553191
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,11,0.476,185.40012441994622,0.75625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,12,0.512,128.48442934604827,0.7501225490196078
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,13,0.545,119.72404583299067,0.7642736486486487
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,14,0.584,139.4908430519281,0.8438775510204082
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,15,0.637,193.29023215000052,0.778485576923077
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,16,0.673,127.56029392208438,0.8376460280373832
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,17,0.711,137.74438289401587,0.8656828703703704
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,18,0.754,155.75014135893434,0.8100877192982455
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,19,0.802,171.55552486795932,0.860593220338983
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,20,0.836,124.17110756505281,0.8300117924528302
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,21,0.938,366.32612720201723,0.8182180851063829
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,22,0.983,161.4389150890056,0.8541666666666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,23,1.027,159.2371954319533,0.8248295454545455
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,24,1.074,167.23937222303357,0.7778729838709677
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,25,1.129,198.52954665198922,0.86875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,26,1.179,181.44378979504108,0.871875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,27,1.48,1081.1892271009274,0.772265625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,28,1.518,138.679503989988,0.7774816176470588
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,29,1.565,168.62496744003147,0.8673411885245902
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,30,1.615,181.808256207034,0.8800403225806451
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,31,1.662,168.44920251402073,0.879950495049505
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,32,1.731,249.23841850401368,0.8462500000000001
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,33,1.818,309.94223169097677,0.8302436440677966
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,34,1.895,278.8430557869142,0.8892857142857142
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,35,1.966,254.51445074006915,0.7975806451612903
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,36,2.022,204.07260930596385,0.9021874999999999
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,37,2.088,236.83714861702174,0.8436899038461539
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,38,2.287,715.3854191770079,0.9059659090909091
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,39,2.349,225.02808782598004,0.8791952054794522
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,40,2.419,248.84092468302697,0.9372983870967742
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,41,2.513,341.4173251609318,0.8171052631578948
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,42,2.6,311.3086220920086,0.8288109756097561
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,43,2.667,242.1566219230881,0.8723379629629631
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,44,2.772,377.04668697097804,0.8228155339805825
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,45,2.824,188.325012227986,0.9392578125
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,46,2.884,214.66848656500224,0.9041666666666667
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,47,2.955,254.52332302497234,0.8826984978540772
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,48,3.017,223.48069461097475,0.8828488372093023
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,49,3.11,337.7275498190429,0.8981646825396825
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,50,3.187,277.4415841960581,0.8613461538461538
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,51,3.261,263.413012842997,0.8530293367346938
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,52,3.317,201.85465797199868,0.85478515625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,53,3.622,1100.6943963479716,0.840948275862069
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,54,3.691,245.59248997701798,0.8922390109890109
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,55,3.784,334.2235718439333,0.8969465648854962
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,56,3.888,374.8108079020167,0.8990178571428571
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,57,3.97,295.92355717904866,0.8683653846153846
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,58,4.043,265.0639717449667,0.8611026422764229
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,59,4.111,244.17021697293967,0.8852040816326531
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,60,4.195,302.39344832405914,0.8799242424242425
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,61,4.265,251.18901524704415,0.8992324561403509
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,62,4.428,586.4031731429277,0.9814583333333334
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,63,4.543,415.27853854803834,0.889171195652174
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,64,4.612,247.5965844669845,0.7968220338983051
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,65,4.748,490.19041099597234,0.9025442477876106
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,66,4.834,310.0670820090454,0.90625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,67,4.917,295.8290944379987,0.95078125
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,68,5.011,338.3717961850343,0.8857065217391304
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,69,5.062,184.32002090895548,0.9206439393939394
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,70,5.164,368.7726623149356,0.9168376865671642
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,71,5.237,262.5284235510044,0.9264802631578947
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,72,5.388,542.4706715750508,0.8772058823529412
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,73,5.478,325.6500750420382,0.9478260869565218
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,74,5.55,258.3318104399368,0.89625
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,75,5.739,680.3238575840369,0.9175872093023255
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,76,5.964,809.2974638079759,0.8591549295774648
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,77,6.027,228.75962192902807,0.8601785714285715
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,78,6.111,302.40355270996224,0.9044117647058824
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,79,6.182,254.22614670405164,0.9453571428571428
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,80,6.257,268.37689584493637,0.9128676470588235
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,81,6.342,309.56784646003507,0.8532986111111112
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,82,6.43,313.93394716701005,0.9144097222222223
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,83,6.524,340.6950460410444,0.8786352040816326
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,84,6.607,297.40706146799494,0.8444444444444444
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,85,6.655,174.44827563897707,0.9355377906976744
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,86,6.811,559.2830125920009,0.8404605263157895
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,87,6.881,253.7561173789436,0.9020422149122808
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,88,6.942,218.77730883704498,0.8066666666666666
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,89,7.023,293.2761105549289,0.9128348214285714
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,90,7.123,358.5002636060817,0.9009375
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,91,7.183,214.00927153695375,0.8612192622950819
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,92,7.284,364.90089695807546,0.9257978723404255
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,93,7.355,255.81654783990234,0.9162499999999999
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,94,7.429,264.92483442404773,0.9354779411764705
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,95,7.505,276.1073756580008,0.9098046875
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,96,7.56,197.5486757849576,0.9064516129032258
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,97,7.695,485.59945452504326,0.9118421052631579
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,98,7.761,237.5601715350058,0.882958984375
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,99,7.898,493.85191451897845,0.8932753164556961
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,Text-to-SQL,100,7.952,192.65786270506214,0.8699652777777778
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,1,0.0,1343.554369512014,0.7491145833333334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,2,0.041,147.43516801501391,0.6318229166666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,3,0.081,145.09545907500433,0.7033299180327869
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,4,0.12,138.7901165559888,0.7032894736842105
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,5,0.184,229.81634158897214,0.6769188596491228
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,6,0.233,176.33829010900808,0.6949353448275862
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,7,0.289,202.5941298630205,0.76
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,8,0.368,284.2330683580367,0.7715725806451613
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,9,0.443,271.5975979609648,0.7738541666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,10,0.538,339.7550743550528,0.8226672535211267
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,11,0.675,494.43432439502794,0.8769451530612244
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,12,0.804,462.738772925979,0.7822544642857142
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,13,0.983,644.1972121350118,0.8146929824561403
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,14,1.151,606.626169316005,0.839385775862069
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,15,1.346,700.6222699820064,0.8295750000000001
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,16,1.558,764.4644704319653,0.7766617063492064
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,17,1.774,775.8287188390386,0.8386566558441557
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,18,2.042,966.8847932569915,0.8946428571428572
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,19,2.302,935.0969781859894,0.8600299401197605
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,20,2.613,1120.6665537629742,0.8734970238095238
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,21,2.922,1110.564644683036,0.8682416267942584
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,22,3.23,1111.3222818340291,0.8698492462311558
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,23,3.548,1143.0732198649785,0.8742105263157894
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,24,3.89,1230.5321733349701,0.8899733412322275
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,25,4.296,1462.184899666987,0.8688401442307693
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,26,4.626,1187.3653006560053,0.8931682180851064
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,27,4.996,1333.1303691469948,0.8386912128712871
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,28,5.363,1322.968995151983,0.8972981770833334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,29,5.776,1484.9756065119873,0.8973374439461883
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,30,6.225,1617.9731081450009,0.8984704641350211
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,31,6.71,1745.6317415910307,0.891537017167382
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,32,7.244,1922.880298839009,0.8911261792452829
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,33,7.645,1443.6281934959698,0.8861952319587629
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,34,8.128,1735.6419458069722,0.9024799311926606
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,35,8.651,1885.972166108957,0.9083825107296137
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,36,9.121,1691.2557448769803,0.8591856060606061
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,37,9.61,1759.4418586569955,0.8876146788990825
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,38,10.197,2111.520116350963,0.9071514423076923
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,39,10.761,2031.448897549999,0.903569560669456
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,Text-to-SQL,40,11.387,2254.729599914979,0.9037755102040816
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,1,0.0,1411.3632196970284,0.74421875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,2,0.048,173.0662949719699,0.6360416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,3,0.087,140.72902671794873,0.705625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,4,0.12,118.62454615801107,0.6861458333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,5,0.187,242.05756059195846,0.69171875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,6,0.234,169.43066274095327,0.7155729166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,7,0.31,273.16179808892775,0.74859375
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,8,0.37,213.55715481494553,0.7222916666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,9,0.444,266.6726448519621,0.8078645833333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,10,0.511,241.96277611597907,0.7643229166666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,11,0.583,258.9285971749341,0.8711458333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,12,0.663,289.2916761880042,0.8307291666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,13,0.764,361.0809725068975,0.7741666666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,14,0.847,301.16892159497365,0.8335416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,15,0.952,378.5674767990131,0.7828125
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,16,1.025,262.55504813301377,0.8725
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,17,1.123,352.77199680602644,0.8249479166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,18,1.239,415.5727529429132,0.8242708333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,19,1.332,335.7012876670342,0.8479166666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,20,1.429,350.2297604919877,0.8225
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,21,1.541,403.10939251689706,0.7195833333333332
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,22,1.625,302.8807199189905,0.8765625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,23,1.732,382.19767087197397,0.8518229166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,24,1.83,353.0047510630684,0.8965625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,25,1.932,369.09235266200267,0.8342708333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,26,2.03,352.881196961971,0.9363541666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,27,2.13,359.8889048040146,0.9030208333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,28,2.237,384.05480621301103,0.8779166666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,29,2.337,360.85704105801415,0.8916666666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,30,2.446,392.6822845740244,0.7998958333333334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,31,2.553,386.01333654497284,0.9123958333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,32,2.662,392.0580157999648,0.9144791666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,33,2.772,394.511447637924,0.8538541666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,34,2.867,342.5577542759711,0.8653125
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,35,2.964,349.54287774895784,0.9135416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,36,3.075,398.5106168889906,0.8382291666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,37,3.173,353.3300488720415,0.8915624999999999
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,38,3.281,390.25903361896053,0.9477083333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,39,3.385,373.1970194230089,0.7935416666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,40,3.492,386.83794715302065,0.9430729166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,41,3.601,391.6035314759938,0.8684375000000001
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,42,3.717,418.386841760017,0.8671354166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,43,3.825,387.1507671950385,0.9096875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,44,3.938,405.4881613270845,0.8671875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,45,4.048,397.2812153659761,0.9466666666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,46,4.175,456.59941221401095,0.9222916666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,47,4.302,457.0715928240679,0.8195833333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,48,4.421,430.5502680100035,0.9013541666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,49,4.543,437.18693447695114,0.8874479166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,50,4.648,373.6145247700624,0.905625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,51,4.773,450.39028254698496,0.8835416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,52,4.89,422.1103009679355,0.8976041666666668
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,53,5.016,450.86326683103107,0.8990625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,54,5.141,451.758296779939,0.8342708333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,55,5.261,431.07143899798393,0.7984895833333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,56,5.371,397.7805710390676,0.8775
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,57,5.497,453.54316061898135,0.8957291666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,58,5.602,375.27688970498275,0.9146875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,59,5.725,445.86330191302113,0.8761979166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,60,5.85,448.38905489700846,0.9277083333333334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,61,5.961,399.03054936393164,0.9029166666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,62,6.07,393.7189349150285,0.9251041666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,63,6.178,387.80776487104595,0.9039583333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,64,6.295,421.8017488970654,0.8551041666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,65,6.408,405.5411538350163,0.9065624999999999
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,66,6.522,410.67006625200156,0.9179166666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,67,6.639,423.3566307879519,0.9185416666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,68,6.754,413.1067675050581,0.9027083333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,69,6.865,399.6114775011083,0.9128124999999999
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,70,6.99,449.9537641289644,0.8961458333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,71,7.095,376.4896939159371,0.91296875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,72,7.207,403.69645742396824,0.9477604166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,73,7.32,407.00450195593294,0.82359375
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,74,7.431,401.3526933810208,0.9663541666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,75,7.559,457.47658063308336,0.8621875
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,76,7.653,340.09683052508626,0.8923958333333334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,77,7.767,411.0646480459254,0.9216666666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,78,7.879,402.1810689709382,0.9091666666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,79,7.993,410.5906275169691,0.9145833333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,80,8.105,402.5207218800206,0.9673958333333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,81,8.236,472.4186722849263,0.8122395833333333
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,82,8.362,454.89233467006125,0.9266666666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,83,8.467,375.3671532049775,0.9394791666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,84,8.572,377.57725118508097,0.9185416666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,85,8.695,444.4740389599465,0.895625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,86,8.815,432.36115484591573,0.9155729166666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,87,8.93,413.57856012810953,0.9143749999999999
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,88,9.054,444.9875388740329,0.870625
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,89,9.181,459.82034898002166,0.8206249999999999
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,90,9.283,365.0376852779882,0.8885416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,91,9.414,473.6426382670179,0.9298958333333334
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,92,9.523,391.60447172110435,0.8985416666666667
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,93,9.643,430.2916885339655,0.9175
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,94,9.755,406.5162889370695,0.9404166666666666
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,95,9.856,360.2016108040698,0.9353125
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,96,9.979,444.91762435191777,0.91
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,97,10.093,410.85918540798593,0.925
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,98,10.212,426.6882032440044,0.8590625000000001
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,99,10.323,399.65987096889876,0.9176562500000001
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,Text-to-SQL,100,10.44,419.2937458519591,0.9267708333333334
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,1,0.0,,0.7228125000000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,2,0.299,1078,0.75140625
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,3,0.511,760,0.8110156249999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,4,0.72,753,0.8271484375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,5,0.958,858,0.803984375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,6,1.277,1148,0.866171875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,7,1.513,851,0.7871875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,8,1.877,1310,0.791953125
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,9,2.107,826,0.855859375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,10,2.309,727,0.8509375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,11,2.544,846,0.8345312500000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,12,2.755,760,0.8735937500000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,13,2.961,742,0.8772265625
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,14,3.171,755,0.8516406249999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,15,3.407,850,0.8276171874999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,16,3.743,1210,0.8344531249999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,17,3.958,774,0.896875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,18,4.168,756,0.8739453125000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,19,4.379,761,0.86296875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,20,4.594,773,0.9046875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,21,4.869,992,0.8635156250000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,22,5.221,1265,0.8731640624999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,23,5.433,763,0.8674609375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,24,5.651,785,0.8699999999999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,25,5.854,733,0.912421875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,26,6.06,740,0.8760937500000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,27,6.265,739,0.8891406250000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,28,6.469,735,0.863046875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,29,6.708,859,0.905625
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,30,6.916,747,0.8941015625000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,31,7.181,955,0.8819531250000001
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,32,7.388,746,0.863515625
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,33,7.598,755,0.8699999999999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,34,7.806,750,0.9046093749999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,35,8.072,958,0.9071875
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,36,8.396,1165,0.8969531249999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,37,8.611,775,0.8765625
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,38,8.819,750,0.890859375
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,39,9.028,750,0.870703125
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,40,9.24,763,0.9037499999999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,41,9.479,862,0.8764062499999999
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,Text-to-SQL,42,9.694,774,0.9096093749999999
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,TermGrade,1,0.0,,0.203125
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,TermGrade,2,0.186,668,0.0859375
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,TermGrade,3,0.369,660,0.015625
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,TermGrade,4,0.517,533,0.046875
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,TermGrade,5,0.704,674,0.0
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,1,0.0,,0.59375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,2,0.324,1165,0.375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,3,0.67,1248,0.4375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,4,1.014,1237,0.40625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,5,1.421,1464,0.5625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,6,1.828,1467,0.375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,7,2.387,2013,0.4375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,8,2.757,1333,0.46875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,9,3.251,1776,0.328125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,10,3.709,1649,0.4375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,11,4.244,1925,0.53125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,12,4.694,1621,0.46875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,13,5.195,1804,0.53125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,14,5.606,1478,0.359375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,15,6.044,1577,0.4375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,16,6.537,1778,0.46875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,17,6.901,1308,0.375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,18,7.294,1417,0.4375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,19,7.74,1604,0.390625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,20,8.113,1343,0.5
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,21,8.679,2037,0.625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,22,9.047,1326,0.6875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,23,9.411,1310,0.390625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,24,9.875,1671,0.484375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,25,10.309,1561,0.5625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,26,10.729,1512,0.546875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,27,11.117,1396,0.640625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,28,11.469,1268,0.34375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,29,11.841,1341,0.390625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,30,12.335,1778,0.5
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,31,12.768,1557,0.5625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,32,13.231,1668,0.59375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,33,13.64,1471,0.515625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,34,14.026,1389,0.53125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,35,14.45,1529,0.515625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,36,14.949,1797,0.375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,37,15.441,1770,0.75
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,38,15.812,1334,0.484375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,39,16.271,1653,0.40625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,40,16.681,1475,0.609375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,41,17.171,1764,0.546875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,42,17.646,1710,0.625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,43,17.995,1259,0.59375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,44,18.387,1412,0.46875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,45,18.821,1559,0.65625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,46,19.234,1489,0.671875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,47,19.654,1511,0.265625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,48,19.973,1149,0.8125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,49,20.421,1612,0.640625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,50,20.884,1666,0.625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,51,21.341,1645,0.59375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,52,21.757,1500,0.796875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,53,22.067,1117,0.546875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,54,22.532,1673,0.625
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,55,22.973,1586,0.734375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,56,23.418,1604,0.8125
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,57,23.781,1306,0.375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,58,24.022,867,0.6875
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,59,24.479,1647,0.484375
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,TermGrade,60,24.8,1153,0.4375
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,1,0.0,,0.890625
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,2,0.299,1076,0.71875
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,3,0.513,772,0.796875
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,4,0.846,1196,0.84375
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,5,1.123,1000,0.71875
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,6,1.596,1700,0.703125
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,7,2.052,1643,0.796875
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,8,2.406,1273,0.765625
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,TermGrade,9,2.76,1276,0.578125

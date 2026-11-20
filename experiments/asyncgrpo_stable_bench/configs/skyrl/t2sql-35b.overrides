@@ -1,0 +1,86 @@
+# Text-to-SQL (miles' River task, TRL's t2sql_episode.py tool + reward) on SkyRL main d8700468, Qwen3.5-35B-A3B, 1 x 8 B200.
+# Coordinator (2026-11-12 ~20:30): use SkyRL's own recommendations, keep only our task data, tool/reward logic and eval.
+# Sources: examples/train/text_to_sql/run_skyrl_sql_megatron_lora.sh (SkyRL-SQL, Megatron + LoRA: algorithm, batch, lr,
+# LoRA, sampling, turns) and examples/train/megatron/run_megatron_qwen3.5_35b_a3b.sh (SkyRL's 1-node recipe for this
+# model: parallelism, engines, Qwen3.5 flags, Blackwell env vars in launch/skyrl/t2sql.sbatch).
+# Lines starting with # are ignored; run paths are appended by launch/skyrl/t2sql.sbatch.
+
+# model: VLM checkpoint trained text-only (Megatron native GPTModel + GDN THD packing path)
+trainer.policy.model.path=Qwen/Qwen3.5-35B-A3B
+trainer.policy.language_model_only=true
+trainer.ref.language_model_only=true
+generator.inference_engine.language_model_only=true
+trainer.strategy=megatron
+
+# placement (35B-A3B recipe): colocated sync, Megatron TP2 EP8 ETP1 on 8 GPUs, one vLLM engine TP8
+trainer.placement.colocate_all=true
+trainer.placement.policy_num_nodes=1
+trainer.placement.policy_num_gpus_per_node=8
+trainer.policy.megatron_config.tensor_model_parallel_size=2
+trainer.policy.megatron_config.pipeline_model_parallel_size=1
+trainer.policy.megatron_config.context_parallel_size=1
+trainer.policy.megatron_config.expert_model_parallel_size=8
+trainer.policy.megatron_config.expert_tensor_parallel_size=1
+generator.inference_engine.num_engines=1
+generator.inference_engine.tensor_parallel_size=8
+generator.inference_engine.backend=vllm
+generator.inference_engine.run_engines_locally=true
+generator.inference_engine.weight_sync_backend=nccl
+# SQL recipe 0.7 (35B recipe 0.6 was sized for H100 80 GB)
+generator.inference_engine.gpu_memory_utilization=0.7
+# gdn_prefill_backend from the 35B recipe; max_model_len >= max_input_length + max_generate_length
+generator.inference_engine.engine_init_kwargs.gdn_prefill_backend=triton
+generator.inference_engine.engine_init_kwargs.max_model_len=32768
+
+# LoRA (SQL recipe): r32 alpha 64 kaiming, SkyRL default targets (all-linear -> attention, MLP/experts, GDN), merged into vLLM on sync
+trainer.policy.model.lora.rank=32
+trainer.policy.model.lora.alpha=64
+trainer.policy.model.lora.init_method=kaiming
+
+# batch (SQL recipe): 256 prompts x 5 samples, one optimizer step per batch
+trainer.train_batch_size=256
+trainer.policy_mini_batch_size=256
+generator.n_samples_per_prompt=5
+trainer.update_epochs_per_batch=1
+trainer.micro_forward_batch_size_per_gpu=2
+trainer.micro_train_batch_size_per_gpu=2
+
+# optimizer (SQL recipe): lr 3e-5; everything else SkyRL default (AdamW 0.9/0.999, wd 0.01, clip 1.0, constant lr,
+# no warmup; Megatron supports only constant_with_warmup)
+trainer.policy.optimizer_config.lr=3.0e-5
+
+# algorithm: GRPO with main's defaults (dppo, prompt_mean, no std normalization), no KL as in the SQL recipe.
+# The recipe's token TIS (cap 2.0) is not set: it predates #2635, when the default loss was `regular`; dppo already
+# takes the sampler logprobs as its behaviour policy, and TIS would also force an extra old-logprob forward.
+trainer.algorithm.advantage_estimator=grpo
+trainer.algorithm.use_kl_loss=false
+
+# episode (t2sql_episode.py): 5 tool turns + 1 answer turn, 3,072 tokens per turn, 29,696 per episode
+# (SQL recipe: 3,000 / 29,000). max_prompt_length only filters prompts at load: 16k keeps all 2,033 (max 13.5k).
+generator.max_turns=6
+generator.sampling_params.max_generate_length=3072
+generator.max_input_length=26624
+trainer.max_prompt_length=16384
+# observations as chat-template user messages, token-in-token-out (the TRL port's framing; the SQL recipe's
+# use_conversation_multi_turn=false + </sql> stop strings belong to SkyRL-SQL's own prompt format)
+generator.use_conversation_multi_turn=true
+generator.batched=false
+environment.env_class=t2sql
+
+# sampling (SQL recipe)
+generator.sampling_params.temperature=0.6
+generator.sampling_params.top_p=0.95
+
+# run: checkpoints exported as HF every 20 steps (evaluated outside the run), resumable checkpoint at the same steps
+trainer.epochs=20
+trainer.max_training_steps=100
+trainer.hf_save_interval=20
+trainer.ckpt_interval=20
+trainer.max_ckpts_to_keep=1
+trainer.resume_mode=latest
+trainer.eval_interval=-1
+trainer.eval_before_train=false
+trainer.seed=42
+trainer.logger=tensorboard
+trainer.enable_ray_gpu_monitor=false
+data.dataloader.num_workers=0

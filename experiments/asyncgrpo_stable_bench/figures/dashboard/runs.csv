@@ -1,0 +1,72 @@
+run,lib,model,arm,note,workload,job,steps,planned,evals,status
+miles-w1-S-recommended-364729,miles,2B,recommended,patched lib (excluded),W1-S,364729,200,200,4,finished
+miles-w1-S-shared-364471,miles,2B,shared,patched lib (excluded),W1-S,364471,200,200,4,finished
+miles-w2-M-shared-372145,miles,9B,shared,failed: no sandbox could start (nested Apptainer in its container),W2-M,372145,0,60,0,failed
+miles-w2-M-shared-372222,miles,9B,shared,failed: first train step OOM at 65k context (TE unfused attention; CP unsupported with it),W2-M,372222,0,60,0,failed
+openrlhf-w1-M-shared-368302,openrlhf,9B,shared,,W1-M,368302,200,200,4,finished
+openrlhf-w1-S-recommended-365026,openrlhf,2B,recommended,,W1-S,365026,249,200,4,finished
+openrlhf-w1-S-shared-364905,openrlhf,2B,shared,,W1-S,364905,200,200,4,finished
+openrlhf-w1-S-smoke-364228,openrlhf,2B,smoke,smoke,W1-S,364228,4,200,0,smoke
+prime-rl-w1-M-shared-367203,prime-rl,9B,shared,,W1-M,367203,200,200,4,finished
+prime-rl-w1-S-recommended-364392,prime-rl,2B,recommended,,W1-S,364392,200,200,4,finished
+prime-rl-w1-S-shared-364425,prime-rl,2B,shared,custom code (excluded),W1-S,364425,200,200,4,finished
+prime-rl-w1-S-shared-builtin-365448,prime-rl,2B,shared-builtin,,W1-S,365448,200,200,4,finished
+prime-rl-w2-M-shared-368590,prime-rl,9B,shared,,W2-M,368590,60,60,0,finished
+prime-rl-w2-M-shared-smoke-368237,prime-rl,9B,shared-smoke,smoke,W2-M,368237,3,60,0,smoke
+prime-rl-w2-moe-shared-371663,prime-rl,35B-A3B,shared,,W2-MoE,371663,60,60,0,finished
+prime-rl-w2-moe-shared-smoke-371339,prime-rl,35B-A3B,shared-smoke,smoke,W2-MoE,371339,3,60,0,smoke
+skyrl-w1-M-recommended-379394,skyrl,9B,recommended,,W1-M,379394,200,200,5,finished
+skyrl-w1-M-shared-366119,skyrl,9B,shared,excluded: our loss mapping collapsed it (skyrl-023),W1-M,366119,200,200,5,finished
+skyrl-w1-S-recommended-365171,skyrl,2B,recommended,,W1-S,365171,200,200,5,finished
+skyrl-w1-S-shared-364970,skyrl,2B,shared,excluded: our loss mapping collapsed it (skyrl-013),W1-S,364970,200,200,5,finished
+skyrl-w2-M-shared-365144,skyrl,9B,shared,excluded: custom loss and generator override; stopped at step 6,W2-M,365144,6,60,0,stopped
+skyrl-w2-M-smoke-365030,skyrl,9B,smoke,smoke,W2-M,365030,3,60,0,smoke
+trl-w1-M-recommended-366040,trl,9B,recommended,dropped: too slow next to the other libs,W1-M,366040,200,200,0,finished
+trl-w1-M-shared-370844,trl,9B,shared,cancelled at step 75: node moved to agentic,W1-M,370844,75,200,1,stopped
+trl-w1-S-recommended-364705,trl,2B,recommended,,W1-S,364705,200,200,4,finished
+trl-w1-S-recommended-aligned-366044,trl,2B,recommended-aligned,,W1-S,366044,200,200,4,finished
+trl-w1-S-shared-364895,trl,2B,shared,custom code (excluded),W1-S,364895,200,200,4,finished
+trl-w1-S-shared-builtin-365436,trl,2B,shared-builtin,,W1-S,365436,200,200,4,finished
+trl-w1-S-smoke-364223,trl,2B,smoke,smoke,W1-S,364223,15,200,2,smoke
+trl-w2-M-local-366992,trl,9B,local,,W2-M,366992,60,60,0,finished
+trl-w2-M-local-sharded-370939,trl,9B,local-sharded,,W2-M,370939,60,60,0,finished
+trl-w2-M-local-sharded-st8-372267,trl,9B,local-sharded-st8,,W2-M,372267,60,60,0,finished
+trl-w2-M-localsmoke-366737,trl,9B,localsmoke,smoke,W2-M,366737,3,60,0,smoke
+trl-w2-M-shared-364987,trl,9B,shared,,W2-M,364987,60,60,0,finished
+trl-w2-moe-st4-371885,trl,35B-A3B,st4,,W2-MoE,371885,60,60,0,finished
+verl-w1-S-recommended-364920,verl,2B,recommended,patched lib (excluded),W1-S,364920,200,200,5,finished
+verl-w1-S-shared-364733,verl,2B,shared,patched lib (excluded),W1-S,364733,200,200,4,finished
+verl-w1-S-shared-370023,verl,2B,shared,,W1-S,370023,200,200,4,finished
+verl-w1-S-smoke-asshipped-368016,verl,2B,smoke-asshipped,smoke,W1-S,368016,3,200,0,smoke
+verl-w2-M-shared-371895,verl,9B,shared,,W2-M,371895,60,60,0,finished
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-local-st8-372251,trl,35B-A3B,lora32-ep4-local-st8,,W2-MoE,372251,60,60,0,finished
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372854,trl,35B-A3B,lora32-ep4-local-st8,,W2-MoE-hard,372854,60,60,0,finished
+prime-rl-w2-moehard-shared-372827,prime-rl,35B-A3B,lora32-ep4,,W2-MoE-hard,372827,60,60,0,finished
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132,trl,35B-A3B,lora32-ep4-st8,,W2-MoE-SQL,373132,100,100,0,finished
+trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-salt-374011,trl,35B-A3B,lora32-ep4-st8 cache salt,,W2-MoE-SQL,374011,100,100,0,finished
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373642,prime-rl,35B-A3B,lora32,,W2-MoE-SQL,373642,40,100,0,stopped
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-norefill-389085,prime-rl,35B-A3B,lora32 no refill,,W2-MoE-SQL,389085,100,100,0,finished
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373788,skyrl,35B-A3B,lora32 4 GPUs,,W2-MoE-SQL,373788,42,100,0,stopped
+skyrl-w2-M-recommended-374210,skyrl,9B,recommended,collapsed by step 5,W2-M,374210,5,60,0,stopped
+skyrl-w2-M-dppo-379410,skyrl,9B,default loss (dppo),,W2-M,379410,60,60,0,finished
+openrlhf-w2-M-shared-379806,openrlhf,9B,shared,failed in its first train step: CUDA out of memory (ZeRO-3; a 30 GiB allocation with 17 GiB free); a first try (379779) stopped at start on a missing HARBOR_URL,W2-M,379806,0,60,0,stopped
+openrlhf-w2-M-offload-379845,openrlhf,9B,shared + adam offload,failed in its first train step: CUDA out of memory again with its Adam state on CPU (a 30.3 GiB allocation with 30.2 GiB free),W2-M,379845,0,60,0,stopped
+skyrl-w2-35b-dppo-379439,skyrl,35B-A3B,default loss (dppo) lora32 tp2-ep4,stopped by choice at step 9: TermGrade is too easy at 35B (train reward .58-.89); 35B comparisons stay on text-to-SQL,W2-MoE,379439,9,60,0,stopped
+verl-w2-M-shared-371788,verl,9B,shared,failed: vLLM worker died (pidfd_getfd); launcher fixed; rerun 371895,W2-M,371788,0,60,0,failed
+skyrl-w2-M-recommended-c64-377353,skyrl,9B,recommended 64 in flight,audit rerun of its recipe at 64 episodes in flight like the other libraries (recipe: 128): 83 of about 109 episodes timed out; no step 1 after 90 min so its watcher stopped it,W2-M,377353,0,60,0,stopped
+miles-w2-M-shared-372132,miles,9B,shared,failed at start: shipped async agentic flags rejected by its own check,W2-M,372132,0,60,0,failed
+trl-moe-w2-Qwen3.5-35B-A3B-ep4-bfloat16-lora32-hard-st8-372822,trl,35B-A3B,lora32-ep4-local-st8,failed at start: vLLM startup timed out (FlashInfer JIT cache shared by two venvs); rerun 372854,W2-MoE-hard,372822,0,60,0,failed
+miles-t2sql-373208,miles,35B-A3B,as shipped,failed before step 0: routing replay is on and SGLang's flashinfer_trtllm MoE runner records no routing on B200 (miles-022); audit rerun with the triton runner 377633,W2-MoE-SQL,373208,0,100,0,failed
+miles-t2sql-triton-377633,miles,35B-A3B,triton MoE runner,audit rerun with miles' shipped --sglang-moe-runner-backend triton: routing crash gone; the step-0 eval died on our scratch dir permissions (ours); rerun 377684,W2-MoE-SQL,377633,0,100,0,failed
+miles-t2sql-triton-377684,miles,35B-A3B,triton MoE runner,step-0 eval ran (validation 0.827 like our base eval); the first train step ran out of memory in unfused attention (miles-023),W2-MoE-SQL,377684,0,100,0,failed
+verl-t2sql-Qwen3.5-35B-A3B-lora32-rec-373603,verl,35B-A3B,lora32 merged,failed at the first weight sync: merged LoRA sends packed 3D expert tensors that vLLM can't load (verl-026),W2-MoE-SQL,373603,0,100,0,failed
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373595,skyrl,35B-A3B,lora32,failed at start: Transformer Engine cudnn import (fixed with LD_LIBRARY_PATH); rerun 373617,W2-MoE-SQL,373595,0,100,0,failed
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373617,skyrl,35B-A3B,lora32,failed at start: workers could not connect to Ray; rerun 373719,W2-MoE-SQL,373617,0,100,0,failed
+skyrl-t2sql-Qwen3.5-35B-A3B-lora32-373719,skyrl,35B-A3B,lora32 4 GPUs,failed at start: vLLM needed about 10 min to start on a busy node and SkyRL's default health wait is 600 s; rerun 373788 with it at 1800 s,W2-MoE-SQL,373719,0,100,0,failed
+nemo-rl-t2sql-Qwen3.5-35B-A3B-373717,nemo-rl,35B-A3B,full FT,failed at the first env step: our env glue read token_ids that NeMo-RL doesn't pass to envs; rerun 373838,W2-MoE-SQL,373717,0,100,0,failed
+nemo-rl-t2sql-Qwen3.5-35B-A3B-373838,nemo-rl,35B-A3B,full FT,OOM in the first train step: full fine-tune of the 35B on one node at 29.7k tokens per micro-batch (the recipe is validated on 4 nodes at 9.2k tokens so this one is on us; nemo-rl-001); LoRA retry 373868,W2-MoE-SQL,373838,0,100,0,failed
+nemo-rl-t2sql-Qwen3.5-35B-A3B-373868,nemo-rl,35B-A3B,LoRA r32,failed at setup: its FSDP can't shard the LoRA-wrapped linear-attention and shared-expert layers (mixed dtypes) under expert parallel (nemo-rl-002); next the shipped 2-node full fine-tune (373879),W2-MoE-SQL,373868,0,100,0,failed
+nemo-rl-t2sql-2n-Qwen3.5-35B-A3B-373879,nemo-rl,35B-A3B,full FT 2 nodes,our launch config: CPUS_PER_WORKER unset so ray.sub asked for 96 CPUs per node where Slurm grants 92; fixed by setting it; rerun 374000,W2-MoE-SQL,373879,0,100,0,failed
+nemo-rl-t2sql-2n-Qwen3.5-35B-A3B-374000,nemo-rl,35B-A3B,full FT 2 nodes,failed at the first vLLM weight load: pidfd_getfd not permitted (the recipe's expandable_segments with CUDA IPC in our container); rerun 374006 with it off,W2-MoE-SQL,374000,0,100,0,failed
+nemo-rl-t2sql-2n-Qwen3.5-35B-A3B-374006,nemo-rl,35B-A3B,full FT 2 nodes,cancelled after 4 min before any step: its nodes went to the TRL cache-salt rerun 374011,W2-MoE-SQL,374006,0,100,0,cancelled
+prime-rl-t2sql-Qwen3.5-35B-A3B-lora32-373584,prime-rl,35B-A3B,lora32,stopped after 22 min: every episode failed at scoring because our env port named a method score (shadows verifiers' Task.score); rerun 373642,W2-MoE-SQL,373584,0,100,0,failed

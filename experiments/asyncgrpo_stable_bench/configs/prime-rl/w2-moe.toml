@@ -1,0 +1,94 @@
+# W2 agentic (TermGrade, terminus-2) on Qwen3.5-35B-A3B (hybrid gated DeltaNet + 256-expert MoE), prime-rl, one 8xB200 node.
+# = w2-M.toml with the model swapped, plus LoRA set to TRL's 35B runs (r 32, alpha 64, LR 1e-5, same targets: attention,
+# gated DeltaNet and shared-expert projections). Trainer EP is prime-rl's default `ep = "auto"` (= 4 here: EP=4 x FSDP=4,
+# as TRL). vLLM stays DP=4 without EP (prime-rl's single-node default). Notes: envs/prime-rl/NOTES.md, "MoE 35B-A3B".
+# Launch: SIZE=moe WEIGHT_BROADCAST=auto KEEP_ADAPTERS="20 40 60" launch/prime-rl/w2.sbatch (LoRA needs prime-rl's
+# filesystem weight broadcast; the kept PEFT adapters are merged into HF checkpoints after training, envs/prime-rl/merge_lora.py).
+max_steps = 60
+# One packed micro-batch must hold a whole branch, and a branch is the episode's whole context (up to vLLM's max_model_len).
+seq_len = 65536
+
+[model]
+name = "Qwen/Qwen3.5-35B-A3B"
+# No [model.vlm]: text-only on the VLM checkpoint, the trainer freezes the vision encoder itself.
+
+[deployment]
+num_train_gpus = 4
+num_infer_gpus = 4
+
+# No [ckpt]: prime-rl's DCP-to-HF converter refuses LoRA checkpoints (tools/convert_dcp_to_bf16.py: check_not_lora), and a
+# LoRA DCP checkpoint would carry the 140 GB fp32 frozen base. HF checkpoints at 20/40/60 come from the PEFT adapter the
+# filesystem broadcast writes every step (w2.sbatch KEEP_ADAPTERS copies it, merge_lora.py folds it into the base).
+
+[orchestrator]
+batch_size = 64 # counts traces (one per episode for a single-agent env): 8 tasks x 8 episodes
+constant_trainer_batch_size = false # SHARED_W2: the next 8 complete groups as they come, no refill of zero-advantage groups (lib default true refills)
+# max_staleness left at the lib default (8 policy versions, token-level masking)
+
+[orchestrator.concurrency]
+initial_inflight = 64 # SHARED_W2: at most 64 episodes (= 64 live boxes) in flight; start there instead of the auto ramp
+max_inflight = 64
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = false # SHARED_W2: thinking off, passed explicitly
+
+[orchestrator.train]
+group_size = 8
+
+[orchestrator.train.algo]
+type = "grpo" # reward minus group mean, no std normalization, token-level aggregation (the defaults)
+
+[orchestrator.train.sampling]
+temperature = 1.0
+top_p = 1.0
+max_completion_tokens = 8192 # SHARED_W2: 8192 output tokens per model call; caps each call without ending the episode
+
+# verifiers' train client already sends top_k=-1, min_p=0; pinned here as in the W1 configs.
+[orchestrator.train.sampling.extra_body]
+top_k = -1
+min_p = 0.0
+
+[[orchestrator.train.source]]
+name = "w2-termgrade"
+env.taskset.id = "harbor"
+env.taskset.dataset = "termgrade-train" # ~/.cache/harbor/termgrade-train -> stable-bench-src/termgrade/harbor-local/train/tasks (28 tasks)
+env.agent.harness.id = "terminus_2"
+env.agent.runtime.type = "docker" # verifiers' docker runtime, talking to rootless podman through DOCKER_HOST
+env.agent.max_turns = 30 # SHARED_W2: 30 model calls per episode
+env.agent.timeout.setup = 600 # SHARED_W2: sandbox start + setup budget
+env.agent.timeout.rollout = 600 # SHARED_W2: 600 s agent wall clock
+env.agent.timeout.scoring = 300 # SHARED_W2: verifier budget
+
+[trainer.model]
+seq_len = 65536
+# HF -> prime conversion (split fused gate_up experts) goes to a run-side dir, not into the shared hub snapshot.
+conversion_dir = "/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/conv/Qwen3.5-35B-A3B"
+
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+dropout = 0.0
+# TRL's targets: 310 modules; not the router, not mlp.shared_expert.output_gate, not the routed experts, not the vision tower.
+target_modules = [
+    'language_model\.layers\.\d+\.self_attn\.(q_proj|k_proj|v_proj|o_proj)$',
+    'language_model\.layers\.\d+\.linear_attn\.(in_proj_qkv|in_proj_z|in_proj_b|in_proj_a|out_proj)$',
+    'language_model\.layers\.\d+\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)$',
+]
+
+[trainer.optim]
+type = "adamw"
+lr = 1e-5 # TRL 35B LoRA LR (w2-M full fine-tune: 1e-6)
+weight_decay = 0.0
+betas1 = 0.9
+betas2 = 0.999
+max_norm = 1.0
+
+[trainer.scheduler]
+type = "constant"
+
+# loss: prime-rl's built-in default (IPO), as the W1 shared arm since SHARED_W1 rev. 8
+
+[inference.vllm]
+max_model_len = 65536 # SHARED_W2: prompt + completion of one call
+seed = 42

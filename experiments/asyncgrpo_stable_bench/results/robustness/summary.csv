@@ -1,0 +1,9 @@
+lib,failures,blocker,major,minor,install_break,missing_dep,docs_or_example_mismatch,unclear_setup,config_trap,crash,hang,silent_correctness,perf_trap,cluster_unfriendly,patches_needed,upstream_reportable,time_lost_min,time_unknown_rows,failure_unattributed_rows,environment_rows,observation_rows,ours_rows,ours_time_min,infra_rows,infra_time_min,w1_runs_scanned,w1_log_traceback,w1_log_oom,w1_log_nccl_error,w1_log_timeout,w1_log_retry/disconnect,w1_log_cuda_error,w1_log_nan_inf,w1_log_killed/signal,w1_log_error_other,w1_log_warning_deprecation,w1_log_warning_other
+trl,2,0,2,0,0,0,0,0,0,0,1,0,1,0,0,2,0,2,0,4,13,6,140,1,21,2,11,0,0,0,6,0,0,18,3,194,6908
+prime-rl,6,0,3,3,1,0,0,0,1,3,0,0,0,1,1,4,81,0,0,1,7,4,25,1,15,2,37,0,0,0,0,0,0,31,10,248,32232
+verl,6,4,1,1,1,1,1,0,0,3,0,0,0,0,0,4,180,0,0,2,12,4,27,2,5,0,0,0,0,0,0,0,0,0,0,0,0
+skyrl,12,4,6,2,1,0,1,1,2,1,0,3,3,0,2,12,173,6,0,2,5,5,210,1,6,0,0,0,0,0,0,0,0,0,0,0,0
+miles,9,3,4,2,0,0,1,2,2,0,0,1,3,0,0,6,157,1,0,2,8,2,10,2,40,1,5,0,0,0,30,0,0,0,4,191,78
+openrlhf,1,1,0,0,0,0,0,0,0,0,0,1,0,0,0,1,30,0,0,1,6,5,164,1,30,3,0,22,0,0,0,0,0,2,45,100,137
+nemo-rl,1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,20,0,0,0,0,1,25,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+all,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,1,11,115,5,35,0,0,0,0,0,0,0,0,0,0,0,0

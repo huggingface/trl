@@ -1,0 +1,157 @@
+# W2 (agentic TermGrade, terminus-2) on NeMo-RL v0.8.0 (NGC container), Qwen/Qwen3.5-9B, one 8xB200 node.
+# Base: NeMo-RL's only shipped Qwen3.5 dense recipe, grpo-qwen3.5-9b-1n8g-megatron.yaml (Megatron TP4, SP, activation
+# checkpointing, defer_fp32_logits, vLLM). Agent route: NeMo Gym's `harbor_agent` (Terminus2NemoGym + its
+# SingularityEnvironment), NeMo Gym being NeMo-RL's route for agents that own their loop; NeMo-RL's vLLM exposes its
+# OpenAI server, terminus-2 calls it, NeMo-RL's on-policy token correction keeps each episode one token sequence.
+# Async GRPO as in docs/guides/async-grpo.md (non-colocated vLLM, IS correction on, age 1).
+# Every change from the recipe / NeMo-RL defaults maps a SHARED_W2 value; see envs/nemo-rl/NOTES.md (W2).
+defaults: /opt/nemo-rl/examples/configs/recipes/llm/grpo-qwen3.5-9b-1n8g-megatron.yaml
+
+grpo:
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 8
+  max_rollout_turns: 1          # NeMo Gym owns the turn loop (terminus-2); NeMo-RL sees one rollout per episode
+  max_num_epochs: 1
+  max_num_steps: 60
+  normalize_rewards: false      # SHARED_W2: group-mean advantage, no std
+  use_leave_one_out_baseline: false
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  max_val_samples: null        # the Gym runner requires null (its validation set is used as is)
+  val_batch_size: null
+  seed: 42
+  use_dynamic_sampling: false   # no refill
+  skip_reference_policy_logprobs_calculation: true   # KL is 0, as in NeMo-RL's Gym recipes
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1 # docs/guides/async-grpo.md default and suggested start
+    max_generation_failures: 0
+    in_flight_weight_updates: false
+    recompute_kv_cache_after_weight_updates: false
+
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  ratio_clip_min: 0.2
+  ratio_clip_max: 0.28
+  use_importance_sampling_correction: true   # required for async GRPO
+  token_level_loss: true
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: ${oc.env:RUN_DIR}/ckpt
+  metric_name: null
+  keep_top_k: null              # keep 20/40/60 for the evals
+  save_period: 10               # 20 in the first attempt (398039); 10 after it aborted at step 35 (NOTES)
+  save_optimizer: true
+
+policy:
+  model_name: Qwen/Qwen3.5-9B
+  tokenizer:
+    chat_template_kwargs:
+      enable_thinking: false
+  train_global_batch_size: 64   # one optimizer step per 8 x 8 episodes
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 65536
+  max_grad_norm: 1.0
+  megatron_cfg:
+    optimizer:
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.0
+      adam_beta1: 0.9
+      adam_beta2: 0.999
+    scheduler:
+      lr_decay_style: constant
+      lr_warmup_iters: 0
+      lr_warmup_init: 1.0e-6
+  generation:
+    max_new_tokens: 8192
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    vllm_cfg:
+      async_engine: true
+      expose_http_server: true
+      tensor_parallel_size: 1   # 4 engines on the 4 inference GPUs (recipe: one TP4 engine colocated)
+      max_model_len: 65536
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: null
+
+data:
+  max_input_seq_length: null
+  shuffle: true
+  num_workers: 0
+  train:
+    # dataset_name set here too: the base config's train.dataset_name (OpenMathInstruct-2) would win over default.*
+    dataset_name: NemoGymDataset
+    data_path: /fsx/amine_dirhoussi/stable-bench-src/termgrade/harbor-nemogym/train.jsonl
+    split_validation_size: 0
+  validation: null
+  default:
+    dataset_name: NemoGymDataset
+    env_name: nemo_gym
+    prompt_file: null
+    system_prompt_file: null
+    processor: nemo_gym_data_processor
+
+env:
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    config_paths:
+      - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+      - responses_api_agents/harbor_agent/configs/harbor_agent.yaml
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          uses_reasoning_parser: false
+          chat_template_kwargs:
+            enable_thinking: false
+    harbor_agent:
+      responses_api_agents:
+        harbor_agent:
+          concurrency: 64       # SHARED_W2: at most 64 episodes (= live boxes) in flight
+          harbor_ray_task_num_cpus: 0.5   # the option's own advice: Harbor jobs are I/O-bound; 64 x 1 CPU would not fit next to the workers
+          harbor_datasets:
+            train:
+              local_dataset_path: /fsx/amine_dirhoussi/stable-bench-src/termgrade/harbor-nemogym/train/tasks
+              workdir: /app
+            eval:
+              local_dataset_path: /fsx/amine_dirhoussi/stable-bench-src/termgrade/harbor-nemogym/eval/tasks
+              workdir: /app
+          harbor_agent_override_timeout: 600
+          harbor_verifier_override_timeout: 300
+          harbor_agent_kwargs:
+            max_turns: 30
+            interleaved_thinking: false
+            enable_summarize: false
+            proactive_summarization_threshold: 0
+            collect_rollout_details: true
+            trajectory_config:
+              raw_content: true
+            model_info:
+              max_input_tokens: 65536
+              max_output_tokens: 8192
+              input_cost_per_token: 0.0
+              output_cost_per_token: 0.0
+          harbor_environment_kwargs:
+            # Inside the Pyxis container on the GPU nodes a fresh /proc cannot be mounted (masked /proc), so every
+            # --containall --pid box died; keep Gym's flags but skip the proc mount and bind /proc (APPTAINER_BIND in inner.sh)
+            singularity_no_mount: home,tmp,bind-paths,proc
+            singularity_image_cache_dir: ${oc.env:WORK}/sif-cache
+          harbor_jobs_dir: ${oc.env:WORK}/harbor-jobs
+
+logger:
+  log_dir: ${oc.env:RUN_DIR}/logs
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1

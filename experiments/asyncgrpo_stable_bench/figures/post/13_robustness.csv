@@ -1,0 +1,7 @@
+lib,failures,blocker,major,minor,unattributed,silent,hang,perf_trap,install_break,crash,cluster_unfriendly,config_trap,docs_or_example_mismatch,missing_dep,silent_correctness,unclear_setup,oom
+trl,2,0,2,0,0,0,1.0,1.0,,,,,,,,,
+prime-rl,6,0,3,3,0,0,,,1.0,3.0,1.0,1.0,,,,,
+verl,6,4,1,1,0,0,,,1.0,3.0,,,1.0,1.0,,,
+openrlhf,3,2,1,0,0,1,,,,,,,,,1.0,1.0,1.0
+skyrl,12,4,6,2,0,3,,3.0,1.0,1.0,,2.0,1.0,,3.0,1.0,
+miles,9,3,4,2,0,1,,3.0,,,,2.0,1.0,,1.0,2.0,

@@ -1,0 +1,84 @@
+# Full fine-tune fallback of w1-moe.args (raw Megatron path with miles' Qwen3.5 spec, thd packing, HF->torch_dist conversion).
+# Same as the fully async 35B CI case minus R3/CI flags. Use with MT=qwen3.5-35B-A3B CONFIG_NAME=w1-moe-full.
+# miles W1 on Qwen3.5-35B-A3B (hybrid GDN + MoE, 256 experts), LoRA. Flags for train_async.py after the Megatron model args
+# (launch/miles/w1-moe.sbatch: model_args qwen3.5-35B-A3B_lora, scripts/models/qwen3.5-35B-A3B_lora.py).
+# Base: miles' own 35B-A3B LoRA launcher scripts/run_qwen3_5_35b_a3b_lora.py (Megatron-Bridge PEFT, --megatron-to-hf-mode bridge,
+# bshd + micro-batch 1 because megatron-core's GatedDeltaNet rejects packed thd) and the fully async 35B-A3B CI case
+# tests/e2e/megatron/test_qwen3_5_35B_A3B/test_nospec_r3_bf16_sgl_dpattn1x4_meg_tp1cp1_fullyasync.py (4 train GPUs TP1 x EP4 + 4 rollout GPUs).
+# Everything else is w1-S.args (SHARED_W1). TRL match: LoRA r=32 alpha 64 lr 1e-5 on attention + GDN + shared-expert projections,
+# routed experts and router frozen. $RUN and $STEPS are filled in by the launcher.
+# --- checkpoints (bridge loads the HF checkpoint directly; no torch_dist conversion, no reference model since KL is 0)
+--hf-checkpoint /fsx/amine_dirhoussi/stable-bench-runs/miles/models/Qwen3.5-35B-A3B/
+--ref-load /fsx/amine_dirhoussi/stable-bench-runs/miles/ckpt/Qwen3.5-35B-A3B_torch_dist
+--save $RUN/megatron
+--save-interval 1000
+# --- data, prompt, reward
+--prompt-data /fsx/amine_dirhoussi/stable-bench-runs/miles/data/w1_train.parquet
+--input-key messages
+--label-key label
+--apply-chat-template
+--apply-chat-template-kwargs {"enable_thinking":false}
+--rollout-max-prompt-len 2048
+--custom-rm-path w1_reward.reward
+# --- rollout (fully async, recipe settings)
+--fully-async
+--pause-generation-mode in_place
+--num-rollout $STEPS
+--rollout-batch-size 32
+--n-samples-per-prompt 8
+--global-batch-size 256
+--rollout-max-response-len 16384
+--rollout-temperature 1.0
+--rollout-top-p 1.0
+--rollout-top-k -1
+--rollout-seed 42
+--balance-data
+# --- GRPO loss
+--advantage-estimator grpo
+--disable-grpo-std-normalization
+--calculate-per-token-loss
+--eps-clip 0.2
+--eps-clip-high 0.28
+--kl-loss-coef 0.0
+--kl-coef 0.0
+--entropy-coef 0.0
+--use-tis
+# --- optimizer (full FT: W1 lr; CPU Adam as miles' 35B-A3B recipe and CI, docs/models/qwen/qwen3-5-moe.md 5.4)
+--optimizer adam
+--lr 1e-6
+--lr-decay-style constant
+--lr-warmup-iters 0
+--weight-decay 0.0
+--adam-beta1 0.9
+--adam-beta2 0.999
+--clip-grad 1.0
+--seed 42
+--optimizer-cpu-offload
+--overlap-cpu-optimizer-d2h-h2d
+--use-precision-aware-optimizer
+# --- Megatron parallelism: TP1 x EP4 (DP4) on 4 GPUs, as the fully async 35B CI case; bshd + mbs 1 as the LoRA launcher
+--tensor-model-parallel-size 1
+--pipeline-model-parallel-size 1
+--context-parallel-size 1
+--expert-model-parallel-size 4
+--expert-tensor-parallel-size 1
+--moe-token-dispatcher-type alltoall
+--recompute-granularity full
+--recompute-method uniform
+--recompute-num-layers 1
+--use-dynamic-batch-size
+--max-tokens-per-gpu 18432
+--attention-dropout 0.0
+--hidden-dropout 0.0
+--accumulate-allreduce-grads-in-fp32
+--attention-softmax-in-fp32
+--attention-backend unfused
+# --- SGLang: 4 engines x TP1 (the whole 35B fits one B200), mem fraction as W1
+--rollout-num-gpus-per-engine 1
+--sglang-mem-fraction-static 0.7
+--check-weight-update-skip-list visual
+# --- placement: 4 train + 4 rollout GPUs on one node
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+--num-gpus-per-node 8
+--rollout-num-gpus 4

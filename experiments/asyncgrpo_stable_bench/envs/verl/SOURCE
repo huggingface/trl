@@ -1,0 +1,7 @@
+repo: https://github.com/volcengine/verl
+tag: v0.9.1
+sha: 1876b06d0a3e4e71e06230be10af14492ca8a75b
+recipe_submodule: https://github.com/verl-project/verl-recipe @ e7f889574b8301cc0f0fc1d57c6d67f31ffeb689
+checkout: /fsx/amine_dirhoussi/stable-bench-src/verl
+venv: /fsx/amine_dirhoussi/envs/bench-verl
+extras: vllm, fsdp, math (+ causal-conv1d built locally, flash-attn wheel from the renamed wheelhouse release)

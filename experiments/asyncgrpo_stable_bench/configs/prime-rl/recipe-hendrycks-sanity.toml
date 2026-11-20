@@ -1,0 +1,50 @@
+# Copy of prime-rl examples/basic/hendrycks-sanity/rl.toml @ cbd3702 for the recipe reproduction. Only change:
+# math_env's LLM-judge fallback is turned off (it defaults to Prime Inference, which needs a Prime API key).
+# max_steps is cut on the command line (launch: rl.sbatch ... --max-steps N).
+max_steps = 5000
+
+[monitors.wandb]
+project = "hendrycks-sanity"
+name = "hendrycks-sanity"
+
+[deployment]
+num_train_gpus = 4
+num_infer_gpus = 4
+
+[model]
+name = "Qwen/Qwen3-1.7B"
+
+[orchestrator]
+batch_size = 512
+seq_len = 8192
+
+[orchestrator.train]
+group_size = 8
+
+[[orchestrator.train.source]]
+name = "hendrycks-math"
+env.taskset.id = "math-env"
+env.taskset.dataset_name = "mikasenghaas/Sanity-Test-R1D-1.5B"
+env.taskset.dataset_subset = "default"
+env.taskset.task.judge = "None"
+env.agent.harness.id = "null"
+env.agent.runtime.type = "subprocess"
+
+[orchestrator.eval]
+interval = 50
+
+[[orchestrator.eval.source]]
+name = "aime2024"
+group_size = 32
+env.taskset.id = "aime24"
+env.agent.harness.id = "null"
+env.agent.runtime.type = "subprocess"
+
+[trainer.model]
+seq_len = 16384
+
+[inference.vllm]
+max_model_len = 8192
+[orchestrator.renderer]
+name = "default"
+reasoning_parser = "think"

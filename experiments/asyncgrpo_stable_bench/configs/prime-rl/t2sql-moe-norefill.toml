@@ -1,0 +1,97 @@
+# NO-REFILL copy of t2sql-moe.toml (only orchestrator.batch_size / constant_trainer_batch_size differ).
+# Text-to-SQL (miles' River recipe) on Qwen3.5-35B-A3B with prime-rl, one 8xB200 node: the 2-library comparison with TRL
+# run 373132 (stable-bench-runs/trl-moe-ep/trl-t2sql-Qwen3.5-35B-A3B-ep4-lora32-main-373132, launch.env + t2sql_train.py).
+# Env: configs/prime-rl/t2sql_env.py (verifiers v1 taskset + harness, TRL's episode port). Launch:
+#   PRIO_TAG=PRIO_TRAIN b200-queue --nodes=1 --gres=gpu:8 --exclusive -t 16:00:00 launch/prime-rl/w2_t2sql.sbatch  (CONFIG=configs/prime-rl/t2sql-moe-norefill.toml TAG=norefill)
+# Notes: envs/prime-rl/NOTES.md, "Text-to-SQL 35B". Built-in options only, no prime-rl source change.
+max_steps = 100 # TRL MAX_STEPS
+# One packed micro-batch must hold a whole episode: 29,696-token episode cap + one 3,072-token turn = 32,768 (TRL's TOKEN_BUDGET)
+seq_len = 32768
+
+[model]
+name = "Qwen/Qwen3.5-35B-A3B"
+
+[deployment]
+num_train_gpus = 4 # EP=4 x FSDP=4 (trainer ep = "auto"), as TRL
+num_infer_gpus = 4 # vLLM DP=4 without EP (prime-rl's single-node default; TRL: DP=4 + EP)
+
+# No [ckpt]: LoRA DCP checkpoints can't be exported (tools/convert_dcp_to_bf16.py: check_not_lora). The launcher keeps the
+# PEFT adapter of steps 20/40/60/80/100 from the filesystem broadcast and merges each (envs/prime-rl/merge_lora.py).
+
+[orchestrator]
+# No-refill arm (fairness rerun of 373642): a fixed 60 groups x 16 = 960 rollouts per step, as TRL generates ~59.5 groups
+# per step (373132: 56.8 trained + 4.5% zero-std dropped). Zero-advantage groups are dropped after selection, not refilled.
+batch_size = 960
+constant_trainer_batch_size = false # lib default true prunes zero-advantage rollouts and regenerates until batch_size; false = W1 shared arm
+max_staleness = 8 # TRL MAX_STALENESS (also prime-rl's default)
+
+[orchestrator.concurrency]
+initial_inflight = 256 # TRL CONCURRENCY (the recipe preset's max_concurrent_rollouts)
+max_inflight = 256
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = true # TRL: the template default (on for 35B-A3B), as miles
+# Keep every sampled token in the history, so an episode is one sample as in TRL. The thinking default ("tool_cycle")
+# re-renders at each user message, which drops earlier reasoning and splits the episode into one sample per turn.
+thinking_retention = "all"
+
+[orchestrator.train]
+group_size = 16 # miles / TRL: 16 samples per question
+
+[orchestrator.train.algo]
+type = "grpo" # reward minus group mean, no std normalization (miles --disable-grpo-std-normalization, TRL)
+
+[orchestrator.train.sampling]
+temperature = 1.0
+top_p = 1.0
+max_completion_tokens = 3072 # per turn (miles --rollout-max-response-len); the 29,696 episode cap is in the env
+
+[orchestrator.train.sampling.extra_body]
+top_k = -1 # full vocabulary, as TRL (top_k 0) and miles
+min_p = 0.0
+
+[[orchestrator.train.source]]
+name = "t2sql"
+env.taskset.id = "t2sql_env" # configs/prime-rl/t2sql_env.py on PYTHONPATH; also its harness (the episode loop)
+env.taskset.data = "/fsx/amine_dirhoussi/stable-bench-src/text2sql/data/train.jsonl" # 2,033 tasks, TRL's TRAIN_FILE
+env.agent.harness.id = "t2sql_env" # the module's T2SQLHarness (also verifiers' default for a taskset that exports one)
+env.agent.runtime.type = "subprocess" # the harness runs in the env worker and never starts a program
+select.shuffle = true # TRL: train split shuffled with seed 42
+select.seed = 42
+
+[trainer.model]
+seq_len = 32768
+conversion_dir = "/fsx/amine_dirhoussi/stable-bench-runs/prime-rl/conv/Qwen3.5-35B-A3B"
+
+[trainer.model.lora]
+rank = 32 # TRL LORA_R
+alpha = 64.0
+dropout = 0.0
+# TRL's targets: 310 modules (attention, gated DeltaNet, shared expert); not the router, the shared-expert gate, the routed
+# experts or the vision tower. Same regexes as w2-moe.toml.
+target_modules = [
+    'language_model\.layers\.\d+\.self_attn\.(q_proj|k_proj|v_proj|o_proj)$',
+    'language_model\.layers\.\d+\.linear_attn\.(in_proj_qkv|in_proj_z|in_proj_b|in_proj_a|out_proj)$',
+    'language_model\.layers\.\d+\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)$',
+]
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5 # River's LoRA r32 settings, as TRL
+weight_decay = 0.0
+betas1 = 0.9
+betas2 = 0.95
+max_norm = 1.0
+
+[trainer.scheduler]
+type = "cosine"
+warmup_steps = 10
+min_lr = 5e-6 # cosine to 10%
+
+# loss: prime-rl's built-in default (IPO, eps 0.3 on the probability difference). TRL runs the recipe's clipped GRPO
+# (ratio eps 0.2 / 0.28); prime-rl ships no ratio clip, so that doesn't map onto a built-in option.
+
+[inference.vllm]
+max_model_len = 32768 # prompt + completion of one call; TRL's vLLM uses the same
+seed = 42

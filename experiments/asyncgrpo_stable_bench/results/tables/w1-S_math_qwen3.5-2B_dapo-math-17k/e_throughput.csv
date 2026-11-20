@@ -1,0 +1,6 @@
+run_id,label,lib,gpus_total,all_tok_s_gpu,useful_tok_s_gpu,generated_tok_s_gpu,useful_is_exact
+trl-w1-S-shared-builtin-365436,trl S shared-builtin #365436,trl,8,6685.311647774186,6685.311647774186,12166.886602824809,True
+prime-rl-w1-S-shared-builtin-365448,prime-rl S shared-builtin #365448,prime-rl,8,6755.021903491184,6755.021903491184,12570.780250896687,True
+verl-w1-S-shared-370023,verl S shared #370023,verl,8,7545.1556217872885,3970.027674498015,7463.614000582189,False
+openrlhf-w1-S-shared-364905,openrlhf S shared #364905,openrlhf,8,4359.2037682718865,2180.515237440874,4303.825395343534,False
+skyrl-w1-S-shared-364970,skyrl S shared #364970,skyrl,8,4918.540440586983,2640.0731802851874,4812.9704650766635,False

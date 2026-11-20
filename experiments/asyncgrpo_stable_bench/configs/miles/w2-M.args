@@ -1,0 +1,93 @@
+# miles W2-M (Qwen3.5-9B, TermGrade + terminus-2, local Apptainer boxes). Flags for train_async.py after the Megatron
+# model args (launch/miles/common.sh:model_args qwen3.5-9B). Launcher: launch/miles/w2.sbatch ($RUN, $STEPS, $DATA filled in).
+# Base: w1-M.args (SHARED values on miles' built-in flags) + the agentic wiring of examples/experimental/harbor
+# (launch_common.agentic_train_args) in the fully async form of examples/swe-agent-harbor-docker/run-glm47-flash-agentic-async.py.
+# Harbor-side knobs (sandbox backend, budgets) are env vars set by the launcher. Mapping in configs/miles/EQUIVALENCE.md (W2).
+# --- checkpoints
+--hf-checkpoint /fsx/amine_dirhoussi/stable-bench-runs/miles/models/Qwen3.5-9B/
+--ref-load /fsx/amine_dirhoussi/stable-bench-runs/miles/ckpt/Qwen3.5-9B_torch_dist
+--load $RUN/megatron
+--save $RUN/megatron
+--save-interval 20
+--save-hf $RUN/hf/step_{rollout_id}
+# --- data: one row per train task, metadata.instance_id = Harbor task dir, agent_name = terminus-2
+--prompt-data $DATA/w2_train.jsonl
+--input-key prompt
+--metadata-key metadata
+--rollout-shuffle
+--apply-chat-template-kwargs {"enable_thinking":false}
+# --- agentic wiring (examples/experimental/harbor): Harbor Trial.run() in-process, TITO session server
+--custom-generate-function-path miles.rollout.generate_hub.agentic_tool_call.generate
+--custom-agent-function-path harbor_agent_function.run
+--custom-rm-path generate.reward_func
+--dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_no_aborted
+--tito-model qwen35
+--use-session-server
+--session-server-workers 32
+# --- rollout (fully async): 8 tasks x 8 episodes, at most one batch (64 episodes) in flight
+--fully-async
+--pause-generation-mode in_place
+# fully async + in_place defaults to --namespaced-radix-cache, which miles then rejects with the v1 session server the
+# Harbor example ships ("requires --use-session-server v2"; run 372132). Opt out explicitly, as the assert's sibling
+# message suggests; prefix KV from older weights may then serve later calls (TIS still corrects against rollout logprobs).
+--no-namespaced-radix-cache
+--num-rollout $STEPS
+--rollout-batch-size 8
+--n-samples-per-prompt 8
+--global-batch-size 64
+--rollout-max-response-len 8192
+--max-seq-len 65536
+--rollout-max-context-len 65536
+--rollout-temperature 1.0
+--rollout-top-p 1.0
+--rollout-top-k -1
+--rollout-seed 42
+--balance-data
+# --- GRPO loss (as w1-M.args)
+--advantage-estimator grpo
+--disable-grpo-std-normalization
+--calculate-per-token-loss
+--eps-clip 0.2
+--eps-clip-high 0.28
+--kl-loss-coef 0.0
+--kl-coef 0.0
+--entropy-coef 0.0
+--use-tis
+# --- optimizer (Megatron "adam" is AdamW)
+--optimizer adam
+--lr 1e-6
+--lr-decay-style constant
+--lr-warmup-iters 0
+--weight-decay 0.0
+--adam-beta1 0.9
+--adam-beta2 0.999
+--clip-grad 1.0
+--seed 42
+# --- Megatron: TP=4 + SP (not the recipe's TP=2): on B200 only `unfused` attention is correct and has a backward
+# (envs/miles/NOTES.md W1 "As shipped"), and it materialises [heads/TP, s, s] scores per full-attention layer; agentic
+# samples are up to 65,536 tokens, so 4 heads per rank instead of 8 halves that. One sample > max-tokens-per-gpu gets its own micro-batch.
+--tensor-model-parallel-size 4
+--sequence-parallel
+--pipeline-model-parallel-size 1
+--context-parallel-size 1
+--expert-model-parallel-size 1
+--expert-tensor-parallel-size 1
+--recompute-granularity full
+--recompute-method uniform
+--recompute-num-layers 1
+--use-dynamic-batch-size
+--max-tokens-per-gpu 32768
+--attention-dropout 0.0
+--hidden-dropout 0.0
+--accumulate-allreduce-grads-in-fp32
+--attention-softmax-in-fp32
+--attention-backend unfused
+# --- SGLang (recipe: TP=1 engines for Qwen3.5)
+--rollout-num-gpus-per-engine 1
+--sglang-mem-fraction-static 0.7
+--check-weight-update-skip-list visual
+# --- placement: 4 train + 4 rollout GPUs on one node
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+--num-gpus-per-node 8
+--rollout-num-gpus 4

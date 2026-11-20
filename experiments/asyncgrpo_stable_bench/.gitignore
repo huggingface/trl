@@ -1,0 +1,25 @@
+# raw results live in the HF dataset trl-lib/asyncgrpo-stable-bench-runs, not git
+results/raw/
+results/raw/**/gpu.csv
+results/raw/**/spans*.jsonl
+results/raw/**/mem*.jsonl
+results/raw/**/episodes.jsonl
+results/raw/**/rollouts.jsonl
+*.pt
+*.parquet
+*.tgz
+*.sqsh
+**/logs/
+**/__pycache__/
+envs/**/*.out
+envs/trl/hang364684/
+envs/trl/pause_stall/topk/*.pt
+workloads/**/data/
+results/tables/h_gpu_util.csv
+results/robustness/log_errors.csv
+results/robustness/log_messages_top.csv
+results/robustness/log_files.csv
+**/h_gpu_util.csv
+**/f2_memory_over_time.csv
+figures/out-dashboard/
+figures/out-all-runs-*/

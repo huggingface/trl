@@ -1,0 +1,804 @@
+{
+ "probed": 152,
+ "probed_ok": 151,
+ "mean_pass_all": 0.255,
+ "pass_hist": {
+  "0.0": 75,
+  "0.25": 34,
+  "0.5": 15,
+  "0.75": 18,
+  "1.0": 9
+ },
+ "nop_pass": [
+  "task_00487_e34a2f",
+  "task_00699_a765e2",
+  "task_01376_805668",
+  "task_02027_14f17c",
+  "task_02721_cafb2a",
+  "task_04716_989d90",
+  "task_05496_0f70c5",
+  "task_06830_d3cc3c",
+  "task_07785_ed4ee3",
+  "task_08010_f478e9",
+  "task_09334_81fcff"
+ ],
+ "oracle_fail": [
+  "task_00041_f5102a",
+  "task_00350_3dca53",
+  "task_00793_aea59a",
+  "task_01687_d50155",
+  "task_09410_fedf87",
+  "task_10037_c1c458",
+  "task_11630_5ebfd7",
+  "task_12173_7a5616"
+ ],
+ "in_band": 58,
+ "train": 44,
+ "eval": 14,
+ "train_mean_pass": 0.42,
+ "eval_mean_pass": 0.446,
+ "lo": 0.1,
+ "hi": 0.75,
+ "per_task": {
+  "task_01910_edd81f": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02280_456c31": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_01201_da6e14": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00643_fd7587": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01130_8dc425": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02351_9dffe4": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01502_ef4b2a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00142_ffa29d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00306_9b93c1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_02160_516411": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02353_a2a59d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01795_7d88d0": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00137_41c355": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00041_f5102a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00350_3dca53": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_02293_ebb7db": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_01559_6fa44c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_00836_fadbf9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_02073_63f212": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02346_79362f": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00642_e0e544": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01029_aa4abe": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01376_805668": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00623_eccd32": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02119_d61af8": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_01618_dc6315": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_00644_7a3c71": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02497_a6c02d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_00158_a21b36": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02640_0d77d9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00425_e22959": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00487_e34a2f": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02513_b3c667": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02261_6754d9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00762_c8d1e1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01302_29c747": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_01427_a12636": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_00933_a8167e": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02850_e20767": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02039_5e0a83": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00887_02d2c3": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_00866_5d597c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00762_43852a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_04716_989d90": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02800_4ed286": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_01077_0590ce": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01439_99d78c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02027_14f17c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00004_88fabf": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_03157_750f56": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02166_dc50aa": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_01550_640344": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01604_73bd46": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00051_2dcbb6": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02117_a5ba01": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00793_aea59a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00238_93ecf5": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_04124_166085": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_05496_0f70c5": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_00988_683983": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_04602_a00009": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_02481_1be235": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02581_1ce959": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_00699_a765e2": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_03695_7cc5b4": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_05713_ad4805": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_01928_3a401a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02410_2be175": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_05093_618453": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_07556_71c2aa": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_00287_6ac070": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_02742_1ae5b1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_04204_b938f8": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00325_83e1a2": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_01877_d28849": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_06830_d3cc3c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_00912_17fe8a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01389_fe2054": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_04186_45f42d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_05266_7d8303": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_02463_db1bd1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_07599_e52265": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_07522_2e0bd9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02904_ece596": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02908_9c5797": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_06258_74b6a4": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_08601_271c9e": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02721_cafb2a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_00779_5a876d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09470_8dc11b": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00328_af8d5a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_10411_81a984": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_02964_a130a2": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09010_2e29ab": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01687_d50155": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_03799_6459a0": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_07460_0c95a4": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02472_e3e62c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_11715_11bf07": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_13711_d07485": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_08717_100286": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_04928_0f691a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02881_681414": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_00905_0d6c2e": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_09264_790d8c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_04860_7cf60f": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_08261_bd28c1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09343_155fc1": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_11735_bb2fa9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_12173_7a5616": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_09710_f35aaa": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_06784_aac413": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09851_a967f8": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09334_81fcff": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_10037_c1c458": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_12651_5eacb9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 1.0
+  },
+  "task_02986_54c6d0": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09057_00c1ff": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_11645_a6a4cc": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_10306_c63d97": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_01516_8db5ba": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_10531_d0d343": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09410_fedf87": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02888_dc8ac6": {
+   "n": 4,
+   "scored": 2,
+   "pass": 0.0
+  },
+  "task_10781_33d5f4": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09083_c58e77": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_00109_d82bc5": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_14262_bfc521": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_08047_ffdefb": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_08030_6fe4c6": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_08010_f478e9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.5
+  },
+  "task_12269_e62466": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_10932_9b014d": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_10467_5ddf2a": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.75
+  },
+  "task_10661_927df0": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_10928_a3933b": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_11592_81faac": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_09304_b13471": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_04879_ed0071": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_02972_c29237": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_07785_ed4ee3": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_12676_8b8a51": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_11843_5349dd": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_14484_f5e6fa": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_14617_5b29c5": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_11337_31c8b8": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_13769_92348c": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_11630_5ebfd7": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_14257_0b32c0": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  },
+  "task_11757_8f8733": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_10577_8841a9": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.25
+  },
+  "task_12989_6edd38": {
+   "n": 4,
+   "scored": 4,
+   "pass": 0.0
+  }
+ }
+}

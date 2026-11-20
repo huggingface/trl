@@ -1,0 +1,104 @@
+# W1-S shared arm on NeMo-RL v0.8.0 (NGC container). Starts from NeMo-RL's own Qwen3.5 dense GRPO recipe
+# (grpo-qwen3.5-9b-1n8g-megatron.yaml -> grpo_math_1B.yaml) and maps SHARED_W1 onto it. Async GRPO per
+# docs/guides/async-grpo.md (non-colocated vLLM, IS correction on). Run paths (checkpoint/log dirs) are passed as
+# overrides by launch/nemo-rl/w1/inner.sh. Knob mapping and deviations: envs/nemo-rl/NOTES.md "## W1".
+defaults: /opt/nemo-rl/examples/configs/recipes/llm/grpo-qwen3.5-9b-1n8g-megatron.yaml
+
+grpo:
+  num_prompts_per_step: 32
+  num_generations_per_prompt: 8
+  max_num_steps: 200
+  max_num_epochs: 1
+  # group-mean advantage, no std, no leave-one-out
+  normalize_rewards: false
+  use_leave_one_out_baseline: false
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  use_dynamic_sampling: false
+  overlong_filtering: false
+  seed: 42
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1  # library default and the guide's recommended start
+    in_flight_weight_updates: false  # library default
+
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  ratio_clip_min: 0.2
+  ratio_clip_max: 0.28
+  use_importance_sampling_correction: true  # required by async GRPO
+  token_level_loss: true
+
+checkpointing:
+  enabled: true
+  save_period: 50
+  metric_name: null
+  keep_top_k: null
+  save_optimizer: true
+
+policy:
+  model_name: Qwen/Qwen3.5-2B
+  tokenizer:
+    chat_template_kwargs:
+      enable_thinking: false
+  train_global_batch_size: 256
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 18432
+  max_grad_norm: 1.0
+  megatron_cfg:
+    optimizer:
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.0
+      adam_beta1: 0.9
+      adam_beta2: 0.999
+    scheduler:
+      lr_decay_style: constant
+      lr_warmup_iters: 0
+      lr_warmup_init: 1.0e-6
+  generation:
+    max_new_tokens: 16384
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    vllm_cfg:
+      async_engine: true
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.85
+      max_model_len: 18432
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 4
+        num_nodes: null
+
+data:
+  max_input_seq_length: 2048
+  shuffle: true
+  train:
+    dataset_name: ResponseDataset
+    split_validation_size: 0
+    data_path: /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/workloads/math/data/train.parquet
+    input_key: problem
+    output_key: answer
+  validation: null
+  default:
+    dataset_name: ResponseDataset
+    prompt_file: /fsx/amine_dirhoussi/trl-wt-stable-bench/experiments/asyncgrpo_stable_bench/launch/nemo-rl/w1/w1_prompt.txt
+    system_prompt_file: null
+    processor: math_hf_data_processor
+    env_name: w1_math
+
+env:
+  w1_math: {}
+
+logger:
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1

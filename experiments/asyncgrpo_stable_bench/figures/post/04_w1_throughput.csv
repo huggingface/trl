@@ -1,0 +1,6 @@
+lib,run_id,status,collapsed,step_time,all,useful,generated,zero_adv_frac,useful_exact,padded_forward
+trl,trl-w1-S-shared-builtin-365436,done,False,51.0,53482.5,53482.5,97335.1,0.462,True,
+prime-rl,prime-rl-w1-S-shared-builtin-365448,done,False,25.3,54040.2,54040.2,100566.2,0.511,True,
+verl,verl-w1-S-shared-370023,done,False,48.3,60361.2,31760.2,59708.9,0.475,False,
+openrlhf,openrlhf-w1-S-shared-364905,done,False,71.0,34873.6,17444.1,34430.6,0.499,False,
+skyrl,skyrl-w1-S-shared-364970,done,True,37.2,39348.3,21120.6,38503.8,0.493,False,104061.5
