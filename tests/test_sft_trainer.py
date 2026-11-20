@@ -845,15 +845,25 @@ class TestSFTTrainer(TrlTestCase):
         reason="Only transformers v5 with peft<0.19 skips the routed experts (#7765)",
     )
     @pytest.mark.parametrize(
-        "target_modules, target_parameters, expect_error",
+        "model_id, target_modules, target_parameters, expect_error",
         [
-            (["gate_proj", "up_proj", "down_proj"], None, True),
-            ("all-linear", None, True),
-            (r".*\.(q_proj|v_proj)", None, False),
-            (["gate_proj", "up_proj", "down_proj"], ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"], False),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", "all-linear", None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", r".*\.(q_proj|v_proj)", None, False),
+            (
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"],
+                False,
+            ),
+            # no peft version maps `target_modules` onto the routed experts of these models (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", None, False),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "all-linear", None, False),
         ],
     )
-    def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
+    def test_moe_lora_raises_when_peft_skips_routed_experts(
+        self, model_id, target_modules, target_parameters, expect_error
+    ):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
@@ -861,14 +871,14 @@ class TestSFTTrainer(TrlTestCase):
         if expect_error:
             with pytest.raises(ValueError, match=r"peft>=0\.19\.0"):
                 SFTTrainer(
-                    model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                    model=model_id,
                     args=training_args,
                     train_dataset=dataset,
                     peft_config=peft_config,
                 )
         else:
             SFTTrainer(
-                model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                model=model_id,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=peft_config,
@@ -890,6 +900,8 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
             # no dense or shared expert layers to skip
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+            # peft doesn't remap this model's targets, so its dense layers are trained (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", False),
         ],
     )
     def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
