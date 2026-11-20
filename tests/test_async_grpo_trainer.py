@@ -895,14 +895,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-            pytest.param(
-                "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-                marks=pytest.mark.xfail(
-                    raises=RuntimeError,
-                    reason="Flash Attention rejects the tiny model's head dim of 2 (#8446)",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
             "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
