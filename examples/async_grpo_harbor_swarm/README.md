@@ -234,3 +234,10 @@ Full-model extension checks: 21 CPU tests pass, including a two-process Gloo che
 the actual policy loss against a single-process reference. Trainer and NCCL weight-transfer
 imports passed on an H100. The full FSDP2/serving smoke and native 16-agent concurrency
 gates run inside the Slurm allocation; these CPU/import checks do not establish their outcome.
+
+The one-node launcher uses NCCL socket transport (`NCCL_NET=Socket`, `NCCL_P2P_DISABLE=1`,
+`NCCL_SHM_DISABLE=1`, `NCCL_CUMEM_HOST_ENABLE=0`, `NCCL_IB_DISABLE=1`) for the
+host/container weight-transfer boundary and enables NCCL INIT/NET diagnostics.
+This conservative setting also applies to intra-trainer collectives and can reduce
+throughput. The full GPU smoke remains mandatory before real training. Monitoring
+records explicit queued/running/failed status and the rank-zero failure summary.

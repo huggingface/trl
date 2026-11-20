@@ -10,6 +10,10 @@
 set -euo pipefail
 repo=${SWARM_REPO:?}
 root=${SWARM_RUN_DIR:?}
+# Trainer and vLLM run in separate host/container namespaces. Use socket transport
+# for this retry instead of CUDA IPC/shared-memory paths across that boundary.
+export NCCL_NET=Socket NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
+export NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_CUMEM_HOST_ENABLE=0 NCCL_IB_DISABLE=1
 mkdir -p "$root"
 printf '%s\n' "$SLURM_JOB_ID" > "$root/job"
 printf '%s\n' "$(( $(date +%s) + 28800 ))" > "$root/deadline"

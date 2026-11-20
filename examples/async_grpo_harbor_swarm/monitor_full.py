@@ -94,7 +94,52 @@ def main():
                 if smoke
                 else "gpu_smoke_or_queued"
             )
-            record = {"timestamp": time.time(), "job": state, "stage": stage, "metrics": metrics}
+            rows = [line.split("|") for line in state.splitlines()]
+            job_state = rows[0][1].split()[0] if rows else "UNKNOWN"
+            terminal = job_state in {
+                "COMPLETED",
+                "FAILED",
+                "CANCELLED",
+                "TIMEOUT",
+                "OUT_OF_MEMORY",
+                "NODE_FAIL",
+                "PREEMPTED",
+            }
+            metrics["job/failed"] = int(terminal and job_state != "COMPLETED")
+            metrics["job/running"] = int(job_state == "RUNNING")
+            metrics["job/pending"] = int(job_state == "PENDING")
+            validation_stage = stage
+            if terminal:
+                stage = job_state.lower()
+            elif job_state == "PENDING":
+                stage = "queued"
+            record = {
+                "timestamp": time.time(),
+                "job": state,
+                "stage": stage,
+                "validation_stage": validation_stage,
+                "metrics": metrics,
+            }
+            if terminal and job_state != "COMPLETED":
+                for log in (root / "experiment/train.log", root / "smoke/train.log", root / "server-smoke.log"):
+                    if log.exists():
+                        errors = [
+                            line
+                            for line in log.read_text(errors="replace").splitlines()
+                            if "[rank0]: RuntimeError:" in line or "[rank0]: Exception:" in line
+                        ]
+                        if errors:
+                            record["failure_summary"] = errors[-1][:2000]
+                            record["failure_log"] = str(log)
+                            break
+            manifest_path = root / "experiment.json"
+            manifest = read_json(manifest_path, {})
+            manifest.update(status=stage, job_state=job_state, last_monitor_update=record["timestamp"])
+            if "failure_summary" in record:
+                manifest["failure_summary"] = record["failure_summary"]
+            manifest_temp = root / "experiment.tmp"
+            manifest_temp.write_text(json.dumps(manifest, indent=2))
+            manifest_temp.replace(manifest_path)
             temporary = root / "monitor-status.tmp"
             temporary.write_text(json.dumps(record, indent=2))
             temporary.replace(root / "monitor-status.json")
@@ -102,12 +147,7 @@ def main():
                 stream.write(json.dumps(record) + "\n")
             trackio.log(metrics)
             print(json.dumps(record), flush=True)
-            rows = [line.split("|") for line in state.splitlines()]
-            if rows and all(
-                row[1].split()[0]
-                in {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED"}
-                for row in rows
-            ):
+            if terminal:
                 break
             time.sleep(30)
     finally:
