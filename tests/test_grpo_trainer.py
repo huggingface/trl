@@ -4468,7 +4468,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
                         reason="Inkling 2 models were introduced in transformers-5.23.0",
                     ),
                     pytest.mark.xfail(
-                        reason="Dequantizing the MXFP8 checkpoint leaves the experts unscaled (#8497)", strict=True
+                        reason="The tiny model's random completions never open an answer, so they all parse to the same "
+                        "empty one, get the same reward and leave nothing to learn",
+                        strict=True,
                     ),
                 ],
             ),
