@@ -1,0 +1,151 @@
+# s3 information aggregation with AsyncGRPO
+
+A small replication of the information-aggregation experiment from
+[s3 (arXiv 2611.08615)](https://huggingface.co/papers/2611.08615): a team of N = 4 Qwen3-0.6B agents (thinking on) trained
+with a shared team reward to talk to each other.
+
+Each agent holds one private number between 1 and 99, written in English words. The team must return all four
+numbers in ascending order, keeping duplicates. It succeeds if any agent's final list is correct. Nobody can solve it
+alone, so the only way to score is to message the number and read teammates' messages.
+
+## What is in this folder
+
+| File | What it does |
+| --- | --- |
+| [`harness/task.py`](harness/task.py) | The task: problems, the paper's prompts (App. G) and tools (`message`, `read_messages`, `check_notifications`), answer parsing, team reward (Eq. 1). |
+| [`harness/team.py`](harness/team.py) | One team episode: N asynchronous agents generating on token ids, each with its tools (`AgentTools`) on an in-memory message board, notifications at request boundaries, idling and wake-ups, and the final-answer request (§3.1, App. F). |
+| [`async_grpo_s3_aggregation.py`](async_grpo_s3_aggregation.py) | Training with `AsyncGRPOTrainer`: a custom `AsyncRolloutLoop` whose rollout is a whole team episode. The module docstring maps the paper's objective onto the config. |
+| [`evaluate.py`](evaluate.py) | Evaluates a served model on held-out problems; one JSON line per team episode. |
+
+The harness works on token ids, so the training rows are exactly the sampled tokens and the sampler's logprobs.
+Prompts are rendered with the tokenizer's chat template; each new message (a tool result, a notification, the final
+request) is appended as the template renders it after the assistant turn, and earlier turns are never re-rendered.
+In training, agents sample through the rollout loop's `generate_one_turn` and use its tokenizer and chat template;
+`evaluate.py` samples from a served model with `VLLMSampler` instead.
+
+## How it maps onto AsyncGRPO
+
+```mermaid
+flowchart LR
+    P["problem p<br/>(dataset row)"] --> G["group: G = 8 rollouts"]
+    G --> R["one rollout = one team episode<br/>(generate_one → harness.run_team)"]
+    subgraph R2 [team episode]
+        A1[agent 1] <--> B[(message board)]
+        A2[agent 2] <--> B
+        A3[agent 3] <--> B
+        A4[agent 4] <--> B
+    end
+    R --> R2
+    R2 --> W["team reward R (Eq. 1)<br/>one per rollout"]
+    R2 --> T["N training rows<br/>(each agent's sampled turns)"]
+    W --> AD["compute_advantages:<br/>group-standardized, over the team's tokens"]
+    AD --> T
+    T --> L["TeamTrainer loss (Eq. 3):<br/>mean over the update's teams"]
+```
+
+Every agent samples from the same policy through the loop's `generate_one_turn`; the team's reward and advantage
+are shared by all its agents' rows.
+
+- **One rollout = one team.** `generate_one` runs `harness.run_team` and returns each agent's sampled stretches as
+  `TurnRecord`s. Each request is one `generate_one_turn` call of at most `max_completion_length` = 1,024 tokens, the
+  paper's chunk between notifications. Each agent's turns chain into one training row, so a team gives N rows that share the team's
+  advantage.
+- **Groups are G = 8 teams on the same problem.** The numbers are the same across the group; the agent names and
+  teammate orders differ.
+- **Loss (Eq. 3).** PPO clipping is off (`epsilon=1`, `epsilon_high=1e9`). Tokens are masked by the importance ratio
+  (`vllm_importance_sampling_clip_min/max = 0.2/5.0`). `compute_advantages` divides each team's advantage by its trained
+  tokens |T_g|, and `TeamTrainer` scales out TRL's per-micro-batch token mean and divides by the update's team count
+  |B| (its rows / N, since every team gives one row per agent; the Trainer fetches all of an update's micro-batches
+  before the first forward, so |B| is known in `compute_loss`). So every team counts equally
+  however the batcher packs or splits teams, as in the paper's mean over teams of per-team token means.
+  Micro-batches use TRL's token-budget packing, and `gradient_accumulation_steps` is `--teams-per-update` / 2,
+  for about two teams per 40,960-token micro-batch. So `--teams-per-update` is approximate: a team forwards about
+  17k tokens, so a micro-batch holds about 2.4 teams and an update about 150, varying with team length.
+- **Concurrency.** Rollouts start at TRL's default cap (KV cache tokens / max model length, about 14 teams) and
+  the control loop raises it while the vLLM KV cache has room, up to `--concurrent-teams`.
+
+Not implemented: the KL penalty the paper lists for this task (its coefficient and reference model are not
+published), and the individual-reward and online-SFT baselines.
+
+## Setup
+
+Use this TRL checkout with vLLM installed:
+
+```sh
+pip install -e ".[vllm,kernels]" datasets httpx
+```
+
+## Training
+
+On two GPUs, run vLLM on one and the trainer on the other, from the repository root:
+
+```sh
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B --port 8000 \
+    --max-model-len 40960 --max-num-seqs 512 --enable-prefix-caching \
+    --logprobs-mode processed_logprobs --weight-transfer-config '{"backend":"nccl"}'
+
+CUDA_VISIBLE_DEVICES=1 accelerate launch --num_processes 1 --mixed_precision bf16 \
+    examples/async_grpo_s3_aggregation/async_grpo_s3_aggregation.py \
+    --vllm-url http://127.0.0.1:8000 --teams-per-update 128 --updates 50 --concurrent-teams 128
+```
+
+This is the run reported below. Training uses problem ids 0 to 1023, G = 8, a constant learning rate of 5e-7,
+`max_staleness=4`, and a checkpoint every 10 updates. The trainer logs per-episode team metrics: `team/success`, `team/reward`,
+`team/tokens`, `team/messages`, `team/broadcasts`, `team/reads`, `team/notifications`, `team/bad_recipients`,
+`team/silent_agent_frac` (agents that never messaged), `team/correct_agent_frac`, and how agents ended their work
+phase (`team/work_end_{answered,idle,allowance,context}_frac`). The paper trains for 200 updates; `--updates 200` continues the same recipe.
+
+## Evaluation
+
+Serve the base model or a checkpoint (no weight-transfer flags needed), then evaluate on 192 held-out problems:
+
+```sh
+vllm serve Qwen3-0.6B-S3-Aggregation/checkpoint-50 --port 8000 \
+    --max-model-len 40960 --max-num-seqs 512 --enable-prefix-caching
+
+python examples/async_grpo_s3_aggregation/evaluate.py --url http://127.0.0.1:8000 \
+    --model Qwen3-0.6B-S3-Aggregation/checkpoint-50 --name ckpt50 --episodes 192
+```
+
+Held-out problems use ids 1,000,000 and up, and the team seed is the episode index, so reruns score the same
+teams. Add `--save-tokens` to keep each agent's full token context.
+
+## Results
+
+50 updates of about 150 teams on 2 H100s took about 4.9 hours. The checkpoint is
+[trl-lib/Qwen3-0.6B-S3-Aggregation](https://huggingface.co/trl-lib/Qwen3-0.6B-S3-Aggregation) and the training
+metrics are on [trl-lib/s3-aggregation-trackio](https://huggingface.co/spaces/trl-lib/s3-aggregation-trackio).
+
+![Training curves](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/s3_aggregation_training.png)
+
+Training success (teams solved, mean over 5-update blocks):
+
+| updates | 1-5 | 6-10 | 11-15 | 16-20 | 21-25 | 26-30 | 31-35 | 36-40 | 41-45 | 46-50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| success | 7.3% | 7.8% | 10.7% | 14.2% | 18.8% | 26.1% | 30.0% | 33.3% | 41.7% | 46.6% |
+
+Messages per team rose from 4.0 to 6.0, and the share of agents that never sent a message fell from 28% to 13%.
+Tokens per team went from 12.9k to 13.9k out of a 36.9k team allowance. The mean importance ratio stayed at 1.00.
+
+Held-out evaluation (192 problems, 64 teams in flight):
+
+| model | success | messages / team | tokens / team |
+| --- | --- | --- | --- |
+| Qwen3-0.6B | 4.7% (SE 1.5) | 4.14 | 13.1k |
+| checkpoint-50 | **55.2%** (SE 3.6) | 6.55 | 14.4k |
+
+For comparison, the paper reports 1.6% for the base model and 93.2% after 200 updates. At 50 updates the curve is
+still rising.
+
+The run used this code except for the loss: it scaled each team's advantage by its group's mean team length over its
+own, which makes TRL's token mean weigh teams about equally, instead of computing Eq. 3 exactly.
+
+## Deviations from the paper
+
+- Elided parts of the paper's prompts are left out. The identity line ("Your name is ...") and the example tool
+  calls are written by us.
+- An agent whose own token allowance runs out is asked for its final answer right away, not when the whole team's
+  work phase ends. It cannot read messages in between, so its context at the request is the same.
+- No KL penalty.
+- Groups whose teams all get the same reward are dropped (TRL's default) and replaced by new ones; the paper keeps
+  them with advantage 0 (App. C).
