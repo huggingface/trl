@@ -57,6 +57,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
@@ -66,6 +67,7 @@ from trl.chat_template_utils import (
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
+    smollm2_chat_template,
     smolvlm_v2_chat_template,
     supports_tool_calling,
 )
@@ -1353,6 +1355,17 @@ class TestIsChatTemplateStopTokenTrained:
             ],
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", muse_glimmer_v2_chat_template),
+            id="muse_glimmer_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
             id="nemotron_3_nano",
             marks=pytest.mark.skipif(
@@ -1478,6 +1491,8 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        # SmolLM2 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
             ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
@@ -1585,6 +1600,33 @@ class TestGetTrainingChatTemplate:
             # GLM's native template doesn't terminate an assistant turn with an end-of-turn token; the turn is ended
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
+            assert after == before + "<|user|>"
+        else:
+            assert before == after
+
+    def test_behavior_unchanged_with_response_format(self, tokenizer_name):
+        tokenizer = self._load(tokenizer_name)
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": '{"color": "blue"}'},
+        ]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "color",
+                "schema": {"type": "object", "properties": {"color": {"type": "string"}}},
+            },
+        }
+
+        before = tokenizer.apply_chat_template(messages, tokenize=False, response_format=response_format)
+        new_chat_template = get_training_chat_template(tokenizer)
+        after = tokenizer.apply_chat_template(
+            messages, tokenize=False, chat_template=new_chat_template, response_format=response_format
+        )
+        if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
+            # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before + "<|user|>"
         else:
             assert before == after
@@ -2439,7 +2481,10 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = processing_class(text)["input_ids"]
-        parsed = parse_response(processing_class, assistant_text)
+        prefix = processing_class.apply_chat_template(
+            [{"role": "user", "content": "What is 3*4?"}], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        parsed = parse_response(processing_class, assistant_text, prefix=prefix)
         expected = {
             "role": "assistant",
             "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
@@ -2473,7 +2518,7 @@ class TestParseResponse:
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
         # Truncate the response mid-tool-call and just check that parsing doesn't crash.
         for end in range(1, len(response)):
-            parse_response(tokenizer, response[:end])
+            parse_response(tokenizer, response[:end], prefix=prefix)
 
 
 class TestChatTemplatesDocumentation:

@@ -199,7 +199,7 @@ class TreeRow:
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
                   boundaries in `tree_kv_index`.
                 - `tree_segment_parents` (`S`), `tree_segment_depths` (`S`): the segment tree, for the recurrent layers
-                  patched by [`patch_tree_gdn`].
+                  patched by [`patch_tree_recurrent`].
                 - `tree_sizes` (`4 + depth`): longest segment, longest path, `K`, 64-token chunks, then the segments
                   per depth. Every length the kernels launch with, so a rank reads them in one go (see [`unpad_tree`]).
                 - `token_index` (`M`): position whose prediction is each trained token. A shared position serves every
@@ -372,20 +372,27 @@ def register_tree_attention() -> None:
 _PATCHED = set()
 
 
-def patch_tree_gdn(model) -> bool:
+def patch_tree_recurrent(model, layer_type: str) -> bool:
     """
-    Make the model's gated DeltaNet layers follow the tree of a tree-packed forward.
+    Make the model's gated DeltaNet or short convolution layers follow the tree of a tree-packed forward.
 
-    Transformers' hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run these layers through two module-level functions,
-    `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and pass the forward's keyword arguments down to both. Both
-    are wrapped: given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+    Transformers' gated DeltaNet hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run their `"linear_attention"` layers
+    through two module-level functions, `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and LFM2's `"conv"`
+    layers through the first alone. These layers pass the forward's keyword arguments down to them. Each is wrapped:
+    given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to patch.
+        layer_type (`str`):
+            The model's only non-attention layer type, `"linear_attention"` or `"conv"`.
 
     Returns:
-        `bool`: whether the model's modeling module has those functions.
+        `bool`: whether the model's modeling module has the functions its layers run through.
     """
     modeling = sys.modules[type(model).forward.__module__]
     conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
-    if conv is None or chunk is None:
+    if conv is None or (layer_type == "linear_attention" and chunk is None):
         return False
     if modeling in _PATCHED:
         return True
@@ -401,7 +408,9 @@ def patch_tree_gdn(model) -> bool:
             return chunk(query, key, value, g=g, beta=beta, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, **kwargs)
         return tree_chunk_gated_delta_rule(query, key, value, g, beta, kwargs, use_qk_l2norm_in_kernel), None
 
-    modeling.causal_conv1d_fn, modeling.torch_chunk_gated_delta_rule = causal_conv1d_fn, torch_chunk_gated_delta_rule
+    modeling.causal_conv1d_fn = causal_conv1d_fn
+    if chunk is not None:
+        modeling.torch_chunk_gated_delta_rule = torch_chunk_gated_delta_rule
     _PATCHED.add(modeling)
     return True
 
@@ -792,8 +801,11 @@ class AsyncRolloutLoop:
         score_queue_maxsize: int = 16,
         lora_name: str | None = None,
         dataset_start_index: int = 0,
+        max_dropped_groups: int | None = None,
     ):
         self.config = config
+        self._max_dropped_groups = max_dropped_groups
+        self._dropped_in_a_row = 0
         self.model_name = model_name
         self.lora_name = lora_name
         self.dataset = dataset
@@ -1393,6 +1405,15 @@ class AsyncRolloutLoop:
                     num_samples=self.config.num_completions_to_print,
                 )
             self._total_groups_scored += 1
+
+            # No weight update while every group is dropped: raise instead of waiting forever (#8423)
+            self._dropped_in_a_row = 0 if samples else self._dropped_in_a_row + 1
+            if self._max_dropped_groups is not None and self._dropped_in_a_row >= self._max_dropped_groups:
+                raise RuntimeError(
+                    f"The last {self._dropped_in_a_row} generated groups were all dropped, because the rewards of each "
+                    "group were equal, so no batch can reach the trainer. Check that the reward functions return "
+                    "different rewards for different completions."
+                )
 
             for item in samples or [group.group_id]:
                 self._put_in_buffer(item)
@@ -3036,11 +3057,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "before it, these layers call the functions they stored at init rather than the module-level "
                     "ones tree packing patches, so they would scan across samples."
                 )
-            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
+            if layer_types == {"conv"} and Version(transformers.__version__) < Version("5.22.0"):
                 raise ValueError(
-                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
-                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
-                    "convolutional layer would scan across samples."
+                    f"Tree packing of {type(model).__name__}'s short convolution layers requires transformers>=5.22.0: "
+                    "before it, these layers do not pass the forward's keyword arguments down to the module-level "
+                    "function tree packing patches, so they would scan across samples."
+                )
+            if layer_types not in ({"linear_attention"}, {"conv"}) or not patch_tree_recurrent(model, *layer_types):
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
+                    "transformers' gated DeltaNet layers and LFM2's short convolutions along each sample's own path; "
+                    "any other recurrent or convolutional layer would scan across samples."
                 )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
@@ -3190,6 +3217,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
             )
 
+        # None for a streaming dataset or environment-owned data
+        self._num_prompts = len(train_dataset) if isinstance(train_dataset, Dataset) else None
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
             # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
@@ -3361,6 +3390,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 eos_token_ids=self.eos_token_ids,
                 tools=tools,
                 environment_factory=environment_factory,
+                max_dropped_groups=self._num_prompts,
                 **self._rollout_loop_kwargs,
             )
             self.rollout_queue = self.rollout_worker.rollout_buffer
