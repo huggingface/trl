@@ -15,6 +15,7 @@
 import gc
 import logging
 import os
+import sys
 import traceback
 from functools import wraps
 
@@ -70,6 +71,33 @@ def pytest_runtest_makereport(item, call):
                 exc.__traceback__ = None
             stack.append(exc.__context__)
             stack.append(exc.__cause__)
+
+
+# ============================================================================
+# Peak host memory per test
+# ============================================================================
+# List the tests that raise their process's peak RSS the most, to catch memory regressions before an OOM kill (#8429)
+# Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
+if sys.platform == "linux":
+    import resource
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        yield
+        increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+        item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
+
+    def pytest_terminal_summary(terminalreporter):
+        reports = terminalreporter.stats.get("passed", []) + terminalreporter.stats.get("failed", [])
+        increases = [
+            (dict(report.user_properties)["peak_rss_increase_gb"], report.nodeid)
+            for report in reports
+            if report.when == "call"
+        ]
+        terminalreporter.write_sep("=", "largest peak host memory increases")
+        for increase, nodeid in sorted(increases, reverse=True)[:10]:
+            terminalreporter.write_line(f"{increase:6.2f} GB {nodeid}")
 
 
 # ============================================================================
