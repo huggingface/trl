@@ -616,8 +616,9 @@ gemma4_template = {
 }
 
 deepseekv3_template = {
-    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
-    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
+    # DeepSeek-R1's generation prompt pre-fills `<think>\n` (R1-0528 and V3-0324's don't), and after tool outputs the
+    # model continues without a new `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and
+    # the reasoning field the tag.
     "defaults": {"role": "assistant"},
     "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
     "fields": {
@@ -758,6 +759,8 @@ muse_spark_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark.jinja").read_text(
 
 muse_spark_v2_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v2.jinja").read_text(encoding="utf-8")
 
+muse_spark_v3_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v3.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
@@ -771,6 +774,12 @@ nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_ligh
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
+
+phi4_chat_template = (_CHAT_TEMPLATES_DIR / "phi4.jinja").read_text(encoding="utf-8")
+
+phi4_mini_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning.jinja").read_text(encoding="utf-8")
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
@@ -857,7 +866,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template in [deepseekv3_chat_template, deepseekv3_training_chat_template]:
+    if chat_template in [
+        deepseekv3_chat_template,
+        deepseekv3_training_chat_template,
+        deepseekv3_v2_chat_template,
+        deepseekv3_v2_training_chat_template,
+        deepseekv3_v4_chat_template,
+        deepseekv3_v4_training_chat_template,
+    ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseekv3_template
@@ -1240,6 +1256,10 @@ muse_glimmer_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_v2
 
 muse_spark_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_training.jinja").read_text(encoding="utf-8")
 
+muse_spark_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1259,6 +1279,14 @@ nemotron_3_5_lightning_training_chat_template = (
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
+
+phi4_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
@@ -1452,6 +1480,9 @@ def get_training_chat_template(
     if chat_template == muse_spark_v2_chat_template:
         return muse_spark_training_chat_template
 
+    if chat_template == muse_spark_v3_chat_template:
+        return muse_spark_v3_training_chat_template
+
     if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
@@ -1469,6 +1500,15 @@ def get_training_chat_template(
 
     if chat_template == phi3_5_chat_template:
         return phi3_5_training_chat_template
+
+    if chat_template == phi4_chat_template:
+        return phi4_training_chat_template
+
+    if chat_template == phi4_mini_chat_template:
+        return phi4_mini_training_chat_template
+
+    if chat_template == phi4_mini_reasoning_chat_template:
+        return phi4_mini_reasoning_training_chat_template
 
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template

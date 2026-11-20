@@ -35,7 +35,7 @@ Original DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-R1`). Re
 
 ### `deepseekv3_v2.jinja`
 
-Later DeepSeek-R1 chat template (as shipped by `deepseek-ai/DeepSeek-R1-0528` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`). Unlike `deepseekv3.jinja`, it closes each user turn with `<｜Assistant｜>`, so the generation prompt adds nothing after a user message, and it renders `<｜tool▁outputs▁end｜>` at the start of the assistant turn that follows tool outputs. Tool-call arguments are still rendered only as strings.
+Later DeepSeek-R1 chat template (as shipped by `deepseek-ai/DeepSeek-R1-0528` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`). Unlike `deepseekv3.jinja`, it closes each user turn with `<｜Assistant｜>`, so the generation prompt adds nothing after a user message, and it renders `<｜tool▁outputs▁end｜>` at the start of the assistant turn that follows tool outputs. Tool-call arguments are still rendered only as strings, so trainers swap in `deepseekv3_v2_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `deepseekv3_v3.jinja`
 
@@ -43,7 +43,7 @@ DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-V3`). Same as `de
 
 ### `deepseekv3_v4.jinja`
 
-DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings.
+DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings, so trainers swap in `deepseekv3_v4_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `deepseekv3_v5.jinja`
 
@@ -203,7 +203,11 @@ Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Op
 
 ### `muse_spark_v2.jinja`
 
-Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant from [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b) to [a604fa7](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/a604fa753b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
+
+### `muse_spark_v3.jinja`
+
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [a604fa7](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/a604fa753b)). Same as `muse_spark_v2.jinja`, plus a system message line stating the JSON schema when `response_format` is a `json_schema`. It keeps the same `{% generation %}` markers, so `muse_spark_v3_training.jinja` only adds the header comment.
 
 ### `nemotron_3_nano.jinja`
 
@@ -228,6 +232,18 @@ Original Phi-3 chat template.
 ### `phi3_5.jinja`
 
 Original Phi-3.5 chat template.
+
+### `phi4.jinja`
+
+Original Phi-4 chat template (`microsoft/phi-4`). Does not support tool calling.
+
+### `phi4_mini.jinja`
+
+Original Phi-4-mini chat template (`microsoft/Phi-4-mini-instruct`, `microsoft/Phi-4-mini-flash-reasoning`). Tools are passed as a string in the system message, not through the `tools` argument.
+
+### `phi4_mini_reasoning.jinja`
+
+Original Phi-4-mini-reasoning chat template (`microsoft/Phi-4-mini-reasoning`). Same format as `phi4_mini.jinja`, with a fixed system prompt that any system message is appended to.
 
 ### `qwen2_5.jinja`
 
@@ -382,6 +398,8 @@ Close each assistant turn inside the generation block with the role marker that 
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
+Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
+
 ### `gptoss_training.jinja`
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
@@ -440,6 +458,10 @@ Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, appli
 
 Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
 
+### `muse_spark_v3_training.jinja`
+
+Patched Muse Spark Open template. Same as `muse_spark_v3.jinja` with the header comment of `muse_spark_training.jinja`: the Hub template already keeps the `<|start|>assistant` out of its `{% generation %}` markers.
+
 ### `nemotron_3_nano_training.jinja`
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`:
@@ -473,6 +495,24 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `phi3_5_training.jinja`
 
 Patched Phi-3.5 template. Diff vs `phi3.5.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_training.jinja`
+
+Patched Phi-4 template. Diff vs `phi4.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_training.jinja`
+
+Patched Phi-4-mini template. Diff vs `phi4_mini.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_reasoning_training.jinja`
+
+Patched Phi-4-mini-reasoning template. Diff vs `phi4_mini_reasoning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
