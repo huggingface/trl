@@ -76,8 +76,10 @@ from trl.trainer.async_grpo_trainer import (
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
+    unpad_tree,
     validate_lora_for_vllm_sync,
 )
+from trl.kernels.tree_qwen4_exp import tree_maps, tree_ngram_shift_right, tree_ple_short_conv
 from trl.trainer.base_trainer import _BaseTrainer
 
 from .testing_utils import (
@@ -4267,6 +4269,103 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
+_QWEN4_EXP_TREE_STEPS = ("ngram_shift_right", "ple_short_conv", "qsa_select_tokens")
+
+
+def _qwen4_exp_modeling():
+    """
+    The Qwen4-Exp modeling module if this transformers runs its n-gram embedding, short convolution and sparse
+    attention indexer through replaceable module-level functions, otherwise `None`.
+    """
+    try:
+        from transformers.models.qwen4_exp import modeling_qwen4_exp
+    except ImportError:
+        return None
+    steps = [getattr(modeling_qwen4_exp, name, None) for name in _QWEN4_EXP_TREE_STEPS]
+    return None if any(step is None for step in steps) else modeling_qwen4_exp
+
+
+_requires_qwen4_exp_tree_packing = pytest.mark.skipif(
+    _qwen4_exp_modeling() is None,
+    reason="Tree packing of Qwen4-Exp needs a transformers that runs its n-gram embedding, short convolution and "
+    "sparse attention indexer through the module-level functions tree packing replaces",
+)
+
+
+class TestQwen4ExpTreePacking(TrlTestCase):
+    """Qwen4-Exp's token-mixing steps over hand-built trees: plain tensors, so these run without a GPU."""
+
+    FORK = [
+        _tree_sample([11, 12, 13, 21, 2, 22], n_prompt=3, advantage=1.0),  # its completion ends a sequence
+        _tree_sample([11, 12, 13, 31, 32], n_prompt=3, advantage=-1.0),
+    ]
+
+    ROOTS = [
+        _tree_sample([1, 2, 3, 4], n_prompt=2),
+        _tree_sample([1, 2, 5, 6], n_prompt=2),
+        _tree_sample([9, 8, 7], n_prompt=1),
+    ]
+
+    def _paths(self):
+        """The packed fork, and the packed positions of each of its branches, prompt included."""
+        packed = _tree_row(self.FORK).pack()
+        bounds = packed["tree_cu_seqlens_k"]
+        return packed, [packed["tree_kv_index"][bounds[i + 1] : bounds[i + 2]] for i in range(len(self.FORK))]
+
+    def test_maps_follow_each_path(self):
+        packed, _ = self._paths()
+        maps = tree_maps(packed)
+
+        assert maps["prev"].tolist() == [-1, 0, 1, 2, 3, 4, 1, 6, 7]  # the branches fork off the shared prompt
+        assert maps["depth"].tolist() == packed["position_ids"].tolist()
+        ancestors = torch.zeros_like(maps["visible"])
+        for position in range(len(maps["prev"])):
+            token = position
+            while token >= 0:
+                ancestors[position, token] = True
+                token = maps["prev"][token]
+        assert torch.equal(maps["visible"], ancestors)
+        assert tree_maps(packed) is maps  # built once, for all the layers of the forward
+
+    def test_maps_cover_several_roots(self):
+        packed = _tree_row(self.ROOTS).pack()
+        maps = tree_maps(packed)
+
+        assert packed["input_ids"].tolist() == [1, 2, 3, 4, 2, 5, 6, 9, 8, 7]  # 2 is not shared: 3 and 5 follow it
+        assert maps["prev"].tolist() == [-1, 0, 1, 2, 0, 4, 5, -1, 7, 8]
+        assert maps["depth"].tolist() == [0, 1, 2, 3, 1, 2, 3, 0, 1, 2]
+
+    @_requires_qwen4_exp_tree_packing
+    def test_ngram_shift_right_matches_each_branch_run_alone(self):
+        modeling = _qwen4_exp_modeling()
+        packed, branches = self._paths()
+        context = torch.full((1, 2), 2)  # the `ngram_size - 1` end-of-sequence tokens the caller prepends
+        history = torch.cat([context, packed["input_ids"].unsqueeze(0)], dim=1)
+
+        for shift in (1, 2):
+            shifted = tree_ngram_shift_right(history, shift, 2, packed)
+            for sample, positions in zip(self.FORK, branches, strict=True):
+                alone_history = torch.cat([context, torch.tensor(sample["input_ids"]).unsqueeze(0)], dim=1)
+                alone = modeling.ngram_shift_right(alone_history, shift, 2)
+                # The result keeps the context columns the caller prepends, then the row's own tokens
+                assert shifted[0][positions + context.shape[1]].tolist() == alone[0, -len(positions) :].tolist()
+
+    @_requires_qwen4_exp_tree_packing
+    def test_short_conv_matches_each_branch_run_alone(self):
+        packed, branches = self._paths()
+        conv1d = torch.nn.Conv1d(3, 3, kernel_size=4, groups=3, dilation=3, bias=False)
+        with torch.no_grad():
+            conv1d.weight.copy_(torch.linspace(-1.0, 1.0, conv1d.weight.numel()).view_as(conv1d.weight))
+        tokens = torch.linspace(-1.0, 1.0, 3 * len(packed["input_ids"])).view(1, 3, -1)
+        state_len = (conv1d.kernel_size[0] - 1) * conv1d.dilation[0]
+        # The caller pads the row by the convolution's reach before it, so each path reads zeros before its start
+        convolved = tree_ple_short_conv(torch.nn.functional.pad(tokens, (state_len, 0)), conv1d, packed)
+
+        for positions in branches:
+            alone = torch.nn.functional.pad(tokens[..., positions], (state_len, 0))
+            torch.testing.assert_close(convolved[..., positions], torch.nn.functional.silu(conv1d(alone)))
+
+
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
     "text config",
@@ -4429,6 +4528,139 @@ class TestTreePackingParity(TrlTestCase):
             torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
         )
         assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
+
+
+def _tiny_qwen4_exp_config(**kwargs):
+    """A Qwen4-Exp text config small enough for one GPU: three gated DeltaNet layers and one sparse attention layer."""
+    from transformers import Qwen4ExpTextConfig
+
+    fields = dict(
+        vocab_size=128,
+        hidden_size=32,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=1,
+        head_dim=8,
+        linear_conv_kernel_dim=4,
+        linear_num_key_heads=2,
+        linear_num_value_heads=2,
+        linear_key_head_dim=16,
+        linear_value_head_dim=16,
+        moe_intermediate_size=16,
+        shared_expert_intermediate_size=16,
+        num_experts=4,
+        num_experts_per_tok=2,
+        layer_types=["linear_attention", "linear_attention", "linear_attention", "indexed_attention"],
+        hc_count=2,
+        hc_lowrank=8,
+        ple_layer_ids=[1],
+        ple_embed_dim=16,
+        ngram_size=3,
+        heads_per_ngram=4,
+        ngram_vocab_size_base=64,
+        make_ngram_vocab_size_divisible_by=8,
+        indexer_n_heads=2,
+        indexer_kv_heads=1,
+        indexer_head_dim=8,
+        indexer_budget=8,  # 2 blocks kept per query
+        indexer_compress_ratio=4,
+        rope_parameters={"rope_type": "default", "rope_theta": 10000.0},
+        router_aux_loss_coef=0.0,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+    fields.update(kwargs)
+    return Qwen4ExpTextConfig(**fields)
+
+
+@require_torch_accelerator
+@_requires_qwen4_exp_tree_packing
+@pytest.mark.usefixtures("stub_weight_transfer")
+class TestQwen4ExpTreePackingParity(TrlTestCase):
+    """A tree-packed Qwen4-Exp micro-batch must score every sample as forwarding it on its own does."""
+
+    def _trainer(self):
+        from transformers import Qwen4ExpForCausalLM
+
+        return AsyncGRPOTrainer(
+            model=Qwen4ExpForCausalLM(_tiny_qwen4_exp_config()),
+            reward_funcs=str_length_reward,
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
+            processing_class=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM"),
+        )
+
+    def _samples(self):
+        prompt, other = [11, 12, 13, 14, 15, 16], [41, 42, 43, 44, 45]
+        # Paths shorter and longer than a block (4 depths) and than the indexer's budget (8 tokens)
+        return [
+            _tree_sample(prompt + [21, 22, 23], n_prompt=6, advantage=1.0, group_id=0),
+            _tree_sample(prompt + [21, 22, 24, 25, 26, 27, 28, 29], n_prompt=6, advantage=-1.0, group_id=0),
+            _tree_sample(other + [51, 52, 53, 54, 55, 56], n_prompt=5, advantage=0.5, group_id=1),
+            _tree_sample(other + [51, 52, 57], n_prompt=5, advantage=-0.5, group_id=1),
+        ]
+
+    def _batch(self, samples):
+        collator = DataCollatorForRollout(pad_token_id=0)
+        return {key: value.to(torch_device) for key, value in collator([[_tree_row(samples)]]).items()}
+
+    def _log_probs(self, trainer, batch, tree):
+        mask = batch["attention_mask"].bool()
+        with torch.no_grad():
+            outputs = trainer.model(
+                input_ids=batch["input_ids"][mask].unsqueeze(0),
+                position_ids=batch["position_ids"][mask].unsqueeze(0),
+                shift_labels=batch["shift_labels"][mask].unsqueeze(0),
+                fused_lm_head=True,
+                output_router_logits=True,  # the config's load-balancing loss, which reads the mask
+                **tree,
+            )
+        return outputs.log_probs.flatten()
+
+    def _tree(self, batch):
+        tree = unpad_tree(batch)
+        # The sparse attention layers take the tree's mask, which SDPA does not build on its own
+        tree["attention_mask"] = tree_maps(tree)["visible"][None, None]
+        return tree
+
+    def _positions(self, batch, index):
+        return batch["token_index"][0][batch["segment_id"][0] == index]
+
+    def test_log_probs_match_each_sample_alone(self):
+        trainer = self._trainer()
+        trainer.model.to(torch_device).to(torch.bfloat16)
+        samples = self._samples()
+        packed = self._batch(samples)
+
+        packed_log_probs = self._log_probs(trainer, packed, self._tree(packed))
+        for index, sample in enumerate(samples):
+            # The sample on its own keeps no tree: its three steps run the model's own flat versions
+            alone = self._batch([sample])
+            alone_positions = alone["token_index"][0][alone["token_index"][0] >= 0]
+            alone_log_probs = self._log_probs(trainer, alone, {})
+            torch.testing.assert_close(
+                packed_log_probs[self._positions(packed, index)],
+                alone_log_probs[alone_positions],
+                atol=2e-2,
+                rtol=2e-2,
+            )
+
+    def test_a_changed_branch_leaves_the_others_alone(self):
+        trainer = self._trainer()
+        trainer.model.to(torch_device).to(torch.bfloat16)
+        samples = self._samples()
+        changed = [dict(samples[0]), *samples[1:]]
+        changed[0]["input_ids"] = samples[0]["input_ids"].copy()
+        changed[0]["input_ids"][-1] = 99  # its last token only, so every other branch keeps its packed position
+
+        before, after = self._batch(samples), self._batch(changed)
+        before_log_probs = self._log_probs(trainer, before, self._tree(before))
+        after_log_probs = self._log_probs(trainer, after, self._tree(after))
+
+        for index in range(1, len(samples)):
+            positions = self._positions(before, index)
+            assert positions.tolist() == self._positions(after, index).tolist()
+            assert torch.equal(before_log_probs[positions], after_log_probs[positions])
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):

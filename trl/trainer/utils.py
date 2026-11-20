@@ -1756,10 +1756,11 @@ def add_fused_lm_head(
                 # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
                 num_experts = router_logits[0].shape[-1]
                 # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
-                # counts.
-                aux_loss = load_balancing_loss_func(
-                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
-                )
+                # counts. A prepared 4D mask, as tree packing passes to the model, holds no padding either.
+                aux_mask = kwargs.get("attention_mask")
+                if aux_mask is not None and aux_mask.ndim == 4:
+                    aux_mask = None
+                aux_loss = load_balancing_loss_func(router_logits, num_experts, num_experts_per_tok, aux_mask)
             else:
                 # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
                 aux_loss = loss.new_zeros(())
