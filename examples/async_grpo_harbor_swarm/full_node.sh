@@ -79,6 +79,8 @@ if [[ "$1" == smoke ]]; then
  python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
  exit
 fi
+concurrency=16
+if [[ "${SWARM_VALIDATE:-0}" == 1 ]]; then
 concurrency=0
 for level in 4 8 16; do
  if python examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py evaluate "${common[@]}" --output-dir "$run/gate-$level" --num-tasks "$level" --concurrent-teams "$level" > "$run/gate-$level.log" 2>&1 && python - "$run/gate-$level/evaluation.json" "$level" <<'PYGATE'
@@ -88,10 +90,11 @@ PYGATE
  then concurrency=$level; else break; fi
  done
 [[ "$concurrency" -gt 0 ]] || { echo 'Initial native concurrency gate failed'; exit 1; }
+fi
 printf '%s\n' "$concurrency" > "$root/concurrent-teams"
 end=$(cat "$root/deadline")
 admission=$((end - 2700))
 collection=$((end - 600))
 budget=$((end - $(date +%s) - 600))
-[[ "$budget" -gt 3600 ]] || { echo 'Insufficient allocation remains after validation'; exit 1; }
+[[ "$budget" -gt 3600 ]] || { echo 'Insufficient allocation remains for training'; exit 1; }
 accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1

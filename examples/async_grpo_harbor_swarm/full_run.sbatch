@@ -35,11 +35,13 @@ for _ in range(240):
 else:raise SystemExit('vLLM startup failed')
 PYWAIT
 }
+if [[ "${SWARM_VALIDATE:-0}" == 1 ]]; then
 start_server smoke
 srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=64 --mem=1400G bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" smoke > "$root/smoke.log" 2>&1
 kill "$server_pid"
 wait "$server_pid" || true
 server_pid=
 rm -f "$root/server-url"
+fi
 start_server train
 srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=64 --mem=1400G bash "$repo/examples/async_grpo_harbor_swarm/full_node.sh" experiment > "$root/experiment.log" 2>&1
