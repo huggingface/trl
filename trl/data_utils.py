@@ -148,14 +148,15 @@ def is_conversational(example: dict[str, Any]) -> bool:
     ```
     """
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages"]
-    example_keys = {key for key in example.keys() if key in supported_keys}
-
-    # It must have one of the supported keys
-    if example_keys:
-        key = example_keys.pop()  # take the first supported key
+    # Iterate over the supported keys in a fixed order: with a set, the result for examples mixing conversational and
+    # non-conversational values (e.g. a plain-text `"prompt"` with conversational `"chosen"`/`"rejected"`) would
+    # depend on the arbitrary set iteration order, which varies with `PYTHONHASHSEED`.
+    for key in supported_keys:
+        if key not in example:
+            continue
         maybe_messages = example[key]
         # It must be a list of messages
-        if isinstance(maybe_messages, list):
+        if isinstance(maybe_messages, list) and maybe_messages:
             maybe_message = maybe_messages[0]
             # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:

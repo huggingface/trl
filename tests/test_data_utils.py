@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
+import subprocess
+import sys
 import textwrap
 from time import strftime
 
@@ -391,6 +395,7 @@ class TestIsConversational(TrlTestCase):
         {"prompt": "The sky is"},
         {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
         {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"prompt": [], "chosen": [], "rejected": []},  # empty lists are not conversations
     ]
 
     @pytest.mark.parametrize("example", conversational_examples)
@@ -400,6 +405,51 @@ class TestIsConversational(TrlTestCase):
     @pytest.mark.parametrize("example", non_conversational_examples)
     def test_non_conversational(self, example):
         assert not is_conversational(example)
+
+    def test_mixed_format_example(self):
+        # A plain-text "prompt" with conversational "chosen"/"rejected" (the shape handled by `maybe_extract_prompt`).
+        # The example contains conversational values, so it must be detected as conversational, regardless of which
+        # key is examined first.
+        example = {
+            "prompt": "What color is the sky?",
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is green."},
+            ],
+        }
+        assert is_conversational(example)
+
+    def test_result_does_not_depend_on_hash_seed(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8149: for examples mixing conversational and
+        # non-conversational values, the result used to depend on the arbitrary iteration order of a set of strings,
+        # which varies with `PYTHONHASHSEED`.
+        example = {
+            "prompt": "What color is the sky?",
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is green."},
+            ],
+        }
+        script = "import json, sys\nfrom trl.data_utils import is_conversational\nprint(is_conversational(json.loads(sys.argv[1])))"
+        results = []
+        for seed in ["0", "1", "2"]:
+            output = subprocess.run(
+                [sys.executable, "-c", script, json.dumps(example)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env={**os.environ, "PYTHONHASHSEED": seed},
+            )
+            results.append(output.stdout.strip())
+        assert results == ["True", "True", "True"]
 
 
 class TestIsConversationalFromValue(TrlTestCase):
