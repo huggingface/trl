@@ -1848,12 +1848,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             logging_steps=1,
-            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen3ForCausalLM").url,
             report_to="none",
             top_k=10,
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen3ForCausalLM",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1943,12 +1943,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen3ForCausalLM").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen3ForCausalLM").url,
             report_to="none",
             chat_template_kwargs={"enable_thinking": False},
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen3ForCausalLM",
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -2691,7 +2691,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert [kwargs["topic"] for kwargs in sent] == [topic]
 
     def _train_one_step_and_save(self, peft_config=None, **config_kwargs):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -2739,7 +2739,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         self._train_one_step_and_save(
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8),
-            vllm_server_base_url=make_vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
         )
 
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
@@ -2885,7 +2885,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     )
     @pytest.mark.usefixtures("stub_rollout_worker", "stub_weight_transfer")
     def test_train_off_policy_correction(self, correction, peft_config=None):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -3002,7 +3002,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_train_score_centering_with_lora(self, make_vllm_server):
         from peft import LoraConfig
 
-        server = make_vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        server = make_vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.test_train_off_policy_correction(
             {"vllm_server_base_url": server.url}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8)
         )
@@ -3011,7 +3011,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncGRPOConfig(
@@ -3559,7 +3559,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
 
 
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
     trainer = AsyncGRPOTrainer(
         model=model_id,
@@ -4284,7 +4284,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
 @pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
-        pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
@@ -5174,7 +5174,7 @@ class TestCustomRolloutLoop(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = FixedTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=two_reward,
             args=AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
@@ -5402,7 +5402,7 @@ class TestEpochStop(TrlTestCase):
     """
 
     def _train(self, fork_k, num_train_epochs=2, drop_every=0):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -5722,7 +5722,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
     and the assertions read what the server saw: `server.loaded`, `server.evicted`, `server.paused`.
     """
 
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
     @pytest.fixture
     def server(self, make_vllm_server):
