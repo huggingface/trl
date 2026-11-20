@@ -65,6 +65,7 @@ from trl.chat_template_utils import (
     phi4_mini_chat_template,
     phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
+    qwen2_5_v2_chat_template,
     qwen3_6_v2_chat_template,
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
@@ -335,6 +336,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template, id="qwen2.5-base"
             ),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template, id="qwen2.5-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template, id="qwen3-v2"),
         ],
     )
@@ -1466,6 +1468,7 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), id="qwen2.5_base"
         ),
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template), id="qwen2.5_v2"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl", marks=require_vision
         ),
