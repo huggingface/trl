@@ -835,14 +835,11 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
 
     # Enable gradient checkpointing if needed
     if (loaded_in_kbit or is_quantized) and use_gradient_checkpointing:
-        if hasattr(model, "enable_input_require_grads"):
+        # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
+        if Version(transformers.__version__) < Version("5.0.0") or (gradient_checkpointing_kwargs or {}).get(
+            "use_reentrant"
+        ):
             model.enable_input_require_grads()
-        else:
-            # backward-compatible hook
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         # transformers 5.23 renamed `gradient_checkpointing_enable` to `activation_checkpointing_enable` (see #8135)
         if Version(transformers.__version__) >= Version("5.23.0"):
@@ -857,7 +854,9 @@ def prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, grad
     return model
 
 
-def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
+def enable_gradient_checkpointing(
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
+) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
     # Enable gradient checkpointing on the base model for PEFT, and on the model itself otherwise
     checkpointed_model = model.base_model if is_peft_model(model) else model
@@ -867,8 +866,10 @@ def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     else:
         checkpointed_model.gradient_checkpointing_enable()
 
-    # transformers enables input gradients itself from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
-    if Version(transformers.__version__) < Version("5.0.0"):
+    # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
+    if Version(transformers.__version__) < Version("5.0.0") or (gradient_checkpointing_kwargs or {}).get(
+        "use_reentrant"
+    ):
         model.enable_input_require_grads()
 
     return model
@@ -913,7 +914,7 @@ def prepare_peft_model(
         if Version(transformers.__version__) >= Version("5.23.0"):
             args.activation_checkpointing = False
     elif args.gradient_checkpointing:
-        model = enable_gradient_checkpointing(model)
+        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 
     # Create PEFT model
     if peft_config is not None:
