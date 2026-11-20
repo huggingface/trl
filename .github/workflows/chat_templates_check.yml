@@ -54,11 +54,3 @@ jobs:
         run: |
           source .venv/bin/activate
           python scripts/check_chat_templates.py
-
-      - name: Post to Slack
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Check chat templates against the Hub
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
