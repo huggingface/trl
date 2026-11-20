@@ -89,6 +89,7 @@ class DataCollatorForClm(DataCollatorForDecision):
         marks = inputs["marks"]
         if len(marks) != len(question.options) + 1:
             raise ValueError("The decision template must mark one state span and one span per option")
+
         segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
         sequences = []
         for index, segment in enumerate(segments):
@@ -99,6 +100,7 @@ class DataCollatorForClm(DataCollatorForDecision):
                 )
             segment = segment[-limit:] if self.tokenizer.truncation_side == "left" else segment[:limit]
             sequences.append(segment.tolist())
+
         features = {
             "input_ids": sequences[0],
             "option_input_ids": sequences[1:],
@@ -114,6 +116,7 @@ class DataCollatorForClm(DataCollatorForDecision):
     def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         if "input_ids" not in features[0]:
             features = [self.tokenize(example) for example in features]
+
         pool, columns, sequences, counts = {}, [], [], []
         for example in features:
             sequences.append(example["input_ids"])
@@ -127,12 +130,14 @@ class DataCollatorForClm(DataCollatorForDecision):
                 row_columns.append(pool[key])
             columns.append(row_columns)
             counts.append(count)
+
         labels = torch.zeros(len(features), len(pool))
         option_mask = torch.zeros_like(labels, dtype=torch.bool)
         for index, (example, row_columns) in enumerate(zip(features, columns, strict=True)):
             indices = torch.tensor(row_columns)
             labels[index].scatter_add_(0, indices, torch.tensor(example["labels"]))
             option_mask[index, indices] = True
+
         return {
             "input_ids": torch.tensor([[token for sequence in sequences for token in sequence]]),
             "marks": torch.tensor([[len(sequence) for sequence in sequences]]).cumsum(-1),

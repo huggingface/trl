@@ -117,6 +117,7 @@ class DecisionTrainer(_BaseTrainer):
             processing_class = AutoTokenizer.from_pretrained(model_id)
         if processing_class.pad_token_id is None:
             processing_class.pad_token = processing_class.eos_token
+
         if args.n_gpu > 1:
             raise ValueError(
                 "Use accelerate launch or torchrun for multi-GPU decision training instead of DataParallel"
@@ -125,6 +126,7 @@ class DecisionTrainer(_BaseTrainer):
             if not is_peft_available():
                 raise ImportError("Install `trl[peft]` to use peft_config")
             model = get_peft_model(model, peft_config)
+
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         super().__init__(
             model=model,
@@ -155,6 +157,7 @@ class DecisionTrainer(_BaseTrainer):
             logits = logits[None]
         mask = inputs.get("option_mask", torch.ones_like(logits, dtype=torch.bool))
         probabilities = logits.masked_fill(~mask, -torch.inf).softmax(-1)
+
         allow_null = inputs.get("allow_null")
         if allow_null is not None:
             coverage_logits = outputs.get("coverage_logits")
@@ -169,11 +172,13 @@ class DecisionTrainer(_BaseTrainer):
                 probabilities = coverage[:, None] * probabilities
             probabilities = torch.cat([null_probability, probabilities], -1)
             mask = F.pad(mask, (1, 0), value=True)
+
         return probabilities, mask
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         model_inputs = {key: value for key, value in inputs.items() if key != "is_choice"}
+
         # Sharded encoders must execute the same number of option chunks on every rank.
         if self.accelerator.num_processes > 1 and inputs.get("option_chunk_size") is not None:
             count = inputs["option_input_ids"].new_tensor([inputs["option_input_ids"].shape[0]])
@@ -182,14 +187,17 @@ class DecisionTrainer(_BaseTrainer):
                 if key in model_inputs:
                     value = model_inputs[key]
                     model_inputs[key] = torch.cat([value, value[:1].expand(padding, *value.shape[1:])])
+
         loss, outputs = super().compute_loss(model, model_inputs, return_outputs=True)
         loss = loss.float()
         if num_items_in_batch is not None:
             loss = loss * inputs["labels"].shape[0] / num_items_in_batch * self.accelerator.num_processes
+
         with torch.no_grad():
             probabilities, mask = self._get_decision_probabilities(outputs, inputs)
             labels = inputs["labels"]
             targets = F.one_hot(labels, probabilities.shape[-1]).float() if labels.ndim == 1 else labels.float()
+
             has_null = "allow_null" in inputs
             candidates = targets[:, 1:] if has_null else targets
             option_mask = mask[:, 1:] if has_null else mask
@@ -198,11 +206,13 @@ class DecisionTrainer(_BaseTrainer):
                 logits = logits[None]
             log_q = logits.masked_fill(~option_mask, -torch.inf).log_softmax(-1)
             candidate_loss = -(candidates * log_q.masked_fill((~option_mask) | (candidates == 0), 0.0)).sum(-1)
+
             predicted = probabilities.argmax(-1)
             target = targets.argmax(-1)
             is_choice = inputs.get("is_choice", torch.ones_like(target, dtype=torch.bool))
             hard_choice = is_choice & (targets.max(-1).values == 1)
             present = hard_choice & (target != 0) if has_null else hard_choice
+
             ones = torch.ones_like(candidate_loss)
             metrics = {
                 "candidate_loss": (candidate_loss, ones),
@@ -211,6 +221,7 @@ class DecisionTrainer(_BaseTrainer):
                 "brier": ((probabilities - targets).square().sum(-1), ones),
                 "entropy": (-(probabilities * probabilities.clamp_min(1e-30).log()).sum(-1), ones),
             }
+
             if has_null:
                 predicted_null = (predicted == 0) & hard_choice
                 target_null = (target == 0) & hard_choice
@@ -230,6 +241,7 @@ class DecisionTrainer(_BaseTrainer):
                     metrics["coverage_loss"] = (coverage_loss * inputs["allow_null"], ones)
             if outputs.get("aux_loss") is not None:
                 metrics["aux_loss"] = (outputs.aux_loss.detach().expand_as(ones), ones)
+
             values = torch.stack(
                 [
                     torch.stack([numerator.float(), denominator.float()], -1)
@@ -240,6 +252,7 @@ class DecisionTrainer(_BaseTrainer):
             values = self._gather_for_metrics(values)
             for key, totals in zip(metrics, values.sum(0).tolist(), strict=True):
                 self._metrics[mode][key].append(totals)
+
         return (loss, outputs) if return_outputs else loss
 
     def _gather_for_metrics(self, values):
@@ -270,6 +283,7 @@ class DecisionTrainer(_BaseTrainer):
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
         if prediction_loss_only:
             return loss.detach(), None, None
+
         probabilities, mask = self._get_decision_probabilities(outputs, inputs)
         labels = inputs["labels"]
         if labels.ndim == 2:

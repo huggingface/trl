@@ -96,6 +96,7 @@ class DataCollatorForJeva(DataCollatorForDecision):
         marks = inputs["marks"]
         if len(marks) != len(question.options) + 1:
             raise ValueError("The decision template must mark one state span and one span per option")
+
         segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
         sequences = []
         for index, segment in enumerate(segments):
@@ -106,6 +107,7 @@ class DataCollatorForJeva(DataCollatorForDecision):
                 )
             segment = segment[-limit:] if self.tokenizer.truncation_side == "left" else segment[:limit]
             sequences.append(segment.tolist())
+
         return {
             "input_ids": sequences[0],
             "option_input_ids": sequences[1:],
@@ -117,17 +119,20 @@ class DataCollatorForJeva(DataCollatorForDecision):
     def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         if "input_ids" not in features[0]:
             features = [self.tokenize(example) for example in features]
+
         states = [example["input_ids"] for example in features]
         options = [option for example in features for option in example["option_input_ids"]]
         encoded = [
             dict(self.tokenizer.pad({"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"))
             for sequences in (states, options)
         ]
+
         counts = torch.tensor([len(example["option_input_ids"]) for example in features])
         option_mask = torch.arange(counts.max())[None, :] < counts[:, None]
         labels = torch.zeros(len(features), option_mask.shape[1] + 1)
         for index, example in enumerate(features):
             labels[index, : len(example["labels"])] = torch.tensor(example["labels"])
+
         return {
             "option_chunk_size": self.option_chunk_size,
             **encoded[0],

@@ -37,6 +37,7 @@ def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float,
     k = len(question.options)
     metadata = asdict(question)
     allow_null = metadata.get("allow_null", False)
+
     supplied = [
         name
         for name in ("target_index", "target_probs", "p_true", "score")
@@ -46,12 +47,14 @@ def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float,
         supplied.remove("target_index")
     if len(supplied) != 1:
         raise ValueError("provide exactly one of target_index, target_probs, p_true, or score")
+
     label = supplied[0]
     values, positive_index = None, None
     if kind == "noul":
         positive_index = question.options.index("true")
     if kind == "score":
         values = tuple(metadata.get("values") or range(k))
+
     probs = [0.0] * (k + 1)
     if label == "target_probs":
         raw_probs = row[label]
@@ -95,6 +98,7 @@ def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float,
                     probs[index] = 1.0 - fraction
                     probs[index + 1] = fraction
                 break
+
     if not allow_null and probs[0] != 0:
         raise ValueError("null target mass requires allow_null=true")
     return tuple(probs)
@@ -128,6 +132,7 @@ class DataCollatorForDecision(DataCollatorMixin):
         prompts = self.decision_config.prepare_inputs(request, self.tokenizer)
         if len(prompts) != 1 or len(prompts[0][1]) != 1:
             raise ValueError("Each training row must contain exactly one decision question")
+
         inputs, questions = prompts[0]
         question = questions[0]
         return inputs, question, normalize_target(example, question)
