@@ -2396,13 +2396,10 @@ class TestSFTTrainer(TrlTestCase):
         [
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.0.0"),
-                        reason="LFM2.5-VL requires transformers>=5.0.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2.5-VL requires transformers>=5.0.0",
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
