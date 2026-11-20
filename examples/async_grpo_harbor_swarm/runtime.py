@@ -16,6 +16,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import shlex
 import time
@@ -46,6 +47,20 @@ export default function (pi) {
   pi.on("session_shutdown", () => clearInterval(timer));
 }
 """
+
+
+async def control_command(command, *args, operation, **kwargs):
+    """Retry a timed-out, idempotent Harbor control command once under container load."""
+    for attempt in range(2):
+        try:
+            return await command(*args, timeout_sec=30, **kwargs)
+        except RuntimeError as exc:
+            # Harbor wraps subprocess timeouts in RuntimeError. Other errors must fail immediately.
+            if not str(exc).startswith("Command timed out after "):
+                raise RuntimeError(f"{operation}: {exc}") from exc
+            if attempt == 1:
+                raise RuntimeError(f"{operation}: timed out twice (30 seconds per attempt)") from exc
+            logging.getLogger(__name__).warning("%s timed out; retrying once", operation)
 
 
 @dataclass
@@ -269,8 +284,11 @@ class TeamRunner:
                         if trial.agent.finished or jobs[names.index(name)].done():
                             continue
                         try:
-                            result = await trial.agent_environment.service_exec(
-                                command, service="puzzle", timeout_sec=5
+                            result = await control_command(
+                                trial.agent_environment.service_exec,
+                                command,
+                                service="puzzle",
+                                operation=f"{team_id}/{name}: read trusted puzzle state",
                             )
                         except Exception:
                             if trial.agent.finished or jobs[names.index(name)].done():
@@ -295,8 +313,11 @@ class TeamRunner:
                                 if t.agent.finished or jobs[names.index(n)].done():
                                     return
                                 try:
-                                    stopped = await t.agent.exec_as_root(
-                                        t.agent_environment, f"touch {STOP_FILE}", timeout_sec=5
+                                    stopped = await control_command(
+                                        t.agent.exec_as_root,
+                                        t.agent_environment,
+                                        f"touch {STOP_FILE}",
+                                        operation=f"{team_id}/{n}: signal Pi to stop",
                                     )
                                     if (
                                         stopped.return_code

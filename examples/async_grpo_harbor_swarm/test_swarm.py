@@ -27,7 +27,7 @@ import torch
 from board import TeamBoard, tool_bundle
 from msgboard.client import BoardError, Client
 from openenv.harbor.models import HarborRolloutResult, HarborTurn
-from runtime import validate_team
+from runtime import control_command, validate_team
 from training import SwarmConfig, pack_team, score_teams
 
 from trl.trainer.async_grpo_trainer import (
@@ -492,3 +492,40 @@ def test_two_process_real_loss_matches_single_process_reference():
             join=True,
             start_method="fork",
         )
+
+
+@pytest.mark.parametrize("failures", [0, 1, 2])
+def test_container_control_timeout_retry(failures):
+    # Stand in only for the external Harbor container command.
+    calls = []
+
+    async def container_command(command, *, service, timeout_sec):
+        calls.append((command, service, timeout_sec))
+        if len(calls) <= failures:
+            raise RuntimeError(f"Command timed out after {timeout_sec} seconds")
+        return "trusted state"
+
+    async def run():
+        return await control_command(
+            container_command, "read state", service="puzzle", operation="agent003: read trusted puzzle state"
+        )
+
+    if failures == 2:
+        with pytest.raises(RuntimeError, match="agent003: read trusted puzzle state: timed out twice"):
+            asyncio.run(run())
+    else:
+        assert asyncio.run(run()) == "trusted state"
+    assert calls == [("read state", "puzzle", 30)] * min(failures + 1, 2)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("container disappeared"), asyncio.CancelledError()])
+def test_container_control_does_not_retry_errors_or_cancellation(error):
+    calls = []
+
+    async def container_command(*args, **kwargs):
+        calls.append(1)
+        raise error
+
+    with pytest.raises(type(error)):
+        asyncio.run(control_command(container_command, operation="signal Pi to stop"))
+    assert len(calls) == 1

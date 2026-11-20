@@ -190,6 +190,10 @@ puzzle service for `won` and the pinned scenario hash. On first success it asks 
 abort through a native extension, then lets Harbor collect evidence and grade. Reward
 is 1 only for native verified success; a valid unsuccessful attempt receives 0. Infrastructure,
 capture, or verifier failures are unscorable. Incomplete model responses are never reconstructed.
+Trusted-state reads and Pi stop signals allow 30 seconds per container command and retry
+a timeout once. Both operations are idempotent. Persistent timeouts still make the team
+unscorable; errors identify the team, agent, and operation. Other errors and cancellation
+are not retried.
 
 The capture proxy supplies token IDs, logprobs, and explicit loss masks. In LoRA mode, each team pins a
 named policy adapter. Full-model mode records each call's serving version and drops a whole
