@@ -70,7 +70,6 @@ from trl.chat_template_utils import (
     qwen3_6_v2_chat_template,
     qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
-    qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
@@ -364,18 +363,21 @@ class TestAddResponseSchema:
         assert parsed == messages[-1]
 
     @pytest.mark.parametrize(
-        "chat_template",
+        "tokenizer_name, chat_template",
         [
-            pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
-            pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
-            pytest.param(qwen3_6_v2_chat_template, id="qwen3.6-v2"),
-            pytest.param(qwen3_8_v2_chat_template, id="qwen3.8-v2"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", None, id="qwen3-coder"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template, id="qwen3-coder-next"
+            ),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_6_v2_chat_template, id="qwen3.6-v2"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
     )
-    def test_add_response_schema_qwen3_xml_tool_calls(self, chat_template):
+    def test_add_response_schema_qwen3_xml_tool_calls(self, tokenizer_name, chat_template):
         # Without the tools' schema, XML argument values parse back as strings, so the arguments here are strings
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
-        tokenizer.chat_template = chat_template
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:  # Qwen3 release without a tiny model of its own
+            tokenizer.chat_template = chat_template
         tokenizer = add_response_schema(tokenizer)
         tool_calls = [
             {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris, France"}}},
