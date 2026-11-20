@@ -78,18 +78,32 @@ The first line is on 200 clocks, the second on the 32 the original model was mea
 | Inkling 2 Mini, low reasoning effort | 0.0% | 15.6% | 50.0% | 600 to 1,000 |
 | Fine-tuned | 93.8% | 93.8% | 96.9% | 9 |
 
-The fine-tuned model reads the time to the second on more than 9 clocks in 10, and answers in 9 tokens instead of reasoning for a thousand. Here are three test clocks, one of each style, with the answers of both models:
+The fine-tuned model reads the time to the second on more than 9 clocks in 10, and answers in 9 tokens instead of reasoning for a thousand. Here are three test clocks, one of each style, and what each model answers:
 
 <table>
   <tr>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-base.png" width="200" alt="A plain clock showing 07:03:06"></td>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-distorted.png" width="200" alt="A distorted clock showing 06:54:13"></td>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-modified_hands.png" width="200" alt="A clock with arrow hands showing 04:34:42"></td>
+    <td></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-base.png" width="200" alt="A plain clock"></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-distorted.png" width="200" alt="A distorted clock"></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/clock-modified_hands.png" width="200" alt="A clock with arrow hands"></td>
   </tr>
   <tr>
-    <td>07:03:06. Original: "approximately <b>7:05</b>" after 604 tokens. Fine-tuned: 07:03:06.</td>
-    <td>06:54:13. Original: "approximately <b>10:35</b>" after 777 tokens. Fine-tuned: 06:54:13.</td>
-    <td>04:34:42. Original: "about <b>4:35</b>" after 954 tokens. Fine-tuned: 04:34:42.</td>
+    <td>Time shown</td>
+    <td>07:03:06</td>
+    <td>06:54:13</td>
+    <td>04:34:42</td>
+  </tr>
+  <tr>
+    <td>Inkling 2 Mini, low reasoning effort</td>
+    <td>"approximately <b>7:05</b>", after 604 tokens</td>
+    <td>"approximately <b>10:35</b>", after 777 tokens</td>
+    <td>"about <b>4:35</b>", after 954 tokens</td>
+  </tr>
+  <tr>
+    <td>Fine-tuned</td>
+    <td>07:03:06, in 9 tokens</td>
+    <td>06:54:13, in 9 tokens</td>
+    <td>04:34:42, in 9 tokens</td>
   </tr>
 </table>
 
