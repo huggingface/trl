@@ -2109,6 +2109,30 @@ class TestDeepseekTrainingChatTemplates:
         assert trained == "The sky scatters shorter wavelengths.</think>It is blue.<｜end▁of▁sentence｜>"
 
 
+class TestGlm4MoeTrainingChatTemplate:
+    def test_assistant_masks_tool_call_without_content(self):
+        # transformers < 5.23 keeps `None`-valued keys, which the original template renders as the text `None` (#8451)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            {"role": "tool", "content": "12"},
+            {"role": "assistant", "content": "It is 12."},
+        ]
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=get_training_chat_template(tokenizer),
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+        )
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained.startswith("\n<think></think>\n<tool_call>multiply")
+
+
 class TestNamedChatTemplateVariants:
     # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
     def test_has_generation_markers(self):

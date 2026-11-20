@@ -97,6 +97,8 @@ Close each assistant turn inside the generation block with the role marker that 
 
 Wrap assistant message output (including the thinking block and tool calls) with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
+Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
+
 ### `qwen3_training.jinja`
 
 Patched Qwen3 template. Diff vs `qwen3.jinja`:
