@@ -34,7 +34,7 @@ from datasets import Dataset, load_dataset
 from packaging.version import Version
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, TrainerControl
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -1180,13 +1180,10 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             token_budget=160,
             logging_steps=1,
             report_to="none",
-        )
-        # AutoModelForCausalLM does not load Qwen3-VL, so the model is passed instantiated
-        model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", dtype="float32", device_map=None
+            model_init_kwargs={"dtype": "float32"},
         )
         trainer = AsyncDistillationTrainer(
-            model=model,
+            model="trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1205,6 +1202,19 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+    )
+    def test_init_vlm_from_name(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            args=AsyncDistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        assert isinstance(trainer.model, transformers.Qwen3VLForConditionalGeneration)
 
     def test_router_aux_loss_coef_on_a_dense_model_raises(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
