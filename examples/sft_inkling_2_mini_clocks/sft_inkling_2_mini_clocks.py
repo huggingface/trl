@@ -17,6 +17,8 @@
 #     "trl>=1.19.0",
 #     "transformers>=5.24.0",
 #     "peft>=0.21.0",
+#     "Pillow",
+#     "torchvision",
 #     "trackio",
 # ]
 # ///
@@ -70,6 +72,8 @@ training_args = SFTConfig(
     lr_scheduler_type="cosine",
     warmup_steps=10,
     logging_steps=5,
+    # A checkpoint every 125 steps, to follow the clock accuracy during training
+    save_steps=125,
     report_to="trackio",
 )
 trainer = SFTTrainer(

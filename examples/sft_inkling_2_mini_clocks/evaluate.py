@@ -16,6 +16,9 @@
 # dependencies = [
 #     "transformers>=5.24.0",
 #     "peft>=0.21.0",
+#     "datasets",
+#     "Pillow",
+#     "torchvision",
 # ]
 # ///
 

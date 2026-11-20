@@ -55,7 +55,7 @@ python examples/sft_inkling_2_mini_clocks/sft_inkling_2_mini_clocks.py
 - `model_init_kwargs={"dtype": "bfloat16"}`: TRL loads a model id in float32 unless told otherwise, and the model then doesn't fit on one GPU.
 - `assistant_only_loss=True`: the loss is on the answer only, not on the image and the question.
 
-To follow the training, we also saved a checkpoint every 125 steps (`save_steps=125`) and measured each one on the 200 held-out clocks. At 0, the original model, without reasoning, answers none of them within 256 tokens:
+The script saves a checkpoint every 125 steps (`save_steps=125`), and we measured each one on the 200 held-out clocks. At 0, the original model, without reasoning, answers none of them within 256 tokens:
 
 ![Held-out clocks read right after each checkpoint](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_inkling_2_mini_clocks/checkpoints_accuracy.png)
 
