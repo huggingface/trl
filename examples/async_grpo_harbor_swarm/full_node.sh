@@ -5,7 +5,7 @@ root=${SWARM_RUN_DIR:?}
 run="$root/$1"
 mkdir -p "$run"
 export VENV="$repo/.venv"
-export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 COMPOSE_PARALLEL_LIMIT=1
 export PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}"
 local_root=$(mktemp -d /tmp/trl-swarm.XXXXXX)
 export XDG_RUNTIME_DIR=$local_root/runtime
@@ -46,12 +46,17 @@ chmod 700 "$local_root/bin/"*
 export PATH="$local_root/bin:$VENV/bin:$bundle/usr/local/bin:/usr/local/bin:/usr/bin:/bin"
 export PODMAN_COMPOSE_PROVIDER=$local_root/bin/podman-compose
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
-health_pid= server_pid=
+printf '%s\n' "$local_root" > "$run/local-runtime-dir"
+if [[ -n "${SWARM_AGENT_IMAGE_ARCHIVE:-}" ]]; then
+ podman load -i "$SWARM_AGENT_IMAGE_ARCHIVE" > "$run/agent-image-load.log" 2>&1
+fi
+health_pid= server_pid= train_pid=
 cleanup() {
+  [ -z "$train_pid" ] || kill "$train_pid" 2>/dev/null || true
   [ ! -d "$local_root/trackio" ] || cp -a "$local_root/trackio" "$run/trackio-local"
   [ -z "$health_pid" ] || kill "$health_pid" 2>/dev/null || true
   [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
-  timeout 20 "$local_root/bin/podman" stop --all --time 5 >/dev/null 2>&1 || true
+  timeout 60 "$local_root/bin/podman" rm --all --force --volumes >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -73,9 +78,19 @@ for _ in range(120):
  except Exception: time.sleep(1)
 else: raise SystemExit('gateway startup failed')
 PYWAIT
+run_training() {
+ "$@" & train_pid=$!
+ local finished_pid
+ if ! wait -n -p finished_pid "$train_pid" "$health_pid" "$server_pid"; then
+  echo 'Training or required runtime service failed' >&2
+  return 1
+ fi
+ [[ "$finished_pid" == "$train_pid" ]] || { echo 'Required runtime service exited during training' >&2; return 1; }
+ train_pid=
+}
 common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations 16 --max-staleness 4 --agent-timeout 1800 --max-turns 64 --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
 if [[ "$1" == smoke ]]; then
- accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
+ run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
  python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
  exit
 fi
@@ -97,4 +112,4 @@ admission=$((end - 2700))
 collection=$((end - 600))
 budget=$((end - $(date +%s) - 600))
 [[ "$budget" -gt 3600 ]] || { echo 'Insufficient allocation remains for training'; exit 1; }
-accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1
+run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1

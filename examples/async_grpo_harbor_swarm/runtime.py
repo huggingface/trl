@@ -99,18 +99,31 @@ class SwarmPi(InterceptPi):
     def extra_env(self):
         return {**super().extra_env, **self.board_env}
 
+    async def install(self, environment):
+        if not os.environ.get("SWARM_AGENT_OVERLAY"):
+            return await super().install(environment)
+        result = await self.exec_as_agent(
+            environment,
+            "mkdir -p ~/.nvm; "
+            "printf '%s\\n' 'export NVM_DIR=/opt/nvm; . /opt/nvm/nvm.sh' > ~/.nvm/nvm.sh; "
+            '. ~/.nvm/nvm.sh; test "$(pi --version)" = 1.4.0 && node --version',
+        )
+        if result.return_code:
+            raise RuntimeError("Prebuilt Pi image is missing the pinned runtime")
+
     async def setup(self, environment):
         await super().setup(environment)
         await self.ensure_system_dependencies(environment, ("python3",))
-        await environment.upload_file(self.bundle, "/tmp/swarm-tools.tgz")
-        result = await self.exec_as_root(
-            environment,
-            "mkdir -p /opt/swarm-tools && python3 -m tarfile -e /tmp/swarm-tools.tgz /opt/swarm-tools && "
-            "chmod -R a+rX /opt/swarm-tools && chmod a+x /opt/swarm-tools/board_tool.py && "
-            "ln -sf /opt/swarm-tools/board_tool.py /usr/local/bin/flock-tool",
-        )
-        if result.return_code:
-            raise RuntimeError("Installing the board tools failed")
+        if not os.environ.get("SWARM_AGENT_OVERLAY"):
+            await environment.upload_file(self.bundle, "/tmp/swarm-tools.tgz")
+            result = await self.exec_as_root(
+                environment,
+                "mkdir -p /opt/swarm-tools && python3 -m tarfile -e /tmp/swarm-tools.tgz /opt/swarm-tools && "
+                "chmod -R a+rX /opt/swarm-tools && chmod a+x /opt/swarm-tools/board_tool.py && "
+                "ln -sf /opt/swarm-tools/board_tool.py /usr/local/bin/flock-tool",
+            )
+            if result.return_code:
+                raise RuntimeError("Installing the board tools failed")
         command = (
             "mkdir -p ~/.pi/agent/extensions; "
             f"printf %s {shlex.quote(STOP_EXTENSION)} > ~/.pi/agent/extensions/team-stop.ts; "
@@ -260,17 +273,18 @@ class TeamRunner:
                 trials[name] = trial
                 board.bind(trial, name)
                 trial.config.agent.extra_allowed_hosts.append(urlsplit(cfg.capture_url).hostname)
-                # OpenEnv's callback runs after Trial.create, before any environment starts.
-                # Harbor 0.25 constructs the environment during create: rebuild it with the board mount.
+                # Configure the native backend before rebuilding with the board mount.
+                if cfg.backend == "podman":
+                    trial.config.environment.delete = False
+                    trial.config.environment.import_path = "podman_runtime:SwarmPodmanEnvironment"
+                    if overlay := os.environ.get("SWARM_AGENT_OVERLAY"):
+                        trial.config.environment.extra_docker_compose = [overlay]
                 trial._init_agent_environment()
                 trial.agent.team_name = name
                 trial.agent.bundle = self.bundle
                 trial.agent.max_context = cfg.max_context
                 trial.agent.max_output_tokens = cfg.max_output_tokens
                 trial.agent.ready = lambda: ready_agent(name)
-                # Podman down --rmi local otherwise removes images shared by concurrent trials.
-                if cfg.backend == "podman":
-                    trial.config.environment.delete = False
 
             async def watch():
                 await active.wait()

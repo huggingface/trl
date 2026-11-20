@@ -16,18 +16,38 @@
 """Podman Compose 1.x CLI compatibility for Harbor's Docker Compose commands."""
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
+def run(command):
+    """Keep Compose descendants in a group that is terminated with this wrapper."""
+    process = subprocess.Popen(command, start_new_session=True)
+
+    def terminate(signum, frame):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    return process.wait()
+
+
 def main():
+    os.environ.setdefault("COMPOSE_PARALLEL_LIMIT", "1")
     args = sys.argv[1:]
     commands = {"build", "up", "down", "exec", "logs", "ps", "config", "stop", "start", "pull", "rm", "kill", "cp"}
     index = next((i for i, arg in enumerate(args) if arg in commands), None)
     if index is None:
-        return subprocess.call([str(Path(sys.executable).parent / "podman-compose"), *args])
+        return run([str(Path(sys.executable).parent / "podman-compose"), *args])
     command = args[index]
     if command == "cp":
         flags, paths = args[:index], args[index + 1 :]
@@ -44,7 +64,7 @@ def main():
                 mapped.append(f"{container}:{location}")
             else:
                 mapped.append(path)
-        return subprocess.call(["podman", "cp", *mapped])
+        return run(["podman", "cp", *mapped])
     if command == "exec":
         args[index + 1 :] = ["-T" if arg == "--no-TTY" else arg for arg in args[index + 1 :]]
     # Compose allows an implicit default network; podman-compose requires a declaration.
@@ -53,7 +73,7 @@ def main():
         json.dump({"networks": {"default": {}}}, overlay)
         overlay.flush()
         args[index:index] = ["-f", overlay.name]
-        return subprocess.call([str(Path(sys.executable).parent / "podman-compose"), *args])
+        return run([str(Path(sys.executable).parent / "podman-compose"), *args])
 
 
 if __name__ == "__main__":

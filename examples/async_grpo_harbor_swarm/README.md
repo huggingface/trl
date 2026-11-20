@@ -141,6 +141,23 @@ Set `SWARM_VALIDATE=1` to opt into two synthetic-reward updates, checkpoint relo
 and native concurrency checks before training. With validation enabled, the server
 restarts after the synthetic smoke so real training still starts from base weights.
 
+For AgentEscape, build the reusable Pi 1.4.0 image once using the same pinned task snapshot:
+
+```sh
+python examples/async_grpo_harbor_swarm/prepare_agent_image.py \
+  --task-dir /path/to/tasks/agentescape-10-skeleton-TASK_ID --output-dir /path/to/agent-image
+export SWARM_AGENT_IMAGE_ARCHIVE=/path/to/agent-image/agent-image.tar
+export SWARM_AGENT_OVERLAY=/path/to/agent-image/agent-overlay.json
+```
+
+The launcher loads this image before starting rollouts. It contains Node, Pi, and the
+existing Flock board client; puzzle and verifier services still use the task's own code.
+The Podman backend limits environment starts/stops to eight at a time and serializes
+builds because AgentEscape tasks share image tags. Daemon detection runs off the event
+loop and is cached. Compose cancellation terminates its child processes. Healthcheck
+discovery retries timeouts, caches container configuration, and limits concurrent checks
+to sixteen. A healthcheck scheduler or gateway exit fails the training job promptly.
+
 `--teams-per-update` always counts global teams; it must divide evenly across ranks.
 The loader stages a complete optimizer batch before yielding any accumulation rounds.
 `--admission-deadline` and `--collection-deadline` are absolute Unix timestamps. Admission
@@ -210,7 +227,7 @@ This example starts with binary success, without s3's token-cost reward shaping.
 ## Tests
 
 ```sh
-LITELLM_LOCAL_MODEL_COST_MAP=True python -m pytest -q examples/async_grpo_harbor_swarm/test_swarm.py
+LITELLM_LOCAL_MODEL_COST_MAP=True python -m pytest -q examples/async_grpo_harbor_swarm/test_*.py
 ruff check examples/async_grpo_harbor_swarm
 ```
 
@@ -237,12 +254,12 @@ with attribution. Both use the same pinned msgboard SDK/server as that implement
 
 Full-model extension checks: 21 CPU tests pass, including a two-process Gloo check of
 the actual policy loss against a single-process reference. Trainer and NCCL weight-transfer
-imports passed on an H100. The full FSDP2/serving smoke and native 16-agent concurrency
-gates run inside the Slurm allocation; these CPU/import checks do not establish their outcome.
+imports passed on an H100. Optional FSDP2/serving and native concurrency checks run
+inside the Slurm allocation when requested; CPU/import checks do not establish their outcome.
 
 The one-node launcher uses NCCL socket transport (`NCCL_NET=Socket`, `NCCL_P2P_DISABLE=1`,
 `NCCL_SHM_DISABLE=1`, `NCCL_CUMEM_HOST_ENABLE=0`, `NCCL_IB_DISABLE=1`) for the
 host/container weight-transfer boundary and enables NCCL INIT/NET diagnostics.
 This conservative setting also applies to intra-trainer collectives and can reduce
-throughput. The full GPU smoke remains mandatory before real training. Monitoring
+throughput. Native training starts directly by default. Monitoring
 records explicit queued/running/failed status and the rank-zero failure summary.

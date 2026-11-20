@@ -53,34 +53,49 @@ def interval(config):
 
 
 async def main():
-    deadlines = {}
-    running = {}
+    # Cache immutable healthcheck configuration; inspecting every container every
+    # second blocked the scheduler under load. Bound healthcheck subprocesses too.
+    deadlines, configs, running = {}, {}, {}
     while True:
-        code, stdout, stderr = await podman("ps", "--format", "{{.ID}}")
-        if code:
-            raise RuntimeError(stderr.decode(errors="replace"))
-        ids = stdout.decode().split()
-        active = set(ids)
-        deadlines = {key: value for key, value in deadlines.items() if key in active}
         for key, task in list(running.items()):
             if task.done():
-                # A failed health check is a container health result, not scheduler failure.
-                task.result()
+                try:
+                    task.result()
+                except TimeoutError:
+                    print(f"Healthcheck timed out for {key}; will retry", flush=True)
+                deadlines[key] = time.monotonic() + interval(configs.get(key, {}))
                 del running[key]
-        if ids:
-            code, stdout, _ = await podman("inspect", *ids)
-            if not code:  # Containers can disappear between listing and inspection.
-                for container in json.loads(stdout):
-                    key = container["Id"][:12]
-                    health = container.get("Config", {}).get("Healthcheck") or {}
-                    if not health.get("Test") or health["Test"] == ["NONE"]:
-                        continue
-                    now = time.monotonic()
-                    if key not in deadlines:
-                        deadlines[key] = now + interval(health)
-                    if key not in running and now >= deadlines[key]:
-                        running[key] = asyncio.create_task(podman("healthcheck", "run", key))
-                        deadlines[key] = now + interval(health)
+        try:
+            code, stdout, stderr = await podman("ps", "--format", "{{.ID}}")
+            if code:
+                print(f"Podman discovery failed: {stderr.decode(errors='replace')}", flush=True)
+                await asyncio.sleep(2)
+                continue
+            ids = stdout.decode().split()
+            active = set(ids)
+            configs = {key: value for key, value in configs.items() if key in active}
+            deadlines = {key: value for key, value in deadlines.items() if key in active}
+            # Discover only a small batch per tick, so one slow inspection cannot
+            # prevent already-discovered dependencies from becoming healthy.
+            unknown = [key for key in ids if key not in configs][:16]
+            if unknown:
+                code, stdout, _ = await podman("inspect", *unknown)
+                if not code:
+                    for container in json.loads(stdout):
+                        key = container["Id"][:12]
+                        configs[key] = container.get("Config", {}).get("Healthcheck") or {}
+                        deadlines[key] = time.monotonic()
+        except TimeoutError:
+            print("Podman discovery timed out; continuing health checks", flush=True)
+        now = time.monotonic()
+        for key in sorted(configs, key=lambda key: deadlines.get(key, 0)):
+            health = configs[key]
+            if not health.get("Test") or health["Test"] == ["NONE"]:
+                continue
+            if len(running) >= 16:
+                break
+            if key not in running and now >= deadlines.get(key, 0):
+                running[key] = asyncio.create_task(podman("healthcheck", "run", key))
         await asyncio.sleep(1)
 
 
