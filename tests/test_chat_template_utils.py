@@ -65,6 +65,7 @@ from trl.chat_template_utils import (
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
+    qwen3_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
@@ -2520,27 +2521,33 @@ class TestParseResponse:
         for end in range(1, len(response)):
             parse_response(tokenizer, response[:end], prefix=prefix)
 
-
-@pytest.mark.skipif(not _SUPPORTS_RESPONSE_TEMPLATE, reason="Requires the response_template parser (>= 5.13)")
-@pytest.mark.parametrize(
-    "model_id",
-    ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507"],
-)
-@pytest.mark.parametrize("content", ["Let's call the tool.", "Let's call the tool.\n", "Let's call the tool.\n\n"])
-def test_parse_response_qwen3_keeps_newlines_before_tool_call(model_id, content):
-    # The Qwen3 template adds one newline between the content and the first tool call. Parsing must keep the newlines
-    # the model wrote beyond that one, so that re-rendering the parsed message gives back the same tokens.
-    tokenizer = add_response_schema(AutoTokenizer.from_pretrained(model_id))
-    tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
-    messages = [
-        {"role": "user", "content": "What is 3*4?"},
-        {"role": "assistant", "content": content, "tool_calls": tool_calls},
-    ]
-    prefix = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True, return_dict=True).input_ids
-    text = tokenizer.apply_chat_template(messages, return_dict=True).input_ids
-    parsed = parse_response(tokenizer, text[len(prefix) :], prefix=prefix)
-    assert parsed["content"] == content
-    assert tokenizer.apply_chat_template([messages[0], parsed], return_dict=True).input_ids == text
+    @pytest.mark.skipif(not _SUPPORTS_RESPONSE_TEMPLATE, reason="Requires the response_template parser (>= 5.13)")
+    @pytest.mark.parametrize("content", ["Let's call the tool.", "Let's call the tool.\n", "Let's call the tool.\n\n"])
+    def test_parse_response_qwen3_keeps_newlines_before_tool_call(self, model_name, content):
+        processing_class = self._load(model_name)
+        tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
+        if tokenizer.response_template != qwen3_template:
+            pytest.skip("Only the templates that `qwen3_template` parses add a newline before the first tool call.")
+        # The Qwen3 template adds one newline between the content and the first tool call. Parsing must keep the
+        # newlines the model wrote beyond that one, so that re-rendering the parsed message gives back the same tokens.
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": content, "tool_calls": tool_calls},
+        ]
+        messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
+        prefix = processing_class.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
+        if self.is_vlm:  # VLM processors return batched output
+            prefix = prefix[0]
+            text = text[0]
+        parsed = parse_response(tokenizer, text[len(prefix) :], prefix=prefix)
+        assert parsed["content"] == content
+        rendered = [messages[0], prepare_multimodal_messages([parsed])[0] if self.is_vlm else parsed]
+        rerendered = processing_class.apply_chat_template(rendered, tokenize=True, return_dict=True).input_ids
+        assert (rerendered[0] if self.is_vlm else rerendered) == text
 
 
 class TestChatTemplatesDocumentation:
