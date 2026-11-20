@@ -1663,6 +1663,13 @@ class TestGetTrainingChatTemplate:
         if tokenizer_name == "trl-internal-testing/tiny-Glm4MoeForCausalLM":
             # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before + "<|user|>"
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
