@@ -60,6 +60,9 @@ from trl.chat_template_utils import (
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     parse_response,
+    phi4_chat_template,
+    phi4_mini_chat_template,
+    phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
     qwen3_8_v2_chat_template,
@@ -579,6 +582,57 @@ class TestAddResponseSchema:
         ).input_ids
         expected = {"role": "assistant", "reasoning_content": "Hmmm.", "content": "It is sunny."}
         assert parse_response(tokenizer, response, prefix=prefix) == expected
+
+    @pytest.mark.parametrize(
+        "tokenizer_name",
+        [
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template), id="deepseekv3-v4"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("12<｜end▁of▁sentence｜>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "<think>\nHmmm.\n</think>\n\n12<｜end▁of▁sentence｜>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+            pytest.param(
+                "<think>\nHmmm.\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n"
+                '```json\n{"city": "Paris"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>'
+                'get_weather\n```json\n{"city": "Lyon"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>',
+                {
+                    "role": "assistant",
+                    "reasoning_content": "Hmmm.",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}},
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Lyon"}}},
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_deepseekv3_without_think_prefill(self, tokenizer_name, completion, expected):
+        # The prompt ends with `<｜Assistant｜>`, so the model opens the reasoning block itself
+        tokenizer_name, chat_template = tokenizer_name if isinstance(tokenizer_name, tuple) else (tokenizer_name, None)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:  # DeepSeek-V3-0324 has no tiny model of its own
+            tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is the weather in Paris and Lyon?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
 
     @pytest.mark.parametrize(
         "completion, expected",
@@ -1399,6 +1453,13 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+        # phi-4 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has and the tiny Phi-3 one doesn't
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", phi4_chat_template), id="phi4"),
+        pytest.param(("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_chat_template), id="phi4_mini"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_reasoning_chat_template),
+            id="phi4_mini_reasoning",
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl", marks=require_vision),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param(
@@ -2048,6 +2109,30 @@ class TestDeepseekTrainingChatTemplates:
         assert trained == "The sky scatters shorter wavelengths.</think>It is blue.<｜end▁of▁sentence｜>"
 
 
+class TestGlm4MoeTrainingChatTemplate:
+    def test_assistant_masks_tool_call_without_content(self):
+        # transformers < 5.23 keeps `None`-valued keys, which the original template renders as the text `None` (#8451)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            {"role": "tool", "content": "12"},
+            {"role": "assistant", "content": "It is 12."},
+        ]
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=get_training_chat_template(tokenizer),
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+        )
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained.startswith("\n<think></think>\n<tool_call>multiply")
+
+
 class TestNamedChatTemplateVariants:
     # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
     def test_has_generation_markers(self):
@@ -2481,7 +2566,10 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = processing_class(text)["input_ids"]
-        parsed = parse_response(processing_class, assistant_text)
+        prefix = processing_class.apply_chat_template(
+            [{"role": "user", "content": "What is 3*4?"}], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        parsed = parse_response(processing_class, assistant_text, prefix=prefix)
         expected = {
             "role": "assistant",
             "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
@@ -2515,7 +2603,7 @@ class TestParseResponse:
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
         # Truncate the response mid-tool-call and just check that parsing doesn't crash.
         for end in range(1, len(response)):
-            parse_response(tokenizer, response[:end])
+            parse_response(tokenizer, response[:end], prefix=prefix)
 
 
 class TestChatTemplatesDocumentation:

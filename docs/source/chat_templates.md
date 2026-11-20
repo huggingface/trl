@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324 and DeepSeek-V3.1), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324 and DeepSeek-V3.1), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Phi-4, Phi-4-mini (including Phi-4-mini-flash-reasoning), Phi-4-mini-reasoning, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -96,6 +96,8 @@ Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
 Close each assistant turn inside the generation block with the role marker that opens the next turn (`<|observation|>` after tool calls, otherwise `<|user|>` or `<|system|>`). GLM's original template has no end-of-turn token: a turn is ended by the next message's role marker, and GLM declares `<|user|>` and `<|observation|>` as end-of-sequence tokens, so the training template appends the marker to the assistant turn to keep the stop token in the loss mask, and the following message no longer renders its own marker.
 
 Wrap assistant message output (including the thinking block and tool calls) with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
+
+Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
 
 ### `qwen3_training.jinja`
 
@@ -210,6 +212,24 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 ### `phi3_5_training.jinja`
 
 Patched Phi-3.5 template. Diff vs `phi3_5.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_training.jinja`
+
+Patched Phi-4 template. Diff vs `phi4.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_training.jinja`
+
+Patched Phi-4-mini template. Diff vs `phi4_mini.jinja`:
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `phi4_mini_reasoning_training.jinja`
+
+Patched Phi-4-mini-reasoning template. Diff vs `phi4_mini_reasoning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 

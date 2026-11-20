@@ -616,8 +616,9 @@ gemma4_template = {
 }
 
 deepseekv3_template = {
-    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
-    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
+    # DeepSeek-R1's generation prompt pre-fills `<think>\n` (R1-0528 and V3-0324's don't), and after tool outputs the
+    # model continues without a new `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and
+    # the reasoning field the tag.
     "defaults": {"role": "assistant"},
     "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
     "fields": {
@@ -772,6 +773,12 @@ phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="ut
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
 
+phi4_chat_template = (_CHAT_TEMPLATES_DIR / "phi4.jinja").read_text(encoding="utf-8")
+
+phi4_mini_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning.jinja").read_text(encoding="utf-8")
+
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
@@ -857,7 +864,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template in [deepseekv3_chat_template, deepseekv3_training_chat_template]:
+    if chat_template in [
+        deepseekv3_chat_template,
+        deepseekv3_training_chat_template,
+        deepseekv3_v2_chat_template,
+        deepseekv3_v2_training_chat_template,
+        deepseekv3_v4_chat_template,
+        deepseekv3_v4_training_chat_template,
+    ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseekv3_template
@@ -1260,6 +1274,14 @@ phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
 
+phi4_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_training.jinja").read_text(encoding="utf-8")
+
+phi4_mini_reasoning_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
@@ -1470,6 +1492,15 @@ def get_training_chat_template(
     if chat_template == phi3_5_chat_template:
         return phi3_5_training_chat_template
 
+    if chat_template == phi4_chat_template:
+        return phi4_training_chat_template
+
+    if chat_template == phi4_mini_chat_template:
+        return phi4_mini_training_chat_template
+
+    if chat_template == phi4_mini_reasoning_chat_template:
+        return phi4_mini_reasoning_training_chat_template
+
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
@@ -1578,7 +1609,7 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
 def parse_response(
     tokenizer: PreTrainedTokenizerBase,
     ids: list[int],
-    prefix: list[int] | None = None,
+    prefix: list[int],
     tools: list[dict | Callable] | None = None,
 ) -> dict:
     r"""
@@ -1595,7 +1626,7 @@ def parse_response(
             Tokenizer with a `parse_response()` method.
         ids (`list[int]`):
             List of token sequences.
-        prefix (`list[int]`, *optional*):
+        prefix (`list[int]`):
             Token IDs of the chat-prompt context that came before `ids` (e.g. the rendered chat template up to and
             including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
             new-style `response_template` set and the installed transformers supports it (>= 5.13); ignored for legacy
@@ -1618,8 +1649,10 @@ def parse_response(
     >>> tokenizer = add_response_schema(tokenizer)  # temporary until built-in support
     >>> text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
     >>> ids = tokenizer(text)["input_ids"]
-    >>> parse_response(tokenizer, ids)
-    {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
+    >>> messages = [{"role": "user", "content": "What is 3 * 4?"}]
+    >>> prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_dict=True)["input_ids"]
+    >>> parse_response(tokenizer, ids, prefix=prefix)
+    {'role': 'assistant', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}], 'content': ''}
     ```
     """
     try:
@@ -1627,11 +1660,7 @@ def parse_response(
         # Older transformers only ship the legacy `response_schema` parser, whose `parse_response` rejects the kwarg, so
         # we gate on `_SUPPORTS_RESPONSE_TEMPLATE` (matching `add_response_schema`, which only sets `response_template`
         # on those versions) and omit `prefix=` everywhere else, including the legacy `response_schema` path.
-        if (
-            prefix is not None
-            and _SUPPORTS_RESPONSE_TEMPLATE
-            and getattr(tokenizer, "response_template", None) is not None
-        ):
+        if _SUPPORTS_RESPONSE_TEMPLATE and getattr(tokenizer, "response_template", None) is not None:
             # `tools=` is only supported from transformers 5.15
             if _SUPPORTS_PARSE_RESPONSE_TOOLS:
                 parsed = tokenizer.parse_response(ids, prefix=prefix, tools=tools)
