@@ -1595,7 +1595,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # fp32 hidden states and errors. Under PEFT, `base_model` is the `LoraModel` tuner, whose forward runs the full
         # causal LM, so the backbone is reached through `get_base_model()`; its layers carry the adapters in place.
         causal_lm = unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model
-        backbone = causal_lm.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = causal_lm.model
+        else:
+            backbone = causal_lm.base_model
         forward_start = time.time()
         # MoE models: request router logits so the load-balancing loss can be computed below
         router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
