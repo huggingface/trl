@@ -15,15 +15,16 @@
 import re
 
 
-def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
+def think_format_reward(completions: list[list[dict[str, str]]] | list[str], **kwargs) -> list[float]:
     r"""
     Reward function that checks if the reasoning process is enclosed within `"<think>"` and `"</think>"` tags. The
     function returns a reward of 1.0 if the format is correct, otherwise 0.0.
 
     Args:
-        completions (`list[list[dict[str, str]]]`):
-            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
-            containing the key `"content"` with the value being the text of the completion.
+        completions (`list[list[dict[str, str]]]` or `list[str]`):
+            List of completions to be evaluated. In the conversational format, each completion is a list of one
+            message, i.e. a dictionary containing the key `"content"` with the value being the text of the completion.
+            In the standard format, each completion is the text of the completion.
         **kwargs:
             Additional keyword arguments. This function does not use them, but they are required in the function
             signature to ensure compatibility with trainers like [`GRPOTrainer`].
@@ -45,6 +46,8 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
     ```
     """
     pattern = r"^<think>(?!.*<think>)(.*?)</think>.*$"
-    completion_contents = [completion[0]["content"] for completion in completions]
+    completion_contents = [
+        completion if isinstance(completion, str) else completion[0]["content"] for completion in completions
+    ]
     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
