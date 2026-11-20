@@ -111,7 +111,9 @@ teams. Add `--save-tokens` to keep each agent's full token context.
 
 ## Results
 
-50 updates of about 150 teams on 2 H100s took about 4.9 hours.
+50 updates of about 150 teams on 2 H100s took about 4.9 hours. The checkpoint is
+[trl-lib/Qwen3-0.6B-S3-Aggregation](https://huggingface.co/trl-lib/Qwen3-0.6B-S3-Aggregation) and the training
+metrics are on [trl-lib/s3-aggregation-trackio](https://huggingface.co/spaces/trl-lib/s3-aggregation-trackio).
 
 ![Training curves](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/s3_aggregation_training.png)
 
