@@ -91,9 +91,9 @@ run_training() {
  [[ "$finished_pid" == "$train_pid" ]] || { echo 'Required runtime service exited during training' >&2; return 1; }
  train_pid=
 }
-common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations "${SWARM_GROUP_SIZE:-16}" --max-staleness 4 --distributed-timeout "${SWARM_DISTRIBUTED_TIMEOUT:-43200}" --revision "${SWARM_DATASET_REVISION:-144b647af561e28d681552cb04bc7b4a8dbeb1ce}" --agent-timeout 1800 --max-turns 64 --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
+common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations "${SWARM_GROUP_SIZE:-16}" --max-staleness 4 --distributed-timeout "${SWARM_DISTRIBUTED_TIMEOUT:-43200}" --revision "${SWARM_DATASET_REVISION:-144b647af561e28d681552cb04bc7b4a8dbeb1ce}" --agent-timeout 1800 --max-turns 64 --max-context "${SWARM_MAX_CONTEXT:-32768}" --token-budget "${SWARM_TOKEN_BUDGET:-32768}" --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
 if [[ "$1" == smoke ]]; then
- run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
+ run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 > "$run/train.log" 2>&1
  python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
  exit
 fi

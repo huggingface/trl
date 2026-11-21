@@ -290,3 +290,11 @@ records `mixed_groups` and `parameters_changed` without presenting an optimizer
 call as evidence of learning. `SWARM_DATASET_REVISION` pins a task repair commit.
 The launcher defaults `SWARM_DISTRIBUTED_TIMEOUT` to 43,200 seconds for long runs;
 `SWARM_RUN_SECONDS` must match the requested Slurm allocation duration.
+
+The full-node launcher uses a 32,768-token context and packing budget. Pi 1.4.0
+reserves 4,096 context tokens; with compaction disabled, a 16k window caused native
+agents to finish with one-token, length-limited responses after about 27 calls in
+validation. `SWARM_MAX_CONTEXT` sets the same limit in Pi and vLLM;
+`SWARM_TOKEN_BUDGET` must be at least that large. The 30-minute and 64-call limits
+remain upper bounds. Increasing context provides more room to solve tasks; it does
+not establish a positive reward or learning improvement.
