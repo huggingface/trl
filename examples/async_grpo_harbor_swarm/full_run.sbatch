@@ -19,10 +19,14 @@ printf '%s\n' "$SLURM_JOB_ID" > "$root/job"
 printf '%s\n' "$(( $(date +%s) + ${SWARM_RUN_SECONDS:-28800} ))" > "$root/deadline"
 mapfile -t nodes < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 server_pid=
+monitor_pid=
 cleanup() {
  [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
+ [ -z "$monitor_pid" ] || kill "$monitor_pid" 2>/dev/null || true
+ [ -z "$monitor_pid" ] || wait "$monitor_pid" || true
 }
 trap cleanup EXIT
+"$repo/.venv/bin/python" "$repo/examples/async_grpo_harbor_swarm/monitor_full.py" --run-dir "$root" --job "$SLURM_JOB_ID" > "$root/monitor.log" 2>&1 & monitor_pid=$!
 start_server() {
  srun --exact --exclusive -N1 -n1 -w "${nodes[0]}" --gpus=4 --gpus-per-node=4 --cpus-per-task=24 --mem=512G --container-image=/fsx/anton/shared/images/vllm-openai-v0.32.0.sqsh --no-container-mount-home --container-mounts="/fsx:/fsx" bash "$repo/examples/async_grpo_harbor_swarm/full_server.sh" > "$root/server-$1.log" 2>&1 & server_pid=$!
  "$repo/.venv/bin/python" - "$root/server-url" <<'PYWAIT'

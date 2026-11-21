@@ -17,8 +17,9 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
-import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -37,7 +38,9 @@ def main():
     parser.add_argument("--space-id", default="edbeeching/trl-harbor-swarm-trackio")
     args = parser.parse_args()
     root = args.run_dir
-    os.environ["TRACKIO_DIR"] = tempfile.mkdtemp(prefix="trl-full-trackio-")
+    os.environ["TRACKIO_DIR"] = str(root / "trackio-monitor")
+    stopping = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     import trackio
 
     trackio.init(
@@ -49,7 +52,7 @@ def main():
         auto_log_cpu=False,
     )
     try:
-        while True:
+        while not stopping.is_set():
             state = subprocess.run(
                 ["sacct", "-n", "-X", "-j", args.job, "--format=JobIDRaw,State,Elapsed", "-P"],
                 capture_output=True,
@@ -87,13 +90,7 @@ def main():
                 (read_json(p, {}).get("global_step", 0) for p in checkpoints), default=0
             )
             smoke = read_json(root / "smoke/train/reload-check.json", {})
-            stage = (
-                "training"
-                if (train / "manifest.json").exists()
-                else "native_gates"
-                if smoke
-                else "gpu_smoke_or_queued"
-            )
+            stage = "training" if (train / "manifest.json").exists() else "native_gates" if smoke else "starting"
             rows = [line.split("|") for line in state.splitlines()]
             job_state = rows[0][1].split()[0] if rows else "UNKNOWN"
             terminal = job_state in {
@@ -149,7 +146,7 @@ def main():
             print(json.dumps(record), flush=True)
             if terminal:
                 break
-            time.sleep(30)
+            stopping.wait(30)
     finally:
         trackio.finish()
 
