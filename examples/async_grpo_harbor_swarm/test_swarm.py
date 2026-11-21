@@ -366,6 +366,52 @@ def test_gateway_preserves_capture_and_rejects_ambiguous_versions(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("failure", ["recover", "persistent", "timeout"])
+def test_gateway_connection_retry_holds_policy_gate(tmp_path, failure):
+    from policy_gateway import create_app, token_key
+
+    async def run():
+        calls = []
+        retry_entered, release = asyncio.Event(), asyncio.Event()
+
+        async def upstream(request):
+            calls.append(json.loads(request.content))
+            if failure == "timeout":
+                raise httpx.ReadTimeout("generation timed out")
+            if len(calls) == 1 or failure == "persistent":
+                raise httpx.ReadError("connection lost")
+            retry_entered.set()
+            await release.wait()
+            return httpx.Response(200, json={"prompt_token_ids": [10], "choices": [{"token_ids": [11]}]})
+
+        app = create_app("http://engine", tmp_path, "test-token", httpx.MockTransport(upstream))
+        headers = {"x-swarm-control": "test-token"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway") as client:
+            call = asyncio.create_task(client.post("/agents/team-agent/v1/chat/completions", json={}))
+            if failure == "recover":
+                await asyncio.wait_for(retry_entered.wait(), 5)
+                drain = asyncio.create_task(app.state.gate.drain())
+                await asyncio.sleep(0)
+                assert not drain.done()
+                assert app.state.gate.active == 1
+                release.set()
+                assert (await call).status_code == 200
+                await asyncio.wait_for(drain, 5)
+                await app.state.gate.publish(1)
+                records = (await client.get("/records/team-agent", headers=headers)).json()
+                assert records == [{"agent": "team-agent", "version": 0, "tokens": token_key([10], [11])}]
+                assert len((tmp_path / "policy-calls.jsonl").read_text().splitlines()) == 1
+            else:
+                with pytest.raises(httpx.ReadTimeout if failure == "timeout" else httpx.ReadError):
+                    await call
+                assert (await client.get("/records/team-agent", headers=headers)).json() == []
+            assert app.state.gate.active == 0
+            assert len(calls) == (1 if failure == "timeout" else 2)
+            assert all(body["cache_salt"] == "swarm-policy-0" for body in calls)
+
+    asyncio.run(run())
+
+
 def test_staleness_rejects_whole_team_and_boundary_is_inclusive():
     import queue
     from collections import defaultdict

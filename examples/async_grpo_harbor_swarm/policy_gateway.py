@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
 from collections import defaultdict
@@ -109,7 +110,11 @@ def create_app(upstream, output_dir, token, transport=None):
     records = defaultdict(list)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    client = httpx.AsyncClient(timeout=600, transport=transport, limits=httpx.Limits(max_connections=512))
+    client = httpx.AsyncClient(
+        timeout=600,
+        transport=transport,
+        limits=httpx.Limits(max_connections=512, keepalive_expiry=1),
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -163,7 +168,17 @@ def create_app(upstream, output_dir, token, transport=None):
                 raise HTTPException(400, "Capture upstream must be non-streaming")
             async with gate.call() as version:
                 body["cache_salt"] = f"swarm-policy-{version}"
-                response = await client.post(f"{upstream}/{path}", json=body)
+                # A lost inference response has no agent-side effects. Keep the gate held so
+                # a retry uses the same weights, and only record the response we return.
+                for attempt in range(2):
+                    try:
+                        response = await client.post(f"{upstream}/{path}", json=body)
+                        break
+                    except (httpx.NetworkError, httpx.RemoteProtocolError):
+                        if attempt:
+                            raise
+                        logging.getLogger(__name__).warning("Inference connection failed; retrying once")
+                        await asyncio.sleep(0.1)
                 headers["x-swarm-policy-version"] = str(version)
                 if response.is_success and agent:
                     payload = response.json()
@@ -208,4 +223,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=args.port,
         log_level="warning",
+        timeout_keep_alive=120,
     )
