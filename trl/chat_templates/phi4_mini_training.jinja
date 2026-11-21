@@ -1,0 +1,26 @@
+{#- Training variant of the Phi-4-mini chat template (see phi4_mini.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
+{%- for message in messages %}
+    {%- if message['role'] == 'system' and 'tools' in message and message['tools'] is not none %}
+        {{- '<|' + message['role'] + '|>' + message['content'] + '<|tool|>' + message['tools'] + '<|/tool|>' + '<|end|>' }}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<|assistant|>' }}
+        {%- generation %}
+        {{- message['content'] + '<|end|>' }}
+        {%- endgeneration %}
+    {%- else %}
+        {{- '<|' + message['role'] + '|>' + message['content'] + '<|end|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|assistant|>' }}
+{%- elif messages[-1]['role'] == 'assistant' %}
+    {%- generation %}
+    {{- eos_token }}
+    {%- endgeneration %}
+{%- else %}
+    {{- eos_token }}
+{%- endif %}
