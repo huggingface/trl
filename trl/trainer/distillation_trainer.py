@@ -1994,8 +1994,10 @@ class DistillationTrainer(_BaseTrainer):
         zero3 = self.args.deepspeed_plugin is not None and self.args.deepspeed_plugin.zero_stage == 3
         for teacher_index, (teacher_id, teacher_model) in enumerate(self.teacher_models.items()):
             rows = [i for i, t in enumerate(teacher_ids) if t == teacher_id]
-            # Every rank calls every teacher, so that a sharded teacher's collectives match; with no rows, it scores
-            # one row and drops it
+            # Under ZeRO-3 the teacher forward is a collective, so every rank scores every teacher, on one masked-out
+            # row when it has none
+            if not rows and not zero3:
+                continue
             scored = rows or [0]
 
             # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
@@ -2026,10 +2028,8 @@ class DistillationTrainer(_BaseTrainer):
                 teacher_lm_head_weight = teacher_lm_head_weight.full_tensor().to(teacher_hidden_states.dtype)
                 if teacher_lm_head_bias is not None:
                     teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
-            # ZeRO-3 gathers the output heads in both passes of the chunked loss. Run the loss on every rank,
-            # including ranks without rows for this teacher, where the dummy row contributes zero tokens.
-            if not rows and not zero3:
-                continue
+            # ZeRO-3 gathers the output heads in both passes of the chunked loss, so the loss also runs on the
+            # masked-out row
             teacher_loss_mask = loss_mask[scored] if rows else torch.zeros_like(loss_mask[:1])
             teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
 
