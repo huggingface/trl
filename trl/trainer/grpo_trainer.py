@@ -2055,16 +2055,14 @@ class GRPOTrainer(_BaseTrainer):
                 prefix_ids = prefix_ids.tolist()
                 full_ids = full_ids.tolist()
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        # Some chat templates render whitespace after the token that ends the assistant turn (e.g. Qwen3 renders
+        # "<|im_end|>\n"). The model stops generating at that token, so drop the whitespace to start the suffix right
+        # after it.
+        while not self._tokenizer.decode(prefix_ids[-1:]).strip():
+            prefix_ids = prefix_ids[:-1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
+            raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
         return full_ids[len(prefix_ids) :]
 
     def _tool_call_loop(
