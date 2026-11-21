@@ -66,6 +66,7 @@ from trl.chat_template_utils import (
     phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
     qwen3_6_v2_chat_template,
+    qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
@@ -773,6 +774,8 @@ class TestAddResponseSchema:
             pytest.param(gemma4_v8_chat_template, id="gemma4-v8"),
             pytest.param(gemma4_v9_chat_template, id="gemma4-v9"),
             pytest.param(gemma4_v10_chat_template, id="gemma4-v10"),
+            # Re-uploads may add or drop the trailing newline (#8502)
+            pytest.param(gemma4_v10_chat_template.removesuffix("\n"), id="gemma4-v10-no-trailing-newline"),
         ],
     )
     @pytest.mark.parametrize(
@@ -1553,6 +1556,18 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_v2_chat_template),
             id="qwen38_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
+        # Re-uploads may add or drop the trailing newline (#8502)
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_chat_template + "\n"),
+            id="qwen38_trailing_newline",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
