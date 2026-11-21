@@ -143,6 +143,44 @@ class TestDistributed(TrlTestCase):
             {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
         )
 
+    def test_zero_sync_grpo_tensor_parallel(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc-per-node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/experimental/test_zero_sync_grpo_trainer.py",
+                "-k",
+                "test_train_tensor_parallel_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    def test_zero_sync_grpo_replicas(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc-per-node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/experimental/test_zero_sync_grpo_trainer.py",
+                "-k",
+                "test_train_replicas_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_ZERO_SYNC_DP_OUTPUT_DIR": self.tmp_dir},
+        )
+
     @pytest.mark.parametrize(
         "config",
         [

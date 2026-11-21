@@ -129,5 +129,7 @@
     title: SDFT
   - local: sdpo_trainer
     title: SDPO
+  - local: zero_sync_grpo_trainer
+    title: Zero-Sync GRPO
   title: Experimental
   isExpanded: false
