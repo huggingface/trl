@@ -669,8 +669,6 @@ class DistillationTrainer(_BaseTrainer):
         if teacher_model is None:
             teacher_models, teacher_models_init_kwargs = {}, {}
         elif isinstance(teacher_model, dict):
-            if not teacher_model:
-                raise ValueError("The `teacher_model` mapping must contain at least one teacher.")
             teacher_models, teacher_models_init_kwargs = dict(teacher_model), teacher_model_init_kwargs
             unknown = set(teacher_models_init_kwargs) - set(teacher_models)
             if unknown:
@@ -1635,13 +1633,12 @@ class DistillationTrainer(_BaseTrainer):
         # Check the routing before generating, so a bad `teacher_id` does not cost a generation pass
         if self._multi_teacher:
             teacher_ids = [x.get("teacher_id") for x in inputs]
-            unknown = set(teacher_ids) - set(self.teacher_models)
-            if unknown:
-                raise ValueError(
-                    f"Some examples have `teacher_id` {sorted(map(repr, unknown))}, which is not among the teachers "
-                    f"passed to `teacher_model`. Set the `teacher_id` column of every example to one of: "
-                    f"{list(self.teacher_models)}."
-                )
+            for teacher_id in set(teacher_ids):
+                if teacher_id not in self.teacher_models:
+                    raise ValueError(
+                        f"Example has `teacher_id={teacher_id!r}`, which is not among the teachers passed to "
+                        f"`teacher_model`. Expected one of: {list(self.teacher_models)}."
+                    )
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
