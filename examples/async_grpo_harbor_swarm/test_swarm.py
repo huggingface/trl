@@ -39,6 +39,42 @@ from trl.trainer.async_grpo_trainer import (
 )
 
 
+@pytest.mark.parametrize("failure", ["disconnect", "persistent", "unauthorized", "malformed"])
+def test_provenance_read_retries_only_transport_failures(failure):
+    from policy_gateway import read_records
+
+    calls = []
+    records = [{"tokens": "capture-hash", "version": 3}]
+
+    def upstream(request):
+        calls.append(request)
+        assert request.headers["x-swarm-control"] == "test-token"
+        if failure == "persistent" or (failure == "disconnect" and len(calls) == 1):
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        if failure == "unauthorized":
+            return httpx.Response(401)
+        if failure == "malformed":
+            return httpx.Response(200, text="invalid json")
+        return httpx.Response(200, json=records)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            return await read_records(client, "http://gateway/records/team-agent", "test-token")
+
+    if failure == "disconnect":
+        assert asyncio.run(run()) == records
+        assert len(calls) == 2
+    else:
+        error = {
+            "persistent": httpx.RemoteProtocolError,
+            "unauthorized": httpx.HTTPStatusError,
+            "malformed": ValueError,
+        }[failure]
+        with pytest.raises(error):
+            asyncio.run(run())
+        assert len(calls) == (3 if failure == "persistent" else 1)
+
+
 def group_for(rewards, fork=False):
     rollouts = []
     for i, reward in enumerate(rewards):

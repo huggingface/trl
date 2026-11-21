@@ -34,6 +34,19 @@ def token_key(prompt, completion):
     return hashlib.sha256(json.dumps([prompt, completion], separators=(",", ":")).encode()).hexdigest()
 
 
+async def read_records(client, url, token):
+    """Retry transient transport failures on the idempotent provenance read."""
+    for attempt in range(3):
+        try:
+            response = await client.get(url, headers={"x-swarm-control": token})
+            response.raise_for_status()
+            return response.json()
+        except httpx.TransportError:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.1)
+
+
 def match_versions(turns, records):
     """Reject missing/ambiguous provenance instead of guessing a policy version."""
     versions = defaultdict(set)

@@ -432,17 +432,17 @@ class TeamRunner:
             state["reward"], traces = validate_team(results, cfg.max_context, winner)
             if cfg.gateway_url:
                 import httpx
-                from policy_gateway import match_versions
+                from policy_gateway import match_versions, read_records
 
                 state["call_versions"] = {}
                 async with httpx.AsyncClient(timeout=30) as http:
                     for name, result in zip(names, results, strict=True):
-                        response = await http.get(
+                        records = await read_records(
+                            http,
                             f"{cfg.gateway_url}/records/{team_id}-{name}",
-                            headers={"x-swarm-control": os.environ["SWARM_GATEWAY_TOKEN"]},
+                            os.environ["SWARM_GATEWAY_TOKEN"],
                         )
-                        response.raise_for_status()
-                        state["call_versions"][name] = match_versions(result.turns, response.json())
+                        state["call_versions"][name] = match_versions(result.turns, records)
                 versions = [call["policy_version"] for calls in state["call_versions"].values() for call in calls]
                 if not versions:
                     raise ValueError("Team has no versioned calls")
