@@ -881,11 +881,17 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template in [
         glm4_7_chat_template,
+        glm4_7_training_chat_template,
         glm5_chat_template,
+        glm5_training_chat_template,
         glm5_1_chat_template,
+        glm5_1_training_chat_template,
         glm5_2_chat_template,
+        glm5_2_training_chat_template,
         glm5_3_chat_template,
+        glm5_3_training_chat_template,
         glm5_3_flash_chat_template,
+        glm5_3_flash_training_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
@@ -1228,6 +1234,18 @@ gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").
 
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text(encoding="utf-8")
 
+glm4_7_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4_7_training.jinja").read_text(encoding="utf-8")
+
+glm5_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_training.jinja").read_text(encoding="utf-8")
+
+glm5_1_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_1_training.jinja").read_text(encoding="utf-8")
+
+glm5_2_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2_training.jinja").read_text(encoding="utf-8")
+
+glm5_3_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_training.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_training.jinja").read_text(encoding="utf-8")
+
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
 
 idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
@@ -1442,6 +1460,24 @@ def get_training_chat_template(
 
     if chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
+
+    if chat_template == glm4_7_chat_template:
+        return glm4_7_training_chat_template
+
+    if chat_template == glm5_chat_template:
+        return glm5_training_chat_template
+
+    if chat_template == glm5_1_chat_template:
+        return glm5_1_training_chat_template
+
+    if chat_template == glm5_2_chat_template:
+        return glm5_2_training_chat_template
+
+    if chat_template == glm5_3_chat_template:
+        return glm5_3_training_chat_template
+
+    if chat_template == glm5_3_flash_chat_template:
+        return glm5_3_flash_training_chat_template
 
     if chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
