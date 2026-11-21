@@ -1520,6 +1520,7 @@ class TestDistillationTrainer(TrlTestCase):
             max_steps=2,
             logging_steps=1,
             shuffle_dataset=False,  # keep the [a, b, a, b] batch layout deterministic
+            remove_unused_columns=True,  # `teacher_id` must survive column removal
             report_to="none",
         )
         trainer = DistillationTrainer(
