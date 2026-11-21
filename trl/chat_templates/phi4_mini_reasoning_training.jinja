@@ -1,0 +1,34 @@
+{#- Training variant of the Phi-4-mini-reasoning chat template (see phi4_mini_reasoning.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
+{{- '<|system|>Your name is Phi, an AI math expert developed by Microsoft.' }}
+{%- for message in messages %}
+    {%- if message['role'] == 'system' %}
+        {{- ' ' + message['content'] }}
+        {%- if 'tools' in message and message['tools'] is not none %}
+            {{- '<|tool|>' + message['tools'] + '<|/tool|>' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{{- '<|end|>' }}
+{%- for message in messages %}
+    {%- if message['role'] == 'assistant' %}
+        {{- '<|assistant|>' }}
+        {%- generation %}
+        {{- message['content'] + '<|end|>' }}
+        {%- endgeneration %}
+    {%- elif message['role'] != 'system' %}
+        {{- '<|' + message['role'] + '|>' + message['content'] + '<|end|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|assistant|>' }}
+{%- elif messages[-1]['role'] == 'assistant' %}
+    {%- generation %}
+    {{- eos_token }}
+    {%- endgeneration %}
+{%- else %}
+    {{- eos_token }}
+{%- endif %}
