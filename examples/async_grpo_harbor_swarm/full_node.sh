@@ -7,6 +7,8 @@ mkdir -p "$run"
 export VENV="$repo/.venv"
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 COMPOSE_PARALLEL_LIMIT=1
 export PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}"
+# Resolve the actual GPU attention kernel before spending time collecting native teams.
+"$VENV/bin/python" -c 'from trl.trainer.async_grpo_trainer import _flash_attn; _flash_attn()' > "$run/attention-preflight.log" 2>&1
 local_root=$(mktemp -d /tmp/trl-swarm.XXXXXX)
 export XDG_RUNTIME_DIR=$local_root/runtime
 export HF_XET_CACHE=$local_root/xet

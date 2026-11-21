@@ -30,6 +30,11 @@ Run vLLM in a separate environment or container with a compatible release from T
 absolute path: vLLM loads versioned adapters from it. Choose a CUDA build compatible
 with your GPU driver. Installing this example does not install vLLM.
 
+On Blackwell trainer GPUs, install `nvidia-cutlass-dsl==4.8.1` in the trainer environment
+for the FlashAttention-4 kernel selected by AsyncGRPO. The Slurm launcher resolves
+the selected attention kernel before collecting native rollouts, so missing kernel
+dependencies fail before an expensive batch.
+
 The task repository is private; use an existing HF login or `HF_TOKEN` with read access.
 Tasks are downloaded as real files into the run directory, pinned to
 `144b647af561e28d681552cb04bc7b4a8dbeb1ce`. There is no task rewrite or shared room.
