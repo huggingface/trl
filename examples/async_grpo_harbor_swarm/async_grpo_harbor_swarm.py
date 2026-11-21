@@ -109,6 +109,7 @@ def main():
     parser.add_argument("--full-finetune", action="store_true")
     parser.add_argument("--gateway-url")
     parser.add_argument("--max-staleness", type=int, default=2)
+    parser.add_argument("--distributed-timeout", type=int, default=7200)
     parser.add_argument("--admission-deadline", type=float, default=0)
     parser.add_argument("--collection-deadline", type=float, default=0)
     parser.add_argument("--model-revision")
@@ -147,6 +148,7 @@ def main():
         "num_generations",
         "concurrent_teams",
         "teams_per_update",
+        "distributed_timeout",
         "max_steps",
         "max_turns",
         "max_output_tokens",
@@ -230,7 +232,7 @@ def main():
         token_budget=args.token_budget,
         gradient_accumulation_steps=args.teams_per_update // distributed.num_processes,
         collection_deadline=args.collection_deadline,
-        ddp_timeout=7200,
+        ddp_timeout=args.distributed_timeout,
         fsdp="full_shard auto_wrap" if distributed.num_processes > 1 else "",
         fsdp_config={
             "fsdp_version": 2,

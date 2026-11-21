@@ -463,7 +463,9 @@ def distributed_gradient_worker(rank, init_method, expected):
         trainer.team_collator = DataCollatorForRollout(0)
         model = ScalarPolicy()
         rounds = 0
-        for batch in DistributedTeams(trainer):
+        for batch in DistributedTeams(
+            trainer._rollout_dataset, trainer.team_collator, world=2, rank=rank, rounds=2, budget=8
+        ):
             rounds += 1
             for chunk in batch["chunks"]:
                 trainer.compute_loss(model, chunk).backward()
@@ -529,3 +531,56 @@ def test_container_control_does_not_retry_errors_or_cancellation(error):
     with pytest.raises(type(error)):
         asyncio.run(control_command(container_command, operation="signal Pi to stop"))
     assert len(calls) == 1
+
+
+def waiting_batch_worker(rank, init_method, fail):
+    import time
+    from datetime import timedelta
+
+    from training import DistributedTeams
+
+    torch.distributed.init_process_group(
+        "gloo",
+        rank=rank,
+        world_size=2,
+        init_method=init_method,
+        timeout=timedelta(seconds=2),
+    )
+    try:
+
+        def source():
+            # Collection lasts longer than the collective timeout, but each wait is acknowledged.
+            for _ in range(16):
+                time.sleep(0.25)
+                yield None
+            if fail:
+                raise ValueError("rollout service failed")
+            yield from distributed_packets()
+            yield distributed_packets()[0]  # Partial final batch must never be emitted.
+
+        dataset = DistributedTeams(
+            source() if rank == 0 else None,
+            DataCollatorForRollout(0),
+            world=2,
+            rank=rank,
+            rounds=2,
+            budget=8,
+        )
+        if fail:
+            with pytest.raises(RuntimeError, match="rollout service failed"):
+                list(dataset)
+        else:
+            assert len(list(dataset)) == 2
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_distributed_collection_waits_and_errors(fail, tmp_path):
+    torch.multiprocessing.start_processes(
+        waiting_batch_worker,
+        args=(f"file://{tmp_path / 'waiting-rendezvous'}", fail),
+        nprocs=2,
+        join=True,
+        start_method="fork",
+    )

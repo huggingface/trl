@@ -131,6 +131,7 @@ class TeamDataset(IterableDataset):
             except queue.Empty:
                 self.wait_s += time.monotonic() - start
                 trainer.rollout_worker.check_health(trainer.args.rollout_worker_timeout)
+                yield None  # Let every rank acknowledge that collection is still alive.
                 continue
             self.wait_s += time.monotonic() - start
             if isinstance(packet, int):
@@ -161,45 +162,59 @@ def equalize_chunks(batches):
 
 
 class DistributedTeams(IterableDataset):
-    """Stage a whole optimizer batch before yielding any accumulation rounds."""
+    """Stage complete batches, acknowledging queue waits before collective timeouts."""
 
-    def __init__(self, trainer, group=None):
-        self.trainer, self.group = trainer, group
+    def __init__(self, source, collator, *, world, rank, rounds, budget, group=None):
+        self.source, self.collator = source, collator
+        self.world, self.rank, self.rounds, self.budget, self.group = world, rank, rounds, budget, group
 
     def __iter__(self):
-        trainer = self.trainer
-        world = trainer.accelerator.num_processes
-        main = trainer.accelerator.is_main_process
-        source = iter(trainer._rollout_dataset) if main else None
-        rounds = trainer.args.gradient_accumulation_steps
+        main = self.rank == 0
+        source = iter(self.source) if main else None
         while True:
+            packets = []
+            received = 0
+            while received < self.world * self.rounds:
+                status = ["wait", None]
+                if main:
+                    try:
+                        packet = next(source)
+                        if packet is not None:
+                            packets.append(packet)
+                            status[0] = "packet"
+                    except StopIteration:
+                        status[0] = "end"
+                    except Exception as exc:
+                        status[1] = repr(exc)
+                if self.world > 1:
+                    torch.distributed.broadcast_object_list(status, src=0, group=self.group)
+                if status[1]:
+                    raise RuntimeError(f"Team batch collection failed: {status[1]}")
+                if status[0] == "end":
+                    return  # Never train on a partial optimizer batch.
+                received += status[0] == "packet"
+
             batches, error = [], None
             if main:
                 try:
-                    # No partial optimizer updates when collection reaches its deadline.
-                    packets = [next(source) for _ in range(world * rounds)]
-                    for start in range(0, len(packets), world):
+                    for start in range(0, len(packets), self.world):
                         batches.append(
                             equalize_chunks(
                                 [
-                                    pack_team(packet, trainer.args.token_budget, trainer.team_collator)
-                                    for packet in packets[start : start + world]
+                                    pack_team(packet, self.budget, self.collator)
+                                    for packet in packets[start : start + self.world]
                                 ]
                             )
                         )
-                except StopIteration:
-                    batches = []
                 except Exception as exc:
                     error = repr(exc)
-            status = [bool(batches), error]
-            if world > 1:
+            status = [error]
+            if self.world > 1:
                 torch.distributed.broadcast_object_list(status, src=0, group=self.group)
-            if status[1]:
-                raise RuntimeError(f"Team batch collection failed: {status[1]}")
-            if not status[0]:
-                return
-            for index in range(rounds):
-                if world == 1:
+            if status[0]:
+                raise RuntimeError(f"Team batch packing failed: {status[0]}")
+            for index in range(self.rounds):
+                if self.world == 1:
                     yield batches[index][0]
                 else:
                     result = [None]
@@ -322,9 +337,22 @@ class SwarmTrainer(AsyncGRPOTrainer):
             token_budget=self.args.token_budget,
         )
         self._rollout_dataset = TeamDataset(self) if self.accelerator.is_main_process else None
-        group = torch.distributed.new_group(backend="gloo", timeout=timedelta(hours=2)) if world > 1 else None
+        group = (
+            torch.distributed.new_group(backend="gloo", timeout=timedelta(seconds=self.args.ddp_timeout))
+            if world > 1
+            else None
+        )
         # Scatter complete teams ourselves; Accelerate's tensor dispatcher cannot split ragged chunks.
-        return DataLoader(DistributedTeams(self, group), batch_size=None, collate_fn=identity, num_workers=0)
+        dataset = DistributedTeams(
+            self._rollout_dataset,
+            self.team_collator,
+            world=world,
+            rank=self.accelerator.process_index,
+            rounds=self.args.gradient_accumulation_steps,
+            budget=self.args.token_budget,
+            group=group,
+        )
+        return DataLoader(dataset, batch_size=None, collate_fn=identity, num_workers=0)
 
     def training_step(self, model, inputs, num_items_in_batch=None):
         loss = torch.zeros((), device=self.accelerator.device)

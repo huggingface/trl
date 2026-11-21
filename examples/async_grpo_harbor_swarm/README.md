@@ -170,7 +170,7 @@ and clean up together. Admission uses Harbor's agent-end hook, outside the agent
 execution budget and before the verifier's timeout starts.
 
 `--teams-per-update` always counts global teams; it must divide evenly across ranks.
-The loader stages a complete optimizer batch before yielding any accumulation rounds.
+The loader stages a complete optimizer batch before yielding any accumulation rounds. While waiting for rollouts, all ranks exchange queue status every five seconds instead of leaving peer ranks in one long collective. Collection errors and the final partial batch are reported to every rank. `--distributed-timeout` controls both the trainer and team-transfer process groups.
 `--admission-deadline` and `--collection-deadline` are absolute Unix timestamps. Admission
 closes 45 minutes before allocation expiry; collection stops ten minutes before expiry,
 leaving time to save. Partial final batches are discarded. Checkpoints retain full model
@@ -274,3 +274,14 @@ host/container weight-transfer boundary and enables NCCL INIT/NET diagnostics.
 This conservative setting also applies to intra-trainer collectives and can reduce
 throughput. Native training starts directly by default. Monitoring
 records explicit queued/running/failed status and the rank-zero failure summary.
+
+
+For native small-batch validation, set `SWARM_GROUP_SIZE=4`,
+`SWARM_TEAMS_PER_UPDATE=4`, `SWARM_CONCURRENT_TEAMS=4`,
+`SWARM_MAX_STEPS=2`, and `SWARM_VERIFY_CHECKPOINT=1` before submitting
+`full_run.sbatch`. This runs real 16-agent Harbor teams and reloads the saved full
+model after training. Equal-reward groups can have zero policy gradient; the run
+records `mixed_groups` and `parameters_changed` without presenting an optimizer
+call as evidence of learning. `SWARM_DATASET_REVISION` pins a task repair commit.
+The launcher defaults `SWARM_DISTRIBUTED_TIMEOUT` to 43,200 seconds for long runs;
+`SWARM_RUN_SECONDS` must match the requested Slurm allocation duration.

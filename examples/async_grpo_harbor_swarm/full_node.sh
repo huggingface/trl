@@ -89,13 +89,13 @@ run_training() {
  [[ "$finished_pid" == "$train_pid" ]] || { echo 'Required runtime service exited during training' >&2; return 1; }
  train_pid=
 }
-common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations 16 --max-staleness 4 --agent-timeout 1800 --max-turns 64 --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
+common=(--vllm-url "$url" --gateway-url "$gateway" --capture-url "http://$host:$port" --capture-port "$port" --difficulties 10 15 --agents 16 --num-generations "${SWARM_GROUP_SIZE:-16}" --max-staleness 4 --distributed-timeout "${SWARM_DISTRIBUTED_TIMEOUT:-43200}" --revision "${SWARM_DATASET_REVISION:-144b647af561e28d681552cb04bc7b4a8dbeb1ce}" --agent-timeout 1800 --max-turns 64 --model-revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --full-finetune)
 if [[ "$1" == smoke ]]; then
  run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --synthetic-smoke --require-nonzero-update --max-steps 2 --teams-per-update 16 --concurrent-teams 16 --max-groups 0 --num-tasks 2 --token-budget 16384 > "$run/train.log" 2>&1
  python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
  exit
 fi
-concurrency=16
+concurrency=${SWARM_CONCURRENT_TEAMS:-16}
 if [[ "${SWARM_VALIDATE:-0}" == 1 ]]; then
 concurrency=0
 for level in 4 8 16; do
@@ -113,4 +113,8 @@ admission=$((end - 2700))
 collection=$((end - 600))
 budget=$((end - $(date +%s) - 600))
 [[ "$budget" -gt 3600 ]] || { echo 'Insufficient allocation remains for training'; exit 1; }
-run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps 10000 --max-groups 0 --teams-per-update 64 --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1
+run_training accelerate launch --config_file trl/accelerate_configs/fsdp2.yaml --num_processes 4 --main_process_port 29551 examples/async_grpo_harbor_swarm/async_grpo_harbor_swarm.py train "${common[@]}" --output-dir "$run/train" --max-steps "${SWARM_MAX_STEPS:-10000}" --max-groups 0 --teams-per-update "${SWARM_TEAMS_PER_UPDATE:-64}" --concurrent-teams "$concurrency" --admission-deadline "$admission" --collection-deadline "$collection" --time-limit-seconds "$budget" --report-to trackio --trackio-space-id edbeeching/trl-harbor-swarm-trackio --run-name "qwen35-4b-full-16agents-$SLURM_JOB_ID" > "$run/train.log" 2>&1
+
+if [[ "${SWARM_VERIFY_CHECKPOINT:-0}" == 1 ]]; then
+ python examples/async_grpo_harbor_swarm/verify_full_checkpoint.py "$run/train"
+fi

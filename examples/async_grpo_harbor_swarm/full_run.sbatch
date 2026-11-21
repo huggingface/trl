@@ -16,7 +16,7 @@ export NCCL_NET=Socket NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
 export NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_CUMEM_HOST_ENABLE=0 NCCL_IB_DISABLE=1
 mkdir -p "$root"
 printf '%s\n' "$SLURM_JOB_ID" > "$root/job"
-printf '%s\n' "$(( $(date +%s) + 28800 ))" > "$root/deadline"
+printf '%s\n' "$(( $(date +%s) + ${SWARM_RUN_SECONDS:-28800} ))" > "$root/deadline"
 mapfile -t nodes < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 server_pid=
 cleanup() {
