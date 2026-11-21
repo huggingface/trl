@@ -1246,13 +1246,12 @@ class SDPOTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        loss = (per_token_loss * distillation_logits.loss_mask).sum(-1) / distillation_logits.loss_mask.sum(-1).clamp(
-            min=1.0
-        )
+        # Mask in fp32 so an empty row zeros the scaled gradient before it is cast back to fp16.
+        mask = distillation_logits.loss_mask
+        loss = (per_token_loss.float() * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mask = distillation_logits.loss_mask
 
         def global_masked_mean(x):
             local_sum, local_count = (x * mask).sum().float(), mask.sum().float()

@@ -143,6 +143,53 @@ class TestDistributed(TrlTestCase):
             {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
         )
 
+    @pytest.mark.parametrize("config", ["ddp", "zero3"])
+    @pytest.mark.parametrize("trainer", ["sdpo", "sdft"])
+    def test_self_distillation_empty_mask(self, config, trainer, get_launch_args):
+        """An empty rank still collects loss metrics before both ranks enter backward."""
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "tests/distributed/self_distillation_empty_mask.py",
+                *get_launch_args(config),
+                "--trainer",
+                trainer,
+                "--output_dir",
+                self.tmp_dir,
+                "--distillation_mode",
+                "sampled_token",
+            ],
+            os.environ.copy(),
+        )
+
+    @pytest.mark.parametrize("config", ["ddp", "zero3"])
+    @pytest.mark.parametrize("trainer", ["sdpo", "sdft"])
+    @pytest.mark.parametrize("pattern", ["empty0", "all_empty"])
+    def test_self_distillation_empty_mask_fp16(self, config, trainer, pattern, get_launch_args):
+        """FP16 full-logit empty targets keep zero gradients finite under loss scaling."""
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "tests/distributed/self_distillation_empty_mask.py",
+                *get_launch_args(config),
+                "--trainer",
+                trainer,
+                "--output_dir",
+                self.tmp_dir,
+                "--distillation_mode",
+                "full_logits",
+                "--precision",
+                "float16",
+                "--pattern",
+                pattern,
+            ],
+            os.environ.copy(),
+        )
+
     @pytest.mark.parametrize(
         "config",
         [
