@@ -22,7 +22,7 @@ trainer = GMPOTrainer(
 trainer.train()
 ```
 
-In GMPO, clipping is applied to the per-token *log*-importance ratios (i.e. in log space) before the geometric mean is taken, so `epsilon` and `epsilon_high` are expressed in log space: the effective ratio clipping range is `(exp(-epsilon), exp(epsilon_high))`. The paper recommends a markedly wider range than GRPO/DAPO, `(exp(-0.4), exp(0.4))`, to encourage exploration.
+In GMPO, clipping is applied to the per-token *log*-importance ratios (i.e. in log space) before the geometric mean is taken, so `epsilon` and `epsilon_high` are expressed in log space: the effective ratio clipping range is `(exp(-epsilon), exp(epsilon_high))`. The paper recommends a markedly wider range than GRPO/DAPO, `(exp(-0.4), exp(0.4))`, to encourage exploration. `use_liger_kernel` is inherited from [`GRPOConfig`] but is not supported: the inherited Liger path would run the GRPO fused loss and skip the geometric-mean objective.
 
 ## GMPOTrainer
 
