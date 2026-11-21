@@ -111,6 +111,8 @@
     title: BEMA for Reference Model
   - local: cpo_trainer
     title: CPO
+  - local: decision_trainer
+    title: DecisionTrainer
   - local: gkd_trainer
     title: GKD
   - local: gmpo
