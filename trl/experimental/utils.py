@@ -666,9 +666,10 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 example["completion"] = prepare_multimodal_messages(example["completion"])
                 # Merge the trainer kwargs into the row's own: `apply_chat_template` reads the row's
                 # `chat_template_kwargs`, so passing both would fail on a shared key like `enable_thinking`.
+                # The row's value wins, as off-policy renders use the per-row column.
                 example["chat_template_kwargs"] = {
-                    **(example.get("chat_template_kwargs") or {}),
                     **(self.chat_template_kwargs or {}),
+                    **(example.get("chat_template_kwargs") or {}),
                 }
                 if any(message.get("role") == "tool" for message in example["completion"]):
                     completion_messages[i] = (

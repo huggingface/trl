@@ -1827,16 +1827,21 @@ def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
-def test_vlm_collator_row_and_trainer_chat_template_kwargs_share_a_key(smolvlm_processor, vlm_examples):
+def test_vlm_collator_row_chat_template_kwargs_override_trainer_ones(smolvlm_processor, vlm_examples):
     examples = copy.deepcopy(vlm_examples)
-    for example in examples:
-        example["chat_template_kwargs"] = {"enable_thinking": True}
-    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
-    collator.chat_template_kwargs = {"enable_thinking": False}
+    examples[0]["chat_template_kwargs"] = {"marker": "ROWMARKER"}
+    collator = DataCollatorForVisionLanguageChatML(
+        processor=smolvlm_processor,
+        max_length=2048,
+        chat_template="{{ marker }}" + smolvlm_processor.chat_template,
+    )
+    collator.chat_template_kwargs = {"marker": "TRAINERMARKER"}
 
     batch = collator(examples)
 
-    assert batch["input_ids"].shape[0] == len(examples)
+    decoded = smolvlm_processor.tokenizer.batch_decode(batch["input_ids"])
+    assert "ROWMARKER" in decoded[0] and "TRAINERMARKER" not in decoded[0]
+    assert "TRAINERMARKER" in decoded[1]
 
 
 def test_vlm_collator_label_masking_and_prompt_truncation(smolvlm_processor, vlm_examples):

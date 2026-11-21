@@ -1970,6 +1970,8 @@ class GOLDTrainer(SFTTrainer):
         generation_examples = []
         for example in raw_examples:
             generation_example = dict(example)
+            # On-policy renders use the trainer-level `chat_template_kwargs`, not the per-row column
+            generation_example.pop("chat_template_kwargs", None)
             completion = generation_example.get("completion")
             generation_example["completion"] = (
                 [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
@@ -3144,6 +3146,8 @@ class GOLDTrainer(SFTTrainer):
             synthetic_examples = []
             for i, example in enumerate(raw_for_slice):
                 synthetic = dict(example)
+                # On-policy renders use the trainer-level `chat_template_kwargs`, not the per-row column
+                synthetic.pop("chat_template_kwargs", None)
                 if self.tools:
                     # Keep the structured multi-turn messages (assistant -> tool -> assistant ...) so the VLM
                     # collator can re-render them and mask the tool-result spans out of the labels.
