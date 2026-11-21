@@ -69,6 +69,7 @@ from trl.chat_template_utils import (
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
+    qwen3_coder_v2_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
@@ -363,6 +364,7 @@ class TestAddResponseSchema:
         "chat_template",
         [
             pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
+            pytest.param(qwen3_coder_v2_chat_template, id="qwen3-coder-v2"),
             pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
             pytest.param(qwen3_6_v2_chat_template, id="qwen3.6-v2"),
             pytest.param(qwen3_8_v2_chat_template, id="qwen3.8-v2"),

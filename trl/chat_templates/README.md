@@ -302,7 +302,11 @@ Qwen3.8 chat template as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant since
 
 ### `qwen3_coder.jinja`
 
-Original Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Instruct` and `Qwen/Qwen3-Coder-480B-A35B-Instruct`). Renders tool calls in the same XML format as `qwen3_5_think.jinja` (`<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`), without a reasoning block. Response parsing reuses `qwen3_5_template`.
+Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Instruct` since [573fa39](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/commit/573fa3901e5799703b1e60825b0ec024a4c0f1d3), and by `Qwen/Qwen3-Coder-480B-A35B-Instruct`). Renders tool calls in the same XML format as `qwen3_5_think.jinja` (`<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`), without a reasoning block. Response parsing reuses `qwen3_5_template`.
+
+### `qwen3_coder_v2.jinja`
+
+Original Qwen3-Coder chat template (as shipped by `Qwen/Qwen3-Coder-30B-A3B-Instruct` before [8110d98](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/commit/8110d98ad896c995124f3bc44b2f8dd695a4d252), and still by re-uploads of that revision such as `lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit`). Same tool-call format as `qwen3_coder.jinja`; only the rendering of the tool definitions differs. Response parsing reuses `qwen3_5_template`.
 
 ### `qwen3_coder_next.jinja`
 
