@@ -641,6 +641,32 @@ deepseekv3_template = {
     },
 }
 
+deepseekv3_v5_template = {
+    # DeepSeek-V3.1's generation prompt pre-fills `</think>`, or `<think>` with `thinking=True`, and after tool outputs
+    # the model continues without a new `<｜Assistant｜>`, so the anchor accepts either and the reasoning field opens only
+    # when a closing `</think>` is present. Tool calls carry their name and raw JSON arguments, with no type or fence.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<｜Assistant｜>(?:</think>|<think>)?|<｜tool▁output▁end｜>",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<｜tool▁calls▁begin｜>)?<｜tool▁call▁begin｜>(?P<name>[^<]+)<｜tool▁sep｜>",
+            "close_pattern": r"<｜tool▁call▁end｜>\s*(?:<｜tool▁calls▁end｜>)?",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<｜end▁of▁sentence｜>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 deepseek_r1_distill_template = {
     # DeepSeek-R1-Distill prefills the assistant turn with the `<think>` opener, so the start anchor consumes it.
     # Reasoning content is therefore not framed by a `<think>` open in the model output; the zero-width `open_pattern`
@@ -877,6 +903,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseekv3_template
+    elif chat_template in [deepseekv3_v5_chat_template, deepseekv3_v5_training_chat_template]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, deepseekv3_v5_template
     elif chat_template in [glm4moe_chat_template, glm4moe_training_chat_template]:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template in [
