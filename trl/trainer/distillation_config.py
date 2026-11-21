@@ -57,7 +57,8 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, and `"teacher_id"`.
+            Whether to only keep the column `"prompt"` in the dataset. The trainer consumes the raw prompt column and
+            generates completions on-policy, so it defaults to `False`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -225,7 +226,8 @@ class DistillationConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', and 'teacher_id'."
+            "help": "Whether to only keep the column 'prompt' in the dataset. The trainer consumes the raw prompt "
+            "column and generates completions on-policy, so it defaults to `False`."
         },
     )
     max_completion_length: int | None = field(
