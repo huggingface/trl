@@ -659,21 +659,25 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
 
         # Apply chat template for conversational data. Multi-turn tool completions (containing `tool`-role messages)
         # keep a reference to their structured messages so the tool-result spans can be masked below.
-        completion_messages: list[tuple[list[dict], list[dict]] | None] = [None] * len(examples)
+        completion_messages: list[tuple[list[dict], list[dict], dict] | None] = [None] * len(examples)
         if is_conversational(examples[0]):
             for i, example in enumerate(examples):
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
                 example["completion"] = prepare_multimodal_messages(example["completion"])
-                if any(message.get("role") == "tool" for message in example["completion"]):
-                    completion_messages[i] = (example["prompt"], example["completion"])
-            examples = [
-                apply_chat_template(
-                    example,
-                    self.processor,
-                    tools=self.tools,
-                    chat_template=self.chat_template,
+                # Merge the trainer kwargs into the row's own: `apply_chat_template` reads the row's
+                # `chat_template_kwargs`, so passing both would fail on a shared key like `enable_thinking`.
+                example["chat_template_kwargs"] = {
+                    **(example.get("chat_template_kwargs") or {}),
                     **(self.chat_template_kwargs or {}),
-                )
+                }
+                if any(message.get("role") == "tool" for message in example["completion"]):
+                    completion_messages[i] = (
+                        example["prompt"],
+                        example["completion"],
+                        example["chat_template_kwargs"],
+                    )
+            examples = [
+                apply_chat_template(example, self.processor, tools=self.tools, chat_template=self.chat_template)
                 for example in examples
             ]
 
@@ -772,8 +776,10 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         for row, captured in enumerate(completion_messages):
             if captured is None:
                 continue
-            prompt_msgs, completion_msgs = captured
-            tool_ranges = self._tool_token_ranges(prompt_msgs, completion_msgs, examples[row]["prompt"])
+            prompt_msgs, completion_msgs, template_kwargs = captured
+            tool_ranges = self._tool_token_ranges(
+                prompt_msgs, completion_msgs, examples[row]["prompt"], template_kwargs
+            )
             completion_positions = completion_mask[row].nonzero(as_tuple=True)[0]
             for start, end in tool_ranges:
                 labels[row, completion_positions[start:end]] = -100
@@ -831,7 +837,11 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         return output
 
     def _tool_token_ranges(
-        self, prompt_messages: list[dict], completion_messages: list[dict], rendered_prompt: str
+        self,
+        prompt_messages: list[dict],
+        completion_messages: list[dict],
+        rendered_prompt: str,
+        chat_template_kwargs: dict,
     ) -> list[tuple[int, int]]:
         """Token-index ranges, in completion-token order, covering tool-result (`role == "tool"`) messages.
 
@@ -847,7 +857,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 tools=self.tools,
                 tokenize=False,
                 chat_template=self.chat_template,
-                **(self.chat_template_kwargs or {}),
+                **chat_template_kwargs,
             )
             continuation = rendered[len(rendered_prompt) :]
             num_tokens = len(self.processor(text=[continuation], add_special_tokens=False)["input_ids"][0])

@@ -1827,6 +1827,18 @@ def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
+def test_vlm_collator_row_and_trainer_chat_template_kwargs_share_a_key(smolvlm_processor, vlm_examples):
+    examples = copy.deepcopy(vlm_examples)
+    for example in examples:
+        example["chat_template_kwargs"] = {"enable_thinking": True}
+    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
+    collator.chat_template_kwargs = {"enable_thinking": False}
+
+    batch = collator(examples)
+
+    assert batch["input_ids"].shape[0] == len(examples)
+
+
 def test_vlm_collator_label_masking_and_prompt_truncation(smolvlm_processor, vlm_examples):
     """Verify that the VLM collator:
     1. Masks prompt and padding tokens in labels, leaves completion tokens unmasked.
