@@ -777,6 +777,11 @@ class DistillationTrainer(_BaseTrainer):
             raise ValueError(
                 "Multiple teachers are not supported with vision-language models. Pass a single `teacher_model`."
             )
+        if self._multi_teacher and self._dist.is_fsdp:
+            raise ValueError(
+                "FSDP is not supported with a `teacher_model` mapping. Use DDP or DeepSpeed for multi-teacher "
+                "distillation."
+            )
         self.teacher_models = {}
         for teacher_id, teacher in teacher_models.items():
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
