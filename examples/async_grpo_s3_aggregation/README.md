@@ -112,7 +112,7 @@ teams. Add `--save-tokens` to keep each agent's full token context.
 
 ## Results
 
-50 updates of about 150 teams on 2 H100s took about 4.9 hours. The checkpoint is
+50 updates of about 150 teams on 2 H100s took about 4.8 hours. The checkpoint is
 [trl-lib/Qwen3-0.6B-S3-Aggregation](https://huggingface.co/trl-lib/Qwen3-0.6B-S3-Aggregation) and the training
 metrics are on [trl-lib/s3-aggregation-trackio](https://huggingface.co/spaces/trl-lib/s3-aggregation-trackio).
 
@@ -122,23 +122,20 @@ Training success (teams solved, mean over 5-update blocks):
 
 | updates | 1-5 | 6-10 | 11-15 | 16-20 | 21-25 | 26-30 | 31-35 | 36-40 | 41-45 | 46-50 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| success | 7.3% | 7.8% | 10.7% | 14.2% | 18.8% | 26.1% | 30.0% | 33.3% | 41.7% | 46.6% |
+| success | 7.5% | 7.9% | 14.1% | 15.1% | 22.2% | 30.0% | 36.7% | 42.0% | 48.1% | 57.7% |
 
-Messages per team rose from 4.0 to 6.0, and the share of agents that never sent a message fell from 28% to 13%.
-Tokens per team went from 12.9k to 13.9k out of a 36.9k team allowance. The mean importance ratio stayed at 1.00.
+Messages per team rose from 4.1 to 6.5, and the share of agents that never sent a message fell from 26% to 8%.
+Tokens per team went from 12.9k to 11.7k out of a 36.9k team allowance. The mean importance ratio stayed at 1.00.
 
 Held-out evaluation (192 problems, 64 teams in flight):
 
 | model | success | messages / team | tokens / team |
 | --- | --- | --- | --- |
-| Qwen3-0.6B | 4.7% (SE 1.5) | 4.14 | 13.1k |
-| checkpoint-50 | **55.2%** (SE 3.6) | 6.55 | 14.4k |
+| Qwen3-0.6B | 4.7% (SE 1.5) | 4.05 | 13.2k |
+| checkpoint-50 | **60.9%** (SE 3.5) | 6.86 | 11.8k |
 
 For comparison, the paper reports 1.6% for the base model and 93.2% after 200 updates. At 50 updates the curve is
 still rising.
-
-The run used this code except for the loss: it scaled each team's advantage by its group's mean team length over its
-own, which makes TRL's token mean weigh teams about equally, instead of computing Eq. 3 exactly.
 
 ## Deviations from the paper
 
