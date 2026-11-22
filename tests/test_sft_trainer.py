@@ -2268,6 +2268,43 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_torch_accelerator
+    @pytest.mark.skipif(
+        Version(torch.__version__) < Version("2.14"),
+        reason="respect_saved_tensors_hooks exists since torch 2.14",
+    )
+    def test_train_with_selective_checkpointing_and_activation_offloading(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"selective": True},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"selective": True},
+            }
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, activation_offloading=True, **checkpointing_args, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_tag_added(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 

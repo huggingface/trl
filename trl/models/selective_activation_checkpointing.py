@@ -93,6 +93,10 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
         # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
         checkpointing_kwargs["use_reentrant"] = False
         checkpointing_kwargs["context_fn"] = context_fn
+        # torch>=2.14 errors if SAC runs under saved_tensors_hooks without this. False keeps the historical
+        # bypass; True can crash in backward with transformers' built-in offload. See #8501.
+        if Version(torch.__version__) >= Version("2.14"):
+            checkpointing_kwargs["respect_saved_tensors_hooks"] = False
         return checkpointing_kwargs
 
     if renamed:
