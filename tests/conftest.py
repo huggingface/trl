@@ -90,7 +90,7 @@ def pytest_runtest_makereport(item, call):
 MODEL_REVISIONS = {
     "trl-internal-testing/small-Qwen2ForCausalLM-2.5": "b830994d3efdb531d8e2fda07d568895260700c9",
     "trl-internal-testing/small-Qwen3ForCausalLM": "fffedda96f7480b1feea394e5d32d6b0f999be18",
-    "trl-internal-testing/tiny-BartModel": "cb0a45b3f2560e9e087fdbaf539d7643f960ffca",
+    "trl-internal-testing/tiny-BartModel": "3f66ee1917d23448af442a82b22601b65ef13957",
     "trl-internal-testing/tiny-BeamForCausalLM": "81bd596f7b53bc5d843d1218a4521119aae05d51",
     "trl-internal-testing/tiny-Cohere2ForCausalLM": "5ab7c17080fbe53a8f86417804dd1db29ee3e111",
     "trl-internal-testing/tiny-CohereForCausalLM": "83a435edaadff74a1bbb4499f1b96c9c5725d43b",
