@@ -798,10 +798,28 @@ class RLOOTrainer(_BaseTrainer):
         self._pending_extra_logs = defaultdict(list)
         self._pending_metrics = defaultdict(list)
 
-        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # The ranks of a tensor-parallel group hold one model between them and receive the same batch, so they must
+        # sample the same completions, while data-parallel ranks must sample different ones. Accelerate reports the TP
+        # size through the parallelism config (None when TP is disabled).
+        self._tp_size = (
+            self.accelerator.parallelism_config.tp_size if self.accelerator.parallelism_config is not None else 1
+        )
+        # With tensor parallelism, each device holds a slice of the generation batch and the completions of one prompt
+        # must stay together on a device so their rewards are grouped correctly, which requires whole generation groups
+        # per device.
+        if self._tp_size > 1 and args.per_device_train_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"When using tensor parallelism (tp_size={self._tp_size}), per_device_train_batch_size "
+                f"({args.per_device_train_batch_size}) must be divisible by num_generations ({self.num_generations}) "
+                "so that each device holds whole generation groups."
+            )
+
+        # Offset the seed per data-parallel group rather than per process, so a tensor-parallel group shares one
+        # generator while data-parallel ranks still differ. This prevents duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
-        # it's safer to set it in all cases.
-        set_seed(args.seed, device_specific=True)
+        # it's safer to set it in all cases. With tp_size == 1 this matches accelerate's `device_specific` seeding
+        # (args.seed + process_index).
+        set_seed(args.seed + self.accelerator.process_index // self._tp_size)
 
         if self.use_vllm:
             # Initialize vLLM generation backend
@@ -940,7 +958,9 @@ class RLOOTrainer(_BaseTrainer):
             dataset = repeat_iterable_dataset(
                 dataset,
                 mini_repeat_count=self.num_generations,
-                batch_size=self.args.generation_batch_size // self.num_generations,
+                # Divide by the TP size: the ranks of a TP group share the same prompts, so only data-parallel groups
+                # consume distinct prompts.
+                batch_size=self.args.generation_batch_size // self.num_generations // self._tp_size,
                 repeat_count=self.num_iterations * self.args.steps_per_generation,
             )
         return self._get_dataloader(
@@ -983,7 +1003,9 @@ class RLOOTrainer(_BaseTrainer):
         return RepeatSampler(
             data_source=dataset,
             mini_repeat_count=self.num_generations,
-            batch_size=self.args.generation_batch_size // self.num_generations,
+            # Divide by the TP size: the ranks of a TP group share the same prompts, so only data-parallel groups
+            # consume distinct prompts.
+            batch_size=self.args.generation_batch_size // self.num_generations // self._tp_size,
             repeat_count=self.num_iterations * self.args.steps_per_generation,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from unittest.mock import patch
 
 import pytest
 import torch
 import transformers
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoConfig,
@@ -2228,6 +2229,46 @@ class TestRLOOTrainer(TrlTestCase):
         pad_token_id = trainer.reward_processing_classes[0].pad_token_id
         assert pad_token_id is not None
         assert reward_model.config.get_text_config().pad_token_id == pad_token_id
+
+    @pytest.mark.skipif("TRL_TEST_TP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_tensor_parallel_same_completions_body(self):
+        # Launched under torchrun by tests/distributed. The ranks of a tensor-parallel group hold one model between
+        # them and receive the same prompts, so they must sample the same completions (issue #8056). With
+        # tp_size == world_size there is a single TP group, so every rank must produce identical completions.
+        import torch.distributed as dist
+        from transformers.distributed import DistributedConfig
+
+        world_size = int(os.environ["WORLD_SIZE"])
+        agreements = []
+
+        def agreement_reward(completions, **kwargs):
+            gathered = [None] * world_size
+            dist.all_gather_object(gathered, completions)
+            agreements.append(all(group == gathered[0] for group in gathered))
+            return [0.0] * len(completions)
+
+        dataset = Dataset.from_dict({"prompt": ["The capital of France is", "One, two, three,"] * 8})
+        training_args = RLOOConfig(
+            output_dir=os.environ["TRL_TEST_TP_OUTPUT_DIR"],
+            model_init_kwargs={"dtype": "bfloat16", "distributed_config": DistributedConfig(tp_size=world_size)},
+            per_device_train_batch_size=4,
+            num_generations=4,
+            max_completion_length=16,
+            max_steps=3,
+            cache_implementation="static",
+            bf16=True,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=agreement_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer._tp_size == world_size
+        trainer.train()
+        assert agreements and all(agreements), "TP ranks sampled different completions"
 
 
 @require_vision
