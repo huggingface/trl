@@ -323,8 +323,12 @@ def push_dir_to_hub(
         create_pr=exists and create_pr,
         revision=revision,
     )
+    # The `MODEL_REVISIONS` entry in tests/conftest.py that loads what was just pushed
     if commit_info.pr_url:
         print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
+        print(f'[push_to_hub] Test it with: "{repo_id}": "{commit_info.pr_revision}",')
+    elif not exists:
+        print(f'[push_to_hub] Pin it with: "{repo_id}": "{commit_info.oid}",')
 
 
 def init_weights_tiny_model(model):

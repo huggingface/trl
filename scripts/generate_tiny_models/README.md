@@ -41,7 +41,7 @@ python -m scripts.generate_tiny_models.for_causal_lm.qwen3_for_causal_lm --creat
 
 Direct overwrites of `main` aren't supported — update via `--create-pr` and merge the PR on the Hub. To add a commit to that PR, pass its ref instead: `--revision refs/pr/3`.
 
-The tests pin every tiny model to a commit sha of its Hub repo in `MODEL_REVISIONS`, so updating or adding a tiny model also updates its entry there: follow the procedure in `tests/conftest.py`.
+The tests pin every tiny model to a commit sha of its Hub repo in `MODEL_REVISIONS`, so updating or adding a tiny model also updates its entry there: follow the procedure in `tests/conftest.py`. After the push, the script prints the entry to use: the Hub PR ref for an update, the commit sha for a new model.
 
 ## Version pinning
 
