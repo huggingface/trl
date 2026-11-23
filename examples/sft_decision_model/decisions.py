@@ -14,21 +14,21 @@
 
 """
 System One questions (`{"type", "instructions", "criteria"}`, the format of the `/v1/systemone` endpoint) for training
-and evaluation. Option order follows the endpoint: `true`, `false` for `noul`, the criteria keys for `choice` and the
-levels for `score`.
+and evaluation. Probabilities are keyed by option name, as `transformers.decision` names them: `true` and `false` for
+`noul`, the criteria keys for `choice` and the level indices (`"0"`, `"1"`, ...) for `score`.
 """
 
 import json
 from collections import defaultdict
 
-from datasets import Dataset, Features, Json, Sequence, Value, concatenate_datasets, load_dataset
+from datasets import Dataset, Features, Json, Value, concatenate_datasets, load_dataset
 
 
 def load_train(num_samples: int) -> Dataset:
     """
     `num_samples` questions from [tasksource/tasksource-jev-typed-decisions](https://huggingface.co/datasets/tasksource/tasksource-jev-typed-decisions),
     from its sources licensed for commercial use: half `choice`, a quarter `noul` and a quarter `score`. Each row is a
-    `state`, a `question` and a `target` probability per option.
+    `state`, a `question` and a `target` probability per option name.
     """
     dataset = load_dataset("tasksource/tasksource-jev-typed-decisions", split="train")
     # The endpoint labels options A to Z, and a choice question's options are the keys of a dict
@@ -44,15 +44,17 @@ def load_train(num_samples: int) -> Dataset:
 
     def to_question(row):
         if row["kind"] == "noul":
-            question, target = {"type": "noul"}, [row["target"][0], 1 - row["target"][0]]
+            question, target = {"type": "noul"}, {"true": row["target"][0], "false": 1 - row["target"][0]}
         elif row["kind"] == "choice":
-            question, target = {"type": "choice", "criteria": dict.fromkeys(row["options"])}, row["target"]
+            question = {"type": "choice", "criteria": dict.fromkeys(row["options"])}
+            target = dict(zip(row["options"], row["target"], strict=True))
         else:
-            question, target = {"type": "score", "criteria": row["options"]}, row["target"]
+            question = {"type": "score", "criteria": row["options"]}
+            target = {str(level): p for level, p in enumerate(row["target"])}
         return {"state": row["state"], "question": {**question, "instructions": row["question"]}, "target": target}
 
-    # The types of questions have different criteria, which Arrow can only store as JSON
-    features = Features({"state": Value("string"), "question": Json(), "target": Sequence(Value("float32"))})
+    # The types of questions have different criteria and options, which Arrow can only store as JSON
+    features = Features({"state": Value("string"), "question": Json(), "target": Json()})
     dataset = concatenate_datasets(parts)
     return dataset.map(to_question, remove_columns=dataset.column_names, features=features).shuffle(seed=0)
 

@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl[peft]>=1.16.0",  # the sequence boundaries of the padding-free collator
-#     "transformers[serving]>=5.20.0",  # the prompt of the `/v1/systemone` endpoint
+#     "transformers>=5.23.0",  # `transformers.decision`
 #     "trackio",
 # ]
 # ///
@@ -24,9 +24,10 @@
 """
 Trains Qwen/Qwen3.5-4B as a decision ("System One") model: it answers typed questions about a state with a probability
 for each option, from the next-token logits of the option labels (`Yes`/`No`, `A`, `B`, ...) at the end of the prompt.
-The prompt is the one of the `/v1/systemone` endpoint of `transformers serve`, so the merged model is served as is.
-LoRA on 40k questions of tasksource-jev-typed-decisions, with their soft targets. On one L4 (24 GB): 961 steps of 32
-questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes.
+The prompt is built by `transformers.decision`, like the `/v1/systemone` endpoint of `transformers serve` does for a
+model without a decision config, so the merged model is served as is. LoRA on 40k questions of
+tasksource-jev-typed-decisions, with their soft targets. On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step,
+10.6 GB peak; one epoch takes 108 minutes.
 
     python examples/sft_decision_model/1_sft.py
 """
@@ -35,7 +36,7 @@ import torch
 from decisions import load_train
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.cli.serving.systemone import SystemOneRequest, parse_question, render_decision_prompt
+from transformers.decision import DecisionConfig, label_token_ids
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
@@ -45,20 +46,19 @@ from trl.trainer.utils import pad
 MODEL = "Qwen/Qwen3.5-4B"
 OUTPUT_DIR = "Qwen3.5-4B-Decision"
 MAX_LENGTH = 512
+# The default config, which `transformers serve` uses for a model without a `decision.json`
+DECISION_CONFIG = DecisionConfig()
 
 
 def tokenize(example, tokenizer):
-    request = SystemOneRequest.model_validate(
-        {"model": MODEL, "state": example["state"], "questions": {"q": example["question"]}}
-    )
-    question = parse_question("q", request.questions["q"])
-    messages = [{"role": "user", "content": render_decision_prompt(request.state, question)}]
-    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, enable_thinking=False)
+    # One prompt for the question, read after the generation prompt: at its last token
+    request = {"state": example["state"], "questions": {"q": example["question"]}}
+    [(inputs, [question])] = DECISION_CONFIG.prepare_inputs(request, tokenizer)
     return {
-        "input_ids": tokenizer(prompt, add_special_tokens=False)["input_ids"],
-        # Each label is a single token, which the endpoint checks
-        "label_ids": [ids[0] for ids in tokenizer(question.labels, add_special_tokens=False)["input_ids"]],
-        "target": example["target"],
+        "input_ids": inputs["input_ids"][0].tolist(),
+        "label_ids": label_token_ids(tokenizer, tuple(question.labels)),
+        # In the order of the options of the prompt
+        "target": [example["target"][option] for option in question.options],
     }
 
 
@@ -79,8 +79,9 @@ class DecisionTrainer(SFTTrainer):
         mode = "train" if model.training else "eval"
         label_ids, target = inputs.pop("label_ids"), inputs.pop("target")
         inputs.pop("labels")
-        # Padding-free: the prompts are one sequence, and only the logits at the last token of each are computed
-        last_tokens = inputs["cu_seq_lens_q"][1:] - 1
+        # Padding-free: the prompts are one sequence, and only the logits at the last token of each are computed (the
+        # sequence boundaries are padded with empty sequences after the prompts)
+        last_tokens = inputs["cu_seq_lens_q"][1 : len(label_ids) + 1] - 1
         logits = model(**inputs, use_cache=False, logits_to_keep=last_tokens).logits[0].float()
 
         # Cross-entropy with the target probabilities over the options of each question, like the softmax the endpoint
@@ -133,4 +134,5 @@ trainer.train()
 
 # Merge the adapter, so that `transformers serve` loads the model like any other
 trainer.model.merge_and_unload().save_pretrained(OUTPUT_DIR)
-tokenizer.save_pretrained(OUTPUT_DIR)
+# The tokenizer as loaded: `prepare_inputs` added its sentinel tokens to the one above, which serving adds again
+AutoTokenizer.from_pretrained(MODEL).save_pretrained(OUTPUT_DIR)
