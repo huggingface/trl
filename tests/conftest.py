@@ -151,7 +151,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Qwen3ForSequenceClassification": "c892ea6c5849514ac3115d6e0df369279994e759",
     "trl-internal-testing/tiny-Qwen3MoeForCausalLM": "c3314bf03b67c8e547516e9c5fda87c08a88d480",
     "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate": "7437f810e325cc75beb536af291e99fa2dea5489",
-    "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration": "ba190cb38011bcda2f70f7781f2b8290627aef00",
+    "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration": "refs/pr/8",
     "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8": "637a826146b4e082d115b988478a3c7651d7a980",
     "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink": "c21e64ab01a61fe5675253768d359262f6a19ab6",
     "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think": "6860d7ec861ade2fe4e44dc69bf57064fdc82b12",
