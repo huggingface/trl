@@ -1556,8 +1556,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             marks=[
                 require_vision,
                 pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.15.0"),
-                    reason="Inkling was introduced in transformers-5.15.0",
+                    Version(transformers.__version__) < Version("5.14.0"),
+                    reason="Inkling was introduced in transformers-5.14.0",
                 ),
             ],
         ),
