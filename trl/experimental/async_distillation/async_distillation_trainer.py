@@ -41,7 +41,6 @@ from torch.distributed._tensor import DTensor
 from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -56,6 +55,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     get_config_model_id,
     get_peak_flops_per_device,
     is_trackio_available,
@@ -1091,8 +1091,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
-              [`~transformers.AutoModelForCausalLM.from_pretrained`].
+              [`~transformers.PreTrainedModel.save_pretrained`]. The model is loaded with the architecture declared in
+              its config: [`~transformers.AutoModelForImageTextToText`] for a vision-language checkpoint,
+              [`~transformers.AutoModelForCausalLM`] otherwise.
             - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
               FlashAttention backend for padding-free training.
 
@@ -1174,7 +1175,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             model_init_kwargs.setdefault("dtype", args.dtype)
             attn_implementation = model_init_kwargs.pop("attn_implementation", attn_implementation)
             model_revision = model_init_kwargs.get("revision")
-            model = AutoModelForCausalLM.from_pretrained(model, device_map=None, **model_init_kwargs)
+            model = create_model_from_path(model, device_map=None, **model_init_kwargs)
         else:
             model_revision = None
             if args.model_init_kwargs is not None:
@@ -1594,7 +1595,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # fp32 hidden states and errors. Under PEFT, `base_model` is the `LoraModel` tuner, whose forward runs the full
         # causal LM, so the backbone is reached through `get_base_model()`; its layers carry the adapters in place.
         causal_lm = unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model
-        backbone = causal_lm.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = causal_lm.model
+        else:
+            backbone = causal_lm.base_model
         forward_start = time.time()
         # MoE models: request router logits so the load-balancing loss can be computed below
         router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
