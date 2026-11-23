@@ -59,6 +59,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test

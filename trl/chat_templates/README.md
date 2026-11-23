@@ -253,6 +253,10 @@ Original Phi-4-mini-reasoning chat template (`microsoft/Phi-4-mini-reasoning`). 
 
 Original Qwen2.5 chat template.
 
+### `qwen2_5_v2.jinja`
+
+Qwen2.5 chat template shipped on release day by `Qwen/Qwen2.5-7B-Instruct`, `Qwen/Qwen2.5-Coder-7B-Instruct` and the other Qwen2.5 instruct checkpoints, before [acbd965](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/commit/acbd96531cda22292a3ceaa67e984955d3965282), and still by re-uploads such as `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit`. Same as `qwen2_5.jinja`, except that the tool-calling instructions show the call format as `{{"name": ..., "arguments": ...}}` instead of `{"name": ..., "arguments": ...}`. Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
+
 ### `qwen2_5_base.jinja`
 
 Qwen2.5 chat template shipped by the base checkpoints (`Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-3B`, `Qwen/Qwen2.5-7B`, `Qwen/Qwen2.5-14B`, ...). Same as `qwen2_5.jinja`, except for the default system prompt (`You are a helpful assistant.`). Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
@@ -529,6 +533,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
+
+### `qwen2_5_v2_training.jinja`
+
+Patched release-day Qwen2.5 template. Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_v2.jinja`.
 
 ### `qwen2_5_base_training.jinja`
 

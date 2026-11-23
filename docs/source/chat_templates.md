@@ -247,6 +247,10 @@ Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
 
+### `qwen2_5_v2_training.jinja`
+
+Patched release-day Qwen2.5 template (shipped by the Qwen2.5 instruct checkpoints, such as `Qwen2.5-Coder-7B-Instruct`, on their first day, and still by some of their re-uploads). Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_v2.jinja`.
+
 ### `qwen2_5_base_training.jinja`
 
 Patched Qwen2.5 base template (used by the base checkpoints, such as `Qwen2.5-0.5B`, whose template only differs from the instruct one in its default system prompt). Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_base.jinja`.
