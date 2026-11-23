@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -529,6 +530,52 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_max_tool_calling_iterations_skips_last_turn_tool_calls(self):
+        # The model calls the tool on every turn. With max_tool_calling_iterations=1, the first turn's call runs, and
+        # the call in the turn generated after its result is kept in the completion but never executed.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            max_tool_calling_iterations=1,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            # fmt: off
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+            tool_call_ids = [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645]
+            # fmt: on
+            completion_ids = torch.tensor([tool_call_ids] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[0]["tools/call_frequency"] == pytest.approx(1.0)  # one executed call each
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        for completion in completions["completion"]:  # completions are logged as decoded text
+            assert completion.count("<tool_response>") == 1  # only the first turn's tool call was executed
+            assert completion.endswith("</tool_call>")  # the last turn's tool call was not executed
 
     def test_train_stops_on_every_eos_token_id(self):
         # Phi-3.5 ends a turn with `<|end|>`, which only its generation config declares as eos, not its tokenizer
