@@ -1620,9 +1620,11 @@ class RLOOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
+        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
