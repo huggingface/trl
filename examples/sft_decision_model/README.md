@@ -1,12 +1,8 @@
 # Decision model with an SFTTrainer subclass
 
-A decision model, sometimes called a "System One" model, answers typed questions about a state with a probability for every option, from one forward pass and without generating text:
+This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) as a [decision model](https://huggingface.co/blog/decision), served as is by `transformers serve`: it goes from 56.0% to 67.3% accuracy on typed-decisions (Brier 0.331 → 0.137).
 
-- `noul`: a yes/no question, answered with the probability of `true`.
-- `choice`: one option among named options, like routing a ticket to a team.
-- `score`: a level on an ordinal scale, like rating urgency.
-
-`transformers serve` answers these questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) to answer them well, on the exact prompt of the endpoint, so that the trained model is served as is.
+Any chat model answers decision questions on the `/v1/systemone` endpoint of `transformers serve`: the prompt lists one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the softmax of the next-token logits of the labels at the end of the prompt gives the probabilities of the options. The training prompts are built by `transformers.decision` (experimental in transformers), the same code the endpoint runs.
 
 Training needs the `flash-linear-attention` and `causal-conv1d` kernels of Qwen3.5's linear attention layers: without `causal-conv1d`, the padding-free batches raise an error, since the reference implementation can't keep the packed prompts apart (and serving without the kernels is several times slower):
 
@@ -34,7 +30,7 @@ On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoc
 The trained model is on the Hub as [rycerzes/Qwen3.5-4B-Decision](https://huggingface.co/rycerzes/Qwen3.5-4B-Decision) (with your own run, use the output directory). Serve it with `transformers serve`, which needs `requests` on top of the `serving` extra:
 
 ```sh
-pip install "transformers[serving]>=5.20.0" requests
+pip install "transformers[serving]>=5.23.0" requests
 transformers serve
 ```
 
