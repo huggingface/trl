@@ -257,4 +257,13 @@ filterwarnings = [
     # Upstream fix (merged, unreleased as of peft 0.21.3): https://github.com/huggingface/peft/pull/4114
     # Remove once: no supported peft version emits it
     "ignore:`is_gradient_checkpointing` is deprecated:FutureWarning",
+
+    # The cutlass DSL deprecates `cutlass.utils.LayoutEnum`, which the CuTe DSL kernels of flashinfer and quack still
+    # use (upstream, not actionable in TRL)
+    # Triggered in the vLLM (latest) job when vLLM imports these kernels
+    # Tracking issue: https://github.com/huggingface/trl/issues/8541
+    # Upstream fix (quack, merged, unreleased as of quack-kernels 0.6.5): https://github.com/Dao-AILab/quack/commit/167f408675b5d3b948483d7949ac0de62cea1fcf
+    # Upstream PR (flashinfer, draft): https://github.com/flashinfer-ai/flashinfer/pull/3938
+    # Remove once: no supported vLLM version pins a flashinfer or quack that emits it
+    "ignore:cutlass.utils.LayoutEnum is deprecated:DeprecationWarning",
 ]
