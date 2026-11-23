@@ -800,6 +800,9 @@ trainer = AsyncGRPOTrainer(
 
 You can also provide tools through `environment_factory`. In this mode, [`AsyncGRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
 
+> [!NOTE]
+> The trainer keeps one environment instance per running rollout, reused between rollouts, so up to `max_concurrent_rollouts` instances exist at once. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
+
 When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 
 ```python
