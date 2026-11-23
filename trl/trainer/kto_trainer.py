@@ -76,9 +76,13 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -709,25 +713,16 @@ class KTOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
-            if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
-            ):
-                raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
-                )
             # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -747,7 +742,10 @@ class KTOTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
