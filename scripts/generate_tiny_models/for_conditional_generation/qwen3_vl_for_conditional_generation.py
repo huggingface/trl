@@ -54,7 +54,7 @@ vision_config = {
     # Pick an index inside [0, depth).
     "deepstack_visual_indexes": [1],
     "hidden_size": 16,
-    "num_heads": 4,
+    "num_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "depth": 2,
     "out_hidden_size": 16,
 }
