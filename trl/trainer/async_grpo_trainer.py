@@ -47,6 +47,7 @@ from typing import Any, Protocol, TypeAlias
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -320,14 +321,16 @@ def tree_attention(
     key,
     value,
     attention_mask,
-    tree_kv_index,
-    tree_cu_seqlens_q,
-    tree_cu_seqlens_k,
-    tree_max_seqlen_q,
-    tree_max_seqlen_k,
+    tree_kv_index=None,
+    tree_cu_seqlens_q=None,
+    tree_cu_seqlens_k=None,
+    tree_max_seqlen_q=None,
+    tree_max_seqlen_k=None,
     scaling=None,
     sliding_window=None,
     softcap=None,
+    rel_logits=None,
+    sinks=None,
     **kwargs,
 ):
     """
@@ -344,7 +347,19 @@ def tree_attention(
         a1   ■   ■   ■   ■   ·
         a2   ■   ■   ■   ■   ■
     ```
+
+    Inkling 2's attention layers add a relative position bias and per-token sinks, and go through
+    [`tree_relative_attention`]. Its attention residuals mix each token's own layer outputs, not tokens: they get no
+    tree, no mask, and a few keys per query, so they run as plain matmuls.
     """
+    if tree_kv_index is None:
+        weights = torch.softmax(query @ key.transpose(-1, -2) * scaling, dim=-1)
+        return (weights @ value).transpose(1, 2), None
+    if rel_logits is not None:
+        return tree_relative_attention(
+            module, query, key, value, rel_logits, sinks, scaling, sliding_window, tree_kv_index, tree_cu_seqlens_q,
+            tree_cu_seqlens_k, tree_max_seqlen_q, tree_max_seqlen_k,
+        )  # fmt: skip
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
     out = _flash_attn().flash_attn_varlen_func(
@@ -364,6 +379,153 @@ def tree_attention(
     return out.unsqueeze(0), None
 
 
+def tree_relative_attention(
+    module,
+    query,
+    key,
+    value,
+    rel_logits,
+    sinks,
+    scaling,
+    sliding_window,
+    tree_kv_index,
+    tree_cu_seqlens_q,
+    tree_cu_seqlens_k,
+    tree_max_seqlen_q,
+    tree_max_seqlen_k,
+    tile=256,
+):
+    """
+    Inkling 2's attention over a packed [`TreeRow`]: the scores get a relative position bias over the last `rel_extent`
+    positions of each query's path, and the softmax a per-token sink logit with a zero value.
+
+    FlashAttention can't add the bias, so the keys less than `rel_extent` positions back run here, in tiles: `tile`
+    queries of a segment against the `tile + rel_extent - 1` path positions that end at its last query. Within a tile,
+    query `i` and key `j` are `i + rel_extent - 1 - j` positions apart. Sliding layers see nothing further (their
+    window is `rel_extent`). Full layers also attend the rest of the path, which has no bias: FlashAttention over each
+    path cut `rel_extent` keys short (see [`_far_attention`]). One softmax over the tile's scores, the sink and the far
+    part's log-sum-exp joins the parts.
+    """
+    rel_extent = rel_logits.shape[-1]
+    if sliding_window is not None and sliding_window != rel_extent:
+        raise ValueError(
+            f"Tree attention needs a sliding window ({sliding_window}) equal to rel_extent ({rel_extent})"
+        )
+    dtype = query.dtype
+    query, key, value = (x[0].transpose(0, 1) for x in (query, key, value))
+    n_tokens, n_heads, head_dim = query.shape
+    n_kv_heads, width = key.shape[1], tile + rel_extent - 1
+    device = query.device
+
+    cu_q, cu_k = tree_cu_seqlens_q.long(), tree_cu_seqlens_k.long()
+    len_q, len_k = cu_q.diff(), cu_k.diff()
+    tiles_per_segment = (len_q + tile - 1) // tile
+    segment = torch.arange(len(len_q), device=device).repeat_interleave(tiles_per_segment)
+    n_tiles = len(segment)
+    tile_in_segment = torch.arange(n_tiles, device=device) - (tiles_per_segment.cumsum(0) - tiles_per_segment)[segment]
+    offsets = torch.arange(tile, device=device)
+    q_in_segment = tile_in_segment[:, None] * tile + offsets
+    q_valid = q_in_segment < len_q[segment, None]
+    q_index = torch.where(q_valid, cu_q[segment, None] + q_in_segment, 0)
+    q_in_path = (len_k - len_q)[segment, None] + q_in_segment
+    k_in_path = q_in_path[:, :1] - rel_extent + 1 + torch.arange(width, device=device)
+    k_valid = (k_in_path >= 0) & (k_in_path < len_k[segment, None])
+    k_index = tree_kv_index[torch.where(k_valid, cu_k[segment, None] + k_in_path, 0)]
+
+    distance = offsets[:, None] + rel_extent - 1 - torch.arange(width, device=device)
+    allowed = (distance >= 0) & (distance < rel_extent) & k_valid[:, None, :] & q_valid[:, :, None]
+
+    def rows(x, index):
+        return x.index_select(0, index.flatten()).view(*index.shape, *x.shape[1:])
+
+    bias = rows(rel_logits[0].transpose(0, 1), q_index)
+    bias = bias.gather(-1, distance.clamp(0, rel_extent - 1)[None, :, None].expand(n_tiles, -1, n_heads, -1))
+
+    def per_head(x):
+        return x.view(n_tiles, tile, n_kv_heads, -1, *x.shape[3:]).permute(0, 2, 3, 1, *range(4, x.dim() + 1))
+
+    k = rows(key, k_index).permute(0, 2, 1, 3).unsqueeze(2)
+    v = rows(value, k_index).permute(0, 2, 1, 3).unsqueeze(2)
+    scores = per_head(rows(query, q_index)) @ k.transpose(-1, -2) * scaling + per_head(bias)
+    scores = scores.masked_fill(~allowed[:, None, None], float("-inf"))
+    logits = [scores, per_head(rows(sinks[0, :, :, 0].T, q_index))[..., None]]
+    has_far = sliding_window is None and tree_max_seqlen_k > rel_extent
+    if has_far:
+        out_far, lse_far = _far_attention(
+            query, key, value, scaling, rel_extent, tree_kv_index, cu_q, cu_k, tree_max_seqlen_q, tree_max_seqlen_k
+        )
+        sees_far = (q_in_path >= rel_extent) & q_valid
+        lse_far = torch.where(sees_far[..., None], rows(lse_far, q_index), float("-inf"))
+        out_far = torch.where(sees_far[..., None, None], rows(out_far, q_index), 0.0)
+        logits.append(per_head(lse_far)[..., None])
+    probs = torch.cat(logits, dim=-1).float().softmax(dim=-1)
+    out = probs[..., :width].to(dtype) @ v
+    if has_far:
+        acc_dtype = torch.promote_types(dtype, torch.float32)
+        out = (out.to(acc_dtype) + probs[..., -1:].to(acc_dtype) * per_head(out_far).to(acc_dtype)).to(dtype)
+    out = out.permute(0, 3, 1, 2, 4).reshape(n_tiles * tile, n_heads, head_dim)
+    target = torch.where(q_valid, q_index, n_tokens).flatten()
+    result = query.new_zeros(n_tokens + 1, n_heads, head_dim).index_copy(0, target, out)
+    return result[None, :n_tokens], None
+
+
+def _flash_attn_varlen_lse(query, key, value, **kwargs):
+    """FlashAttention-3 or -4 varlen call that also returns the `(heads, tokens)` log-sum-exp."""
+    if torch.cuda.get_device_capability()[0] >= 10:
+        return _flash_attn().flash_attn_varlen_func(query, key, value, return_lse=True, **kwargs)
+    return _flash_attn().flash_attn_varlen_func(query, key, value, return_attn_probs=True, **kwargs)
+
+
+def _far_attention(query, key, value, scaling, rel_extent, kv_index, cu_q, cu_k, max_seqlen_q, max_seqlen_k):
+    """
+    Attention of each query to the keys at least `rel_extent` positions back on its path, with the `(tokens, heads)`
+    log-sum-exp. Each path is cut `rel_extent` keys short, so bottom-right causal alignment shifts every query's last
+    visible key back by `rel_extent`. A query with no such key gets an infinite log-sum-exp, which the caller masks.
+    """
+    len_k = cu_k.diff()
+    far_len = (len_k - rel_extent).clamp(min=0)
+    segment = torch.arange(len(len_k), device=kv_index.device).repeat_interleave(len_k, output_size=len(kv_index))
+    in_path = torch.arange(len(kv_index), device=kv_index.device) - cu_k[segment]
+    far_index = kv_index[in_path < far_len[segment]]
+    flash_kwargs = {
+        "cu_seqlens_q": cu_q.int(),
+        "cu_seqlens_k": F.pad(far_len.cumsum(0), (1, 0)).int(),
+        "max_seqlen_q": max_seqlen_q,
+        "max_seqlen_k": max_seqlen_k - rel_extent,
+        "softmax_scale": scaling,
+        "causal": True,
+    }
+    far_key = key.index_select(0, far_index)
+    out, lse = _flash_attn_varlen_lse(query, far_key, value.index_select(0, far_index), **flash_kwargs)
+    lse = _FlashLogSumExpGrad.apply(lse.detach(), query, far_key, flash_kwargs)
+    return out, lse.T
+
+
+class _FlashLogSumExpGrad(torch.autograd.Function):
+    """
+    Gradient of a FlashAttention call's log-sum-exp, which FlashAttention-3's backward drops. With `g` the gradient of
+    the log-sum-exp and `p` the attention probabilities, `dq_i = scale g_i sum_j p_ij k_j` is `scale g_i` times the
+    output of the same attention with the keys as values, and `dk_j = scale sum_i p_ij g_i q_i` is that call's value
+    gradient for the output gradient `scale g q`.
+    """
+
+    @staticmethod
+    def forward(ctx, lse, query, key, flash_kwargs):
+        ctx.save_for_backward(query, key)
+        ctx.flash_kwargs = flash_kwargs
+        return lse.clone()
+
+    @staticmethod
+    def backward(ctx, dlse):
+        query, key = ctx.saved_tensors
+        g = dlse.T.unsqueeze(-1) * ctx.flash_kwargs["softmax_scale"]
+        with torch.enable_grad():
+            keys_as_values = key.detach().requires_grad_()
+            out = _flash_attn_varlen_lse(query.detach(), key.detach(), keys_as_values, **ctx.flash_kwargs)[0]
+            (dkey,) = torch.autograd.grad(out, keys_as_values, (g * query.float()).to(out.dtype))
+        return None, (g * out.detach().float()).to(query.dtype), dkey, None
+
+
 def register_tree_attention() -> None:
     AttentionInterface.register(TREE_ATTENTION, tree_attention)
     AttentionMaskInterface.register(TREE_ATTENTION, lambda **kwargs: None)
@@ -380,23 +542,29 @@ def patch_tree_recurrent(model, layer_type: str) -> bool:
     forward's keyword arguments down to them. `"linear_attention"` layers are gated DeltaNet (Qwen3.5, Qwen3-Next,
     OLMo-Hybrid, ...), through `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, or Mamba2 (Nemotron-H,
     Granite-4.0-H, Bamba, ...), through `causal_conv1d_fn`, `mamba2_chunk_scan` and the fused
-    `mamba2_split_conv1d_scan_combined`. LFM2's `"conv"` layers run through `causal_conv1d_fn` alone. The functions of
-    the model's family are wrapped: given the tree of [`~packing.TreeRow.pack`] they run their tree version, otherwise
-    they run unchanged.
+    `mamba2_split_conv1d_scan_combined`. LFM2's `"conv"` layers run through `causal_conv1d_fn` alone. Inkling 2's
+    `"hybrid"` attention layers carry short convolutions, through `causal_conv1d_fn` and `dynamic_causal_conv1d_fn`.
+    The functions of the model's family are wrapped: given the tree of [`~packing.TreeRow.pack`] they run their tree
+    version, otherwise they run unchanged.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Model to patch.
         layer_type (`str`):
-            The model's only non-attention layer type, `"linear_attention"` or `"conv"`.
+            The model's only non-attention layer type, `"linear_attention"`, `"conv"` or `"hybrid"`.
 
     Returns:
         `bool`: whether the model's modeling module has all the functions of a family of its layer type.
     """
-    from ..kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
+    from ..kernels.tree_gated_delta_rule import (
+        tree_causal_conv1d,
+        tree_chunk_gated_delta_rule,
+        tree_dynamic_causal_conv1d,
+    )
     from ..kernels.tree_mamba2 import tree_mamba2_chunk_scan, tree_mamba2_split_conv1d_scan_combined
 
     short_conv = {"causal_conv1d_fn": tree_causal_conv1d}
+    attention_conv = {"causal_conv1d_fn": tree_causal_conv1d, "dynamic_causal_conv1d_fn": tree_dynamic_causal_conv1d}
     gated_deltanet = {
         "causal_conv1d_fn": tree_causal_conv1d,
         "torch_chunk_gated_delta_rule": tree_chunk_gated_delta_rule,
@@ -414,6 +582,8 @@ def patch_tree_recurrent(model, layer_type: str) -> bool:
         tree_ops = gated_deltanet
     elif layer_type == "linear_attention" and all(name in names for name in mamba2):
         tree_ops = mamba2
+    elif layer_type == "hybrid" and all(name in names for name in attention_conv):
+        tree_ops = attention_conv
     else:
         return False
     if modeling in _PATCHED:
@@ -3057,12 +3227,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "moe",
             "mlp",
         }
+        if layer_types == {"hybrid", "hybrid_sliding"}:
+            layer_types = {"hybrid"}
         # Check tree attention compat
-        if layer_types not in (set(), {"linear_attention"}, {"conv"}):
+        if layer_types not in (set(), {"linear_attention"}, {"conv"}, {"hybrid"}):
             raise ValueError(
                 f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
-                "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
-                "path; any other recurrent or convolutional layer would scan across samples."
+                "transformers' gated DeltaNet and Mamba2 layers and the short convolutions of LFM2 and Inkling 2 along "
+                "each sample's own path; any other recurrent or convolutional layer would scan across samples."
             )
         if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
             raise ValueError(
@@ -3075,6 +3247,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"Tree packing of {type(model).__name__}'s short convolution layers requires transformers>=5.22.0: "
                 "before it, these layers do not pass the forward's keyword arguments down to the module-level "
                 "function tree packing patches, so they would scan across samples."
+            )
+        if layer_types == {"hybrid"} and Version(transformers.__version__) < Version("5.25.0"):
+            raise ValueError(
+                f"Tree packing of {type(model).__name__} requires transformers>=5.25.0: before it, its attention "
+                "builds a dense relative position bias and its short convolutions do not pass the forward's keyword "
+                "arguments down to the module-level functions tree packing patches."
             )
         if layer_types and not patch_tree_recurrent(model, *layer_types):
             raise ValueError(

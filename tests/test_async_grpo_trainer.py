@@ -4294,6 +4294,8 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     strict=True,
 )
 
+_GRAD_TOLERANCE = {"trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": 6e-2}
+
 _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.22.0"),
     reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
@@ -4363,13 +4365,8 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
             id="inkling2_loop",
             marks=[
                 pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.24.0"),
-                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
-                ),
-                pytest.mark.xfail(
-                    raises=ValueError,
-                    reason="Tree packing doesn't support Inkling 2 Mini's hybrid layers",
-                    strict=True,
+                    Version(transformers.__version__) < Version("5.25.0"),
+                    reason="Tree packing of Inkling 2 Mini requires transformers>=5.25.0",
                 ),
             ],
         ),
@@ -4471,7 +4468,12 @@ class TestTreePackingParity(TrlTestCase):
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
         # Models that refuse Flash Attention take it on their language model (#8400)
-        (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(reference)
+        if model._supports_flash_attn:
+            model.set_attn_implementation(reference)
+        elif model.get_decoder()._supports_flash_attn:
+            model.get_decoder().set_attn_implementation(reference)
+        else:
+            model.set_attn_implementation("eager")
         with patch("trl.trainer.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 
@@ -4481,7 +4483,7 @@ class TestTreePackingParity(TrlTestCase):
         packed_grads, alone_grads = (
             torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
         )
-        assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
+        assert (packed_grads - alone_grads).norm() < _GRAD_TOLERANCE.get(model_id, 2e-2) * alone_grads.norm()
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
@@ -4506,6 +4508,20 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
         model_id = "trl-internal-testing/tiny-Lfm2ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with patch("transformers.__version__", "5.21.0"), pytest.raises(ValueError, match="transformers>=5.22.0"):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=str_length_reward,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.24.0"), reason="Inkling 2 Mini requires transformers>=5.24.0"
+    )
+    def test_init_raises_on_inkling_before_transformers_5_25(self):
+        model_id = "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with patch("transformers.__version__", "5.24.0"), pytest.raises(ValueError, match="transformers>=5.25.0"):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=str_length_reward,

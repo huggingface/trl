@@ -98,9 +98,30 @@ def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, 
     Tree version of transformers' `causal_conv1d_fn` (`conv`, unused): depthwise causal convolution over a packed tree
     `(1, channels, tokens)`. The window of a token runs back along its own root path, into its parent segments.
     """
+    sources = tree_conv_sources(hidden_states.shape[-1], weight.shape[-1], tree)
+    return TreeConv1d.apply(
+        hidden_states, weight, bias, sources, tree["tree_cu_seqlens_q"], activation in ("silu", "swish")
+    )
+
+
+def tree_dynamic_causal_conv1d(conv, context, weights, **tree):
+    """
+    Tree version of Inkling 2's `dynamic_causal_conv1d_fn` (`conv`, unused): causal convolution with per-token taps,
+    `weights` of shape `(1, tokens, heads, 1, width)`, over a packed tree `context` of shape `(1, channels, width - 1 +
+    tokens)` whose first `width - 1` columns are padding.
+    """
+    n_tokens, n_heads, width = weights.shape[1], weights.shape[2], weights.shape[-1]
+    sources = tree_conv_sources(n_tokens, width, tree).long()
+    hidden_states = context[0, :, width - 1 :].T
+    windows = torch.where(sources[..., None] >= 0, hidden_states[sources.clamp(min=0)], 0.0)
+    windows = windows.transpose(1, 2).reshape(1, n_tokens, n_heads, -1, width)
+    return (windows * weights).sum(-1).reshape(1, n_tokens, -1)
+
+
+def tree_conv_sources(n_tokens, width, tree):
+    """`(tokens, width)` packed position of the token `lag` steps back along each token's root path, `-1` past it."""
     cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
-    n_tokens, width = hidden_states.shape[-1], weight.shape[-1]
-    tokens = torch.arange(n_tokens, device=hidden_states.device)
+    tokens = torch.arange(n_tokens, device=cu_seqlens.device)
     segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
         cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
     )
@@ -108,8 +129,7 @@ def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, 
     sources = [tokens]
     for _ in range(width - 1):
         sources.append(torch.where(sources[-1] >= 0, previous[sources[-1].clamp(min=0)], -1))
-    sources = torch.stack(sources, dim=1).int()
-    return TreeConv1d.apply(hidden_states, weight, bias, sources, cu_seqlens, activation in ("silu", "swish"))
+    return torch.stack(sources, dim=1).int()
 
 
 class TreeConv1d(torch.autograd.Function):
