@@ -64,6 +64,9 @@ VLLM_SERVE_TRL_ARGS = [
 # From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
 if is_vllm_available(min_version="0.30.0"):
     VLLM_SERVE_TRL_ARGS.append("--enable-scale-out")
+# From vLLM 0.34.0, the KV cache is sized after warmup by default, which leaves too little of half a 24 GB GPU for it
+if is_vllm_available(min_version="0.34.0"):
+    VLLM_SERVE_TRL_ARGS.append("--disable-extensible-kv-cache")
 
 
 @require_requests
