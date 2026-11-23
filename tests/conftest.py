@@ -98,7 +98,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528": "569162254a4c32144b6ad2adfc0e81cc943cbec9",
     "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion": "95af0b2bf27db2637cd62d086e27db3cc85c94ae",
     "trl-internal-testing/tiny-FalconMambaForCausalLM": "32e6aa438302dfac0af01c357d268d631c3467ab",
-    "trl-internal-testing/tiny-GPT2LMHeadModel": "22752b95d991f2ddbbdc85a1adf305a6eb277df8",
+    "trl-internal-testing/tiny-GPT2LMHeadModel": "ce0e1654a5f88d887cae3899ed6a73a2e452a8ce",
     "trl-internal-testing/tiny-GPTNeoXForCausalLM": "8927455dded3e103b3ba19312a9b4e09ca1d5a7b",
     "trl-internal-testing/tiny-GPTNeoXForSequenceClassification": "cd9804dc4f17b4407935223ae85bac4e77acc4b7",
     "trl-internal-testing/tiny-Gemma2ForCausalLM": "5b25f835b5ed059c0c282e79f7227f4a929ab235",
