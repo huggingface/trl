@@ -1517,7 +1517,6 @@ class TestDistillationTrainer(TrlTestCase):
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=4,  # 2 examples per teacher, so a batch mixes both teachers
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_steps=2,
             logging_steps=1,
             shuffle_dataset=False,  # keep the [a, b, a, b] batch layout deterministic
             remove_unused_columns=True,  # `teacher_id` must survive column removal
@@ -1585,7 +1584,6 @@ class TestDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 gradient_accumulation_steps=2,  # normalize the loss across micro-batches routed differently
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
-                max_steps=2,
                 optim="sgd",  # the update stays proportional to the gradient, so rounding differences stay small
                 report_to="none",
             )
@@ -1678,10 +1676,9 @@ class TestDistillationTrainer(TrlTestCase):
                 learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
                 per_device_train_batch_size=4,
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
-                max_steps=2,
                 shuffle_dataset=False,  # keep the per-rank teacher IDs deterministic
                 optim="sgd",  # the update stays proportional to the gradient, so rounding differences stay small
-                bf16=False,
+                bf16=False,  # DeepSpeed keeps bf16 weights, which round differently once the loss is split per teacher
                 save_strategy="no",
                 report_to="none",
                 **json.loads(os.environ["TRL_TEST_DISTILLATION_CONFIG"]),
@@ -1700,7 +1697,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         one_id, two_ids = trainers
         assert one_id.accelerator.num_processes == 2
-        assert one_id.state.global_step == two_ids.state.global_step == 2
+        assert one_id.state.global_step == two_ids.state.global_step
         one_id_params = one_id.accelerator.get_state_dict(one_id.model_wrapped)
         two_ids_params = two_ids.accelerator.get_state_dict(two_ids.model_wrapped)
         # ZeRO-3 consolidates the weights on rank zero.
