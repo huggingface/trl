@@ -124,55 +124,66 @@ class TreeRow:
     it. The trie therefore forks one token before the samples diverge, and every node has a single next-token label: a
     branch costs one extra token per extra branch, and the loss can go through plain per-position labels. A sample's
     last token is keyed on `None`, which no other sample extends, so every sample ends on a leaf.
+
+    The nodes a sample adds form one chain, numbered in a run, that branches off the last node it shares. So the trie
+    stores, for each node, only the chains that branch off it, and a walk down the trie compares whole runs of tokens
+    against the sample that added them: placing a sample costs a few array comparisons, not a dict lookup per token.
     """
 
     def __init__(self):
         self.samples: list[dict[str, Any]] = []
-        self.sample_nodes: list[list[int]] = []  # sample -> trie node of each of its tokens
+        self.sample_nodes: list[np.ndarray] = []  # sample -> trie node of each of its tokens
+        self.shared: list[int] = []  # sample -> how many of its leading tokens were in the trie when it was added
         self.tokens: list[int] = []  # node -> its token
-        self.children: list[dict[tuple[int, int | None], int]] = []  # node -> {(token, next token): child node}
-        self.roots: dict[tuple[int, int | None], int] = {}  # {(token, next token): root node}
+        self.roots: dict[tuple[int, int | None], int] = {}  # {(token, next token): sample whose chain starts there}
+        self.branches: dict[int, dict[tuple[int, int | None], int]] = {}  # node -> the same, for chains branching off
         self.groups: set[Any] = set()
         self.trained = 0
         self.load = 0
 
+    @staticmethod
+    def _key(input_ids: np.ndarray, depth: int) -> tuple[int, int | None]:
+        return int(input_ids[depth]), int(input_ids[depth + 1]) if depth + 1 < len(input_ids) else None
+
+    def _walk(self, input_ids: np.ndarray) -> tuple[int, int]:
+        """How many leading tokens of `input_ids` are in the trie, and the sample whose chain holds the last of them."""
+        shared, sample, children = 0, -1, self.roots
+        while (child := children.get(self._key(input_ids, shared))) is not None:
+            sample, other = child, self.samples[child]["input_ids"]
+            end = min(len(input_ids), len(other))
+            mismatch = np.flatnonzero(input_ids[shared:end] != other[shared:end])
+            if len(mismatch) == 0 and len(input_ids) == len(other):
+                return len(input_ids), sample  # a copy of `sample`
+            # Nodes are keyed on the next token too, so the walk stops one token before the first one that differs
+            shared = (shared + int(mismatch[0]) if len(mismatch) else end) - 1
+            children = self.branches.get(int(self.sample_nodes[sample][shared - 1]), {})
+        return shared, sample
+
     def fits(self, sample: dict[str, Any], budget: int) -> bool:
         """Whether the row stays within `budget` unique tokens and `budget` trained tokens with `sample` added."""
-        input_ids = sample["input_ids"].tolist()
-        children, shared = self.roots, 0
-        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
-            if key not in children:
-                break
-            children = self.children[children[key]]
-            shared += 1
-        novel = len(input_ids) - shared
+        novel = len(sample["input_ids"]) - self._walk(sample["input_ids"])[0]
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
     def cost(self, sample: dict[str, Any]) -> int:
         """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
-        input_ids = sample["input_ids"].tolist()
-        children, shared = self.roots, 0
-        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
-            if key not in children:
-                break
-            children = self.children[children[key]]
-            shared += 1
-        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+        n, shared = len(sample["input_ids"]), self._walk(sample["input_ids"])[0]
+        return (n * (n + 1) - shared * (shared + 1)) // 2  # sum of depth + 1 over depths shared..n - 1
 
     def add(self, sample: dict[str, Any]) -> None:
-        input_ids = sample["input_ids"].tolist()
-        children = self.roots
-        nodes = []
-        for depth, key in enumerate(zip(input_ids, [*input_ids[1:], None], strict=True)):
-            if key not in children:
-                children[key] = len(self.tokens)
-                self.tokens.append(key[0])
-                self.children.append({})
-                self.load += depth + 1
-            nodes.append(children[key])
-            children = self.children[nodes[-1]]
+        input_ids = sample["input_ids"]
+        self.load += self.cost(sample)
+        shared, sample_index = self._walk(input_ids)
+        if shared == 0:
+            self.roots[self._key(input_ids, 0)] = len(self.samples)
+        elif shared < len(input_ids):  # a copy of a sample already in the row adds no node
+            node = int(self.sample_nodes[sample_index][shared - 1])
+            self.branches.setdefault(node, {})[self._key(input_ids, shared)] = len(self.samples)
+        path = self.sample_nodes[sample_index][:shared] if shared else np.zeros(0, dtype=np.int64)
+        new = np.arange(len(self.tokens), len(self.tokens) + len(input_ids) - shared)
         self.samples.append(sample)
-        self.sample_nodes.append(nodes)
+        self.sample_nodes.append(np.concatenate([path, new]))
+        self.shared.append(shared)
+        self.tokens.extend(input_ids[shared:].tolist())
         self.groups.add(sample["group_id"])
         self.trained += int(sample["completion_mask"].sum())
 
@@ -207,59 +218,68 @@ class TreeRow:
                 - `old_log_probs` (`M`), `advantages` (`M`): generator log-probability and advantage of each target.
                 - `segment_id` (`M`): index of the sample each target came from.
         """
-        input_ids, position_ids, offsets, paths, kv_index, cu_seqlens_k = [], [], [0], [], [], [0]
+        # A sample's chain is laid out whole: a node's first child is the next node of its chain, the chains branching
+        # off it follow in the order they were added. The chain is cut into segments after each node others branch off.
+        is_branch = np.zeros(len(self.tokens), dtype=bool)
+        is_branch[list(self.branches)] = True
+        packed = np.empty(len(self.tokens), dtype=np.int64)  # node -> its packed position
+        input_ids, position_ids, offsets, paths, cu_seqlens_k = [], [], [0], [], [0]
         parents, depths = [], []
-        packed = [0] * len(self.tokens)
-        stack = [(node, None, 0) for node in reversed(self.roots.values())]
+        stack = [(sample, -1) for sample in reversed(self.roots.values())]
         while stack:
-            node, parent, depth = stack.pop()
-            segment = len(paths)
-            start = len(input_ids)
-            parents.append(-1 if parent is None else parent)
-            depths.append(0 if parent is None else depths[parent] + 1)
-            while True:
-                packed[node] = len(input_ids)
-                input_ids.append(self.tokens[node])
-                position_ids.append(depth)
-                depth += 1
-                if len(self.children[node]) != 1:
-                    break
-                node = next(iter(self.children[node].values()))
-            offsets.append(len(input_ids))
-            paths.append((paths[parent] if parent is not None else []) + list(range(start, len(input_ids))))
-            kv_index.extend(paths[-1])
-            cu_seqlens_k.append(len(kv_index))
-            stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
+            sample, parent = stack.pop()
+            shared, ids = self.shared[sample], self.samples[sample]["input_ids"]
+            new = self.sample_nodes[sample][shared:]  # the nodes it added, its chain
+            start = offsets[-1]
+            packed[new] = np.arange(start, start + len(new))
+            input_ids.append(ids[shared:])
+            position_ids.append(np.arange(shared, len(ids)))
+            for last in [*np.flatnonzero(is_branch[new]).tolist(), len(new) - 1]:
+                segment = len(paths)
+                parents.append(parent)
+                depths.append(0 if parent == -1 else depths[parent] + 1)
+                positions = np.arange(offsets[-1], start + last + 1)
+                paths.append(positions if parent == -1 else np.concatenate([paths[parent], positions]))
+                offsets.append(start + last + 1)
+                cu_seqlens_k.append(cu_seqlens_k[-1] + len(paths[-1]))
+                stack.extend((child, segment) for child in reversed(self.branches.get(int(new[last]), {}).values()))
+                parent = segment
 
         lengths = [end - start for start, end in zip(offsets[:-1], offsets[1:], strict=True)]
-        shift_labels = [-100] * len(input_ids)
-        sampling_mask = [[] for _ in input_ids]
+        shift_labels = np.full(len(packed), -100)
+        # A position shared by several samples takes the candidate set of the last one, like its label
+        owner = np.zeros(len(packed), dtype=np.int64)  # position -> sample that labels it
+        owner_token = np.zeros(len(packed), dtype=np.int64)  # position -> that sample's token it predicts
+        counts = np.zeros(len(packed), dtype=np.int64)  # position -> size of its candidate set
         num_logprobs = max(sample["sampler_ids"].shape[1] for sample in self.samples)
-        sampler_ids = np.full((len(input_ids), num_logprobs), -1, dtype=np.int64)
-        sampler_log_probs = np.full((len(input_ids), num_logprobs), -math.inf, dtype=np.float32)
+        sampler_ids = np.full((len(packed), num_logprobs), -1, dtype=np.int64)
+        sampler_log_probs = np.full((len(packed), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
-            ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
-            first = len(token_index)
-            for p in range(1, len(nodes)):
-                if mask[p]:
-                    shift_labels[packed[nodes[p - 1]]] = ids[p]
-                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
-                    token_index.append(packed[nodes[p - 1]])
-                    old_log_probs.append(logps[p])
-                    advantages.append(sample["advantage"])
-                    segment_id.append(i)
             trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
-            sampler_ids[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
-            sampler_log_probs[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][
-                trained
-            ]
+            index = packed[nodes[trained - 1]]
+            shift_labels[index] = sample["input_ids"][trained]
+            owner[index], owner_token[index] = i, trained
+            sizes = np.fromiter(map(len, sample["sampling_mask"]), dtype=np.int64, count=len(sample["sampling_mask"]))
+            counts[index] = sizes[trained]
+            sampler_ids[index, : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
+            sampler_log_probs[index, : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][trained]
+            token_index.append(index)
+            old_log_probs.append(sample["old_log_probs"][trained])
+            advantages.append(np.full(len(trained), sample["advantage"]))
+            segment_id.append(np.full(len(trained), i))
+        kv_index = np.concatenate(paths)
+        sampled = np.flatnonzero(counts)
+        candidates = (
+            self.samples[i]["sampling_mask"][p]
+            for i, p in zip(owner[sampled].tolist(), owner_token[sampled].tolist(), strict=True)
+        )
         return {
-            "input_ids": torch.tensor(input_ids),
-            "position_ids": torch.tensor(position_ids),
+            "input_ids": torch.tensor(np.concatenate(input_ids)),
+            "position_ids": torch.tensor(np.concatenate(position_ids)),
             "shift_labels": torch.tensor(shift_labels),
-            "sampling_mask": torch.tensor(list(chain.from_iterable(sampling_mask)), dtype=torch.long),
-            "sampling_mask_counts": torch.tensor(list(map(len, sampling_mask))),
+            "sampling_mask": torch.tensor(list(chain.from_iterable(candidates)), dtype=torch.long),
+            "sampling_mask_counts": torch.from_numpy(counts),
             "sampler_ids": torch.from_numpy(sampler_ids),
             "sampler_log_probs": torch.from_numpy(sampler_log_probs),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
@@ -271,10 +291,10 @@ class TreeRow:
                 [max(lengths), max(map(len, paths)), len(kv_index), sum(-(-length // 64) for length in lengths)]
                 + [depths.count(depth) for depth in range(max(depths) + 1)]
             ),
-            "token_index": torch.tensor(token_index, dtype=torch.long),
-            "old_log_probs": torch.tensor(old_log_probs, dtype=torch.float32),
-            "advantages": torch.tensor(advantages, dtype=torch.float32),
-            "segment_id": torch.tensor(segment_id, dtype=torch.long),
+            "token_index": torch.tensor(np.concatenate(token_index), dtype=torch.long),
+            "old_log_probs": torch.tensor(np.concatenate(old_log_probs), dtype=torch.float32),
+            "advantages": torch.tensor(np.concatenate(advantages), dtype=torch.float32),
+            "segment_id": torch.tensor(np.concatenate(segment_id), dtype=torch.long),
         }
 
 
