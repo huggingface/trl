@@ -128,7 +128,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-MistralForCausalLM-0.1": "d9e019faaeff83b77b8e047562a22325082a2a18",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2": "49f9e51102f6800add4544c2a6b62f3ed895dd5b",
     "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration": "9a878a791b40e08c176aeaaa7c4ee2d9cc19d77b",
-    "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration": "2daa66705814668209044d2b1c84e1413b308330",
+    "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration": "refs/pr/1",
     "trl-internal-testing/tiny-MuseSparkForConditionalGeneration": "c9e83e8784d89e7e7f66f78e15adf10e3a93fdbb",
     "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning": "0fd0a2356bc9530b41fb96f4981b52c6a2ac95fd",
     "trl-internal-testing/tiny-NemotronHForCausalLM-nano": "fd6746d3f4f5c3950d43c6c4adc909d5fd5dd483",
