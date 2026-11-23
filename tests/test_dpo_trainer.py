@@ -1401,6 +1401,15 @@ class TestDPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
         assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
+        for entry, name in zip(trainer.state.log_history[-3:-1], ("data1", "data2"), strict=True):
+            assert f"eval_{name}_rewards/accuracies" in entry
+            assert "eval_rewards/accuracies" not in entry
+
+        metrics = trainer.evaluate(eval_dataset={"held_out": dataset["test"]}, metric_key_prefix="validation")
+        assert "validation_held_out_loss" in metrics
+        assert "validation_held_out_rewards/accuracies" in metrics
+        assert "eval_rewards/accuracies" not in metrics
+
     @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset", "none", "unsupported_dataset_dict"])
     def test_init_with_train_dataset(self, train_dataset_type):
         streaming = "iterable" in train_dataset_type

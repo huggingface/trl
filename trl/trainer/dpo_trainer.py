@@ -1787,16 +1787,30 @@ class DPOTrainer(_BaseTrainer):
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
+    def evaluation_loop(
+        self, dataloader, description, prediction_loss_only=None, ignore_keys=None, metric_key_prefix="eval"
+    ):
+        output = super().evaluation_loop(
+            dataloader,
+            description,
+            prediction_loss_only=prediction_loss_only,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+        metrics = self._metrics["eval"]
+        output.metrics.update(
+            {f"{metric_key_prefix}_{key}": sum(values) / len(values) for key, values in metrics.items()}
+        )
+        metrics.clear()
+        return output
+
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
-        mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if mode == "eval":
-            metrics = {f"eval_{key}": val for key, val in metrics.items()}
-        logs.update(metrics)
+        if not self.model.training:
+            return super().log(logs, start_time)
+        metrics = self._metrics["train"]
+        logs.update({key: sum(values) / len(values) for key, values in metrics.items()})
         super().log(logs, start_time)
-        self._metrics[mode].clear()
+        metrics.clear()
 
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
