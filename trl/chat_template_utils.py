@@ -717,7 +717,13 @@ glm5_2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2.jinja").read_text(encoding
 
 glm5_3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3.jinja").read_text(encoding="utf-8")
 
+glm5_3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_v2.jinja").read_text(encoding="utf-8")
+
 glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_v2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v2.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_v3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v3.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
@@ -885,7 +891,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         glm5_1_chat_template,
         glm5_2_chat_template,
         glm5_3_chat_template,
+        glm5_3_v2_chat_template,
         glm5_3_flash_chat_template,
+        glm5_3_flash_v2_chat_template,
+        glm5_3_flash_v3_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).

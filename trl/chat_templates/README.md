@@ -123,11 +123,23 @@ Original GLM-5.2 chat template (as shipped by `zai-org/GLM-5.2`). Same as `glm5_
 
 ### `glm5_3.jinja`
 
-Original GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3`). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
+GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3` since [ba32f8c](https://huggingface.co/zai-org/GLM-5.3/commit/ba32f8c19c8738e2c57c71798c601d477a7bf844)). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_v2.jinja`
+
+Earlier GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3` from [aca966e](https://huggingface.co/zai-org/GLM-5.3/commit/aca966e4e02791568aa6a4ced368624b3d897f42) until [ba32f8c](https://huggingface.co/zai-org/GLM-5.3/commit/ba32f8c19c8738e2c57c71798c601d477a7bf844)). Only the tool-result reordering differs from `glm5_3.jinja`. Response parsing uses `glm4moe_template`.
 
 ### `glm5_3_flash.jinja`
 
-Original GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash`). Same tool-call format as `glm4moe.jinja`, without the newlines around the arguments (`<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>`), and the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block. Response parsing uses `glm4moe_template`.
+GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` since [46a050b](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/46a050bec13002ad29ee795c16e61cf4fa3c4a9c)). Same tool-call format as `glm4moe.jinja`, without the newlines around the arguments (`<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>`), and the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_flash_v2.jinja`
+
+Original GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` before [690b705](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/690b705278a3a58e538fcb37c2ca8b5f9511213c)). Differs from `glm5_3_flash.jinja` in the tool-result reordering, and renders a `None` message content as the text `None`. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_flash_v3.jinja`
+
+Earlier GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` from [690b705](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/690b705278a3a58e538fcb37c2ca8b5f9511213c) until [46a050b](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/46a050bec13002ad29ee795c16e61cf4fa3c4a9c), and by `zai-org/GLM-5.3-Flash-BF16` over the same period). Only the tool-result reordering differs from `glm5_3_flash.jinja`. Response parsing uses `glm4moe_template`.
 
 ### `gptoss.jinja`
 

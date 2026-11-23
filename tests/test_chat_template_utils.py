@@ -48,6 +48,9 @@ from trl.chat_template_utils import (
     glm5_1_chat_template,
     glm5_2_chat_template,
     glm5_3_chat_template,
+    glm5_3_flash_v2_chat_template,
+    glm5_3_flash_v3_chat_template,
+    glm5_3_v2_chat_template,
     glm5_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
@@ -470,7 +473,18 @@ class TestAddResponseSchema:
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template, id="glm5.1"),
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template, id="glm5.2"),
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template, id="glm5.3"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_v2_chat_template, id="glm5.3-v2"),
             pytest.param("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", None, id="glm5.3-flash"),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v2_chat_template,
+                id="glm5.3-flash-v2",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v3_chat_template,
+                id="glm5.3-flash-v3",
+            ),
         ],
     )
     @pytest.mark.parametrize(
