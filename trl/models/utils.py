@@ -314,7 +314,7 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
         elif fsdp_plugin.fsdp_version == 2:
             from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-            mesh = getattr(accelerator, "torch_device_mesh", None)
+            mesh = accelerator.torch_device_mesh
             ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             fsdp2_kwargs = {
                 "reshard_after_forward": fsdp_plugin.reshard_after_forward,
