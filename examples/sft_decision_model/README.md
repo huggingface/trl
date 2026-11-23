@@ -1,8 +1,8 @@
 # Decision model with an SFTTrainer subclass
 
-This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) as a [decision model](https://huggingface.co/blog/decision), served as is by `transformers serve`: it goes from 56.0% to 67.3% accuracy on typed-decisions (Brier 0.331 → 0.137).
+This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) as a [decision model](https://huggingface.co/blog/decision) with an [`SFTTrainer`] subclass: it goes from 56.0% to 67.3% accuracy on typed-decisions (Brier 0.331 → 0.137).
 
-Any chat model answers decision questions on the `/v1/systemone` endpoint of `transformers serve`: the prompt lists one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the softmax of the next-token logits of the labels at the end of the prompt gives the probabilities of the options. The training prompts are built by `transformers.decision` (experimental in transformers), the same code the endpoint runs.
+`transformers serve` answers decision questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. The training prompts are built by `transformers.decision`, like the ones of the endpoint, so that the trained model is served as is.
 
 Training needs the `flash-linear-attention` and `causal-conv1d` kernels of Qwen3.5's linear attention layers: without `causal-conv1d`, the padding-free batches raise an error, since the reference implementation can't keep the packed prompts apart (and serving without the kernels is several times slower):
 
@@ -17,7 +17,7 @@ pip install causal-conv1d --no-build-isolation  # compiled against the installed
 
 - `remove_unused_columns=False` and a collator built on `DataCollatorForLanguageModeling` carry the token ids of the labels (`label_ids`) and the targets through to `compute_loss`.
 - The collator is padding-free: the prompts of a batch are one sequence, and `logits_to_keep` asks the model for the logits at the last token of each prompt only, instead of the logits of every token over a 248k-token vocabulary.
-- The dataset is tokenized and filtered in the script, with `skip_prepare_dataset=True`: preparing it would truncate the prompts at `max_length`, cutting the token the answer is read at.
+- The dataset is tokenized and filtered in the script, with `skip_prepare_dataset=True`: preparing it would truncate the prompts at `max_length`, cutting the token the answer is read at. It is tokenized with 8 processes, since `transformers.decision` takes about 130 ms per prompt with Qwen3.5's tokenizer in transformers 5.23 and 5.24.
 
 The data is 40k questions of [tasksource/tasksource-jev-typed-decisions](https://huggingface.co/datasets/tasksource/tasksource-jev-typed-decisions), from its sources licensed for commercial use: half `choice`, a quarter `noul` and a quarter `score`, with soft targets ([`decisions.py`](decisions.py)). Prompts longer than 512 tokens are left out, which keeps about 30.7k questions. LoRA on all linear layers of the text model, then the adapter is merged:
 
@@ -25,7 +25,7 @@ The data is 40k questions of [tasksource/tasksource-jev-typed-decisions](https:/
 python examples/sft_decision_model/1_sft.py
 ```
 
-On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes. Building the prompts beforehand takes about 130 ms each with transformers 5.23 and 5.24, so the script spreads it over 8 processes. The loss goes from 0.98 to 0.59 and the accuracy on the training questions from 59% to 78%.
+On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes. The loss goes from 0.98 to 0.59 and the accuracy on the training questions from 59% to 78%.
 
 The trained model is on the Hub as [rycerzes/Qwen3.5-4B-Decision](https://huggingface.co/rycerzes/Qwen3.5-4B-Decision) (with your own run, use the output directory). Serve it with `transformers serve`, which needs `requests` on top of the `serving` extra:
 
@@ -48,7 +48,7 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 
 ```json
 {
-  "team": {"type": "choice", "choice": "engineering", "probabilities": {"billing": 0.004, "engineering": 0.996, "sales": 0.001}, "confidence": 0.994},
+  "team": {"type": "choice", "choice": "engineering", "probabilities": {"billing": 0.004, "engineering": 0.995, "sales": 0.001}, "confidence": 0.993},
   "urgency": {"type": "score", "score": 2.98, "probabilities": {"0": 0.000, "1": 0.000, "2": 0.023, "3": 0.976}, "confidence": 0.975, "legend": {...}},
   "refund": {"type": "noul", "noul": 0.119}
 }

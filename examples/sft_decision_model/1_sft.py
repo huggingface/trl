@@ -24,10 +24,9 @@
 """
 Trains Qwen/Qwen3.5-4B as a decision ("System One") model: it answers typed questions about a state with a probability
 for each option, from the next-token logits of the option labels (`Yes`/`No`, `A`, `B`, ...) at the end of the prompt.
-The prompt is built by `transformers.decision`, like the `/v1/systemone` endpoint of `transformers serve` does for a
-model without a decision config, so the merged model is served as is. LoRA on 40k questions of
-tasksource-jev-typed-decisions, with their soft targets. On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step,
-10.6 GB peak; one epoch takes 108 minutes.
+The prompt is the one of the `/v1/systemone` endpoint of `transformers serve`, built by `transformers.decision`, so the
+merged model is served as is. LoRA on 40k questions of tasksource-jev-typed-decisions, with their soft targets. On one
+L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes.
 
     python examples/sft_decision_model/1_sft.py
 """
@@ -102,7 +101,7 @@ class DecisionTrainer(SFTTrainer):
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
 dataset = load_train(num_samples=40_000)
-# In parallel: `prepare_inputs` takes about 130 ms per prompt with Qwen3.5's tokenizer in transformers 5.23 and 5.24
+# `prepare_inputs` takes about 130 ms per prompt with Qwen3.5's tokenizer in transformers 5.23 and 5.24
 dataset = dataset.map(tokenize, fn_kwargs={"tokenizer": tokenizer}, remove_columns=dataset.column_names, num_proc=8)
 dataset = dataset.filter(lambda example: len(example["input_ids"]) <= MAX_LENGTH)
 # The text model: the vision tower of Qwen3.5 is not needed for text-only questions
