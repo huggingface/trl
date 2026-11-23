@@ -84,6 +84,7 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     is_bf16_supported,
+    require_kernels,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -883,6 +884,20 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=str_length_reward,
             train_dataset=dataset,
         )
+
+    @require_kernels
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_rms_norm_layers_run_the_hub_kernel(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            reward_funcs=str_length_reward,
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+
+        norms = [module for module in trainer.model.modules() if type(module).__name__.endswith("RMSNorm")]
+        assert norms and all(norm.forward.__qualname__ == "LigerRMSNorm.forward" for norm in norms)
 
     @pytest.mark.parametrize(
         "model_id",
