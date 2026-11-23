@@ -492,6 +492,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 > Reward functions run in the rollout worker, a separate process, so everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
 >
 > The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A GPU-backed reward model (e.g. an `AutoModelForSequenceClassification` scorer) loads without error but silently falls back to the CPU. Keep reward functions lightweight (verifiers like `accuracy_reward`, format or length checks). If you need a GPU reward model, serve it behind its own inference engine (vLLM, TGI, ...) on separate GPUs and have a picklable reward function call it over HTTP.
+>
+> The rollout worker is a daemonic process, so reward functions, tools and environments cannot start child processes with `multiprocessing` (a `Pool` or `ProcessPoolExecutor` fails with `daemonic processes are not allowed to have children`). Use threads, `async` functions or `subprocess` instead.
 
 #### Example 1: Reward longer completions
 
