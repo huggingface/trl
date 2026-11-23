@@ -259,6 +259,10 @@ Patched Qwen3-Instruct-2507 template (used by models like `Qwen3-4B-Instruct-250
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `qwen3_instruct_2507_v2_training.jinja`
+
+Patched original Qwen3-Instruct-2507 template (shipped by the Qwen3-Instruct-2507 checkpoints before September 2025). Same diff as `qwen3_training.jinja`, applied to `qwen3_instruct_2507_v2.jinja`, without the `enable_thinking` pre-fill handling, since this template has no `enable_thinking` flag.
+
 ### `qwen3_thinking_2507_training.jinja`
 
 Patched Qwen3-Thinking-2507 template (used by models like `Qwen3-4B-Thinking-2507`, which pre-fill `<think>\n` in the generation prompt). Diff vs `qwen3_thinking_2507.jinja`: same set of changes as `qwen3_training.jinja`, which drops the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation) and wraps assistant output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
