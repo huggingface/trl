@@ -28,7 +28,7 @@ from .._common import (
 )
 
 
-check_transformers_version("5.15.0")
+check_transformers_version("5.14.0")
 
 set_seed()
 
