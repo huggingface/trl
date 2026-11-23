@@ -783,6 +783,8 @@ phi4_mini_reasoning_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning.
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
+qwen2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_v2.jinja").read_text(encoding="utf-8")
+
 qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
 
 # Also matches Qwen2-VL, which ships a byte-identical chat template.
@@ -906,6 +908,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     elif chat_template in [
         qwen2_5_chat_template,
         qwen2_5_training_chat_template,
+        qwen2_5_v2_chat_template,
+        qwen2_5_v2_training_chat_template,
         qwen2_5_base_chat_template,
         qwen2_5_base_training_chat_template,
         qwen3_chat_template,
@@ -1299,6 +1303,8 @@ phi4_mini_reasoning_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_r
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
+qwen2_5_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_v2_training.jinja").read_text(encoding="utf-8")
+
 qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
 
 qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.jinja").read_text(encoding="utf-8")
@@ -1524,6 +1530,9 @@ def get_training_chat_template(
 
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
+
+    if chat_template == qwen2_5_v2_chat_template:
+        return qwen2_5_v2_training_chat_template
 
     if chat_template == qwen2_5_base_chat_template:
         return qwen2_5_base_training_chat_template
