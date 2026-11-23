@@ -2448,8 +2448,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     out what the long ones leave, and none takes a row past its share of the step's load. A sample joins a row already
     holding its `group_id`, where its prompt is, as long as that row stays within its share. The rows are emitted most
     loaded first, so each micro-batch holds rows of similar load: a micro-batch takes as long as its most loaded row.
-    All the micro-batches of a step are trained at the same model version, so planning the whole step adds no
-    staleness.
+    When generation is the bottleneck, a sample can wait up to one more step before it is trained.
 
     The budget counts *unique* tokens, so it fits more samples than their raw length suggests: a sample costs only what
     it does not already share with its row. It also bounds the row's loss terms, which packing does not shrink —
