@@ -165,11 +165,7 @@ MODEL_REVISIONS = {
 
 def check_pinned(model_id, revision):
     # A tiny model loaded without a revision must be pinned, otherwise the tests load whatever is on the Hub `main`
-    if (
-        str(model_id).startswith("trl-internal-testing/")
-        and model_id not in MODEL_REVISIONS
-        and revision in (None, "main")
-    ):
+    if str(model_id).startswith("trl-internal-testing/") and model_id not in MODEL_REVISIONS and revision is None:
         raise ValueError(f"{model_id} is not pinned: add it to `MODEL_REVISIONS` in tests/conftest.py")
 
 
@@ -197,8 +193,7 @@ def apply_model_revisions(monkeypatch):
             check_pinned(pretrained_model_name_or_path, kwargs.get("revision"))
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                # The scripts pass the default revision "main" explicitly (see #8263)
-                if kwargs.get("revision") in (None, "main"):
+                if kwargs.get("revision") is None:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -215,7 +210,7 @@ def apply_model_revisions(monkeypatch):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
             check_pinned(model_id, kwargs.get("revision"))
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
 
@@ -243,7 +238,7 @@ def apply_model_revisions(monkeypatch):
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
             check_pinned(model_id, kwargs.get("revision"))
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)
 
