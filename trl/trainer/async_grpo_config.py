@@ -129,8 +129,10 @@ class AsyncGRPOConfig(_BaseConfig):
             of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped. Generation is held to it: a new group of rollouts starts only while the tokens queued and in
-            flight fit in what the trainer consumes in `max(max_staleness, 1)` steps.
+            being dropped, checked when the trainer takes it from the queue. A sample the planner carries over to the
+            next optimizer step is trained one step later. Generation is held to it: a new group of rollouts starts
+            only while the tokens queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)`
+            steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -367,8 +369,10 @@ class AsyncGRPOConfig(_BaseConfig):
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being dropped. Generation is held to it: a new group of rollouts starts only while the tokens "
-            "queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
+            "before being dropped, checked when the trainer takes it from the queue. A sample the planner carries over "
+            "to the next optimizer step is trained one step later. Generation is held to it: a new group of rollouts "
+            "starts only while the tokens queued and in flight fit in what the trainer consumes in "
+            "`max(max_staleness, 1)` steps."
         },
     )
     weight_sync_steps: int = field(

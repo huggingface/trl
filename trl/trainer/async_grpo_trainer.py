@@ -2523,7 +2523,9 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         """
         carried, fresh = step.samples[:num_carried], step.samples[num_carried:]
         samples = carried + sorted(fresh, key=lambda sample: len(sample["input_ids"]), reverse=True)
-        share = step.load / num_rows + TOKEN_COST  # one token of slack, so a row is not held back for less
+        # The step's trie counts a shared prefix once but each row holds its own copy, so a row's share is at least the
+        # heaviest sample on its own; one token of slack, so a row is not held back for less
+        share = max(step.load / num_rows, max(TreeRow().cost(sample) for sample in samples)) + TOKEN_COST
         rows, leftovers = [TreeRow() for _ in range(num_rows)], []
         for i, sample in enumerate(samples):
             fitting = [row for row in rows if row.fits(sample, self.token_budget)]

@@ -4246,6 +4246,14 @@ class TestTreePacking(TrlTestCase):
         # the shared prompt is free up to the fork, one token early
         assert cost == row.load - load == 3 * TOKEN_COST + 6 + 7 + 8
 
+    def test_identical_samples_fill_every_row(self):
+        # The step's trie holds one copy of them, but each row needs its own: both rows still take five
+        source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(40))
+        batcher = TokenBudgetBatcher(source, 2, 20, defaultdict(list))
+
+        for micro_batch in itertools.islice(_micro_batches(batcher), 3):
+            assert [len(group) for group in micro_batch] == [5, 5]
+
     def test_rows_of_identical_samples_still_close_a_micro_batch(self):
         source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(10_000))
         batcher = TokenBudgetBatcher(source, 2, 20, defaultdict(list))
