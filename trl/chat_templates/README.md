@@ -29,6 +29,10 @@ Original Cohere2 chat template (as shipped by `CohereLabs/tiny-aya-earth`).
 
 Original DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
 
+### `deepseek_r1_distill_v2.jinja`
+
+Original DeepSeek-R1-Distill chat template, as first shipped by the distill checkpoints (for example `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` up to [b950d47](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/commit/b950d47742676362558ae821ef2202f847ac8109), and still by re-uploads such as `casperhansen/deepseek-r1-distill-qwen-32b-awq`). Same as `deepseek_r1_distill.jinja`, except that the generation prompt ends with `<｜Assistant｜>` instead of pre-filling `<｜Assistant｜><think>\n`, so the model generates the `<think>` opener itself.
+
 ### `deepseekv3.jinja`
 
 Original DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-R1`). Renders tool-call arguments only as strings, so trainers swap in `deepseekv3_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
@@ -343,6 +347,10 @@ Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn, and the `<think>\n` that the generation prompt pre-fills after `<｜Assistant｜>`, stay outside the markers, since the prompt already ends with them.
 - Reads the content with `message.get('content')` instead of `message['content']`, so that a tool-call message without a `content` key renders like one with `content=None` (transformers drops `None`-valued message keys since 5.23). The original crashes on the missing key.
+
+### `deepseek_r1_distill_v2_training.jinja`
+
+Patched original DeepSeek-R1-Distill template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseek_r1_distill_v2.jinja`, except that the `<think>\n` stays inside the markers: the generation prompt does not pre-fill it, so the model generates it and assistant-only loss trains it.
 
 ### `deepseekv3_training.jinja`
 
