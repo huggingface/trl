@@ -2417,13 +2417,10 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.15.0"),
-                        reason="Muse Glimmer was introduced in transformers-5.15.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
             ),
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
