@@ -65,3 +65,16 @@ On the MBPP test split, two episodes per problem:
 | [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) (teacher) | 68.2% (68.1, 68.3) | 61.0% (60.6, 61.4) |
 
 The student gains about 8 points on problems it never trained on, well above the gap between the two seeds, and closes about a third of the distance to the teacher. It also calls the tool less, closer to the teacher: 2.2 calls per episode, against 3.0 for the base model and 1.8 for the teacher. One teacher episode per seed lost its session to the environment server and counts as failed. The training curves are on [Trackio](https://huggingface.co/spaces/sergiopaniego/distillation-coding-env-trackio).
+
+## Whole episodes against the first turn
+
+Distilling whole episodes pays off when the later turns decide the answer. On data-analysis tasks the agent loads files, reads errors and tries again before it answers. We distilled [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) from [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) on [SmolDataEnvs](https://huggingface.co/datasets/FineEnvs/SmolDataEnvs) tasks served by OpenEnv's `data_analysis_env`, with up to 10 turns per episode and 28 steps of 32 tasks. Each run used the same tasks, once on whole episodes and once on the first turn only (`max_tool_calling_iterations=0`, so no tool runs during training), with three seeds. The base model and all six students were evaluated in the same job, with 8 runs per task:
+
+| | `eval_verified` (61 tasks, 16 turns) | `test` (194 tasks, 10 turns) |
+| --- | --- | --- |
+| Qwen3.5-2B | 0.189 | 0.143 |
+| First turn only, 3 seeds | 0.285 to 0.287 | 0.222 to 0.239 |
+| Whole episodes, 3 seeds | 0.344 to 0.355 | 0.273 to 0.282 |
+| Whole episodes minus first turn, same seed | +0.059 to +0.068 | +0.042 to +0.059 |
+
+The scores are the share of tasks answered correctly. For every seed, the paired difference between whole episodes and the first turn has its 95% bootstrap interval above 0 on both sets. The students trained on whole episodes explore longer before they answer, so their lead grows when the evaluation allows more turns. The six models are on the Hub ([whole episodes](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s42), [first turn](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s42), seeds 42 to 44), and the training curves are on [Trackio](https://huggingface.co/spaces/training-agents-course/distill-data-analysis-trackio).
