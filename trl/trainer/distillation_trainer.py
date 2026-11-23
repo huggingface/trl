@@ -1977,14 +1977,6 @@ class DistillationTrainer(_BaseTrainer):
         # With the model split across devices (`device_map`), the backbone can end on another device than the head
         student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
         loss_mask = loss_mask.to(student_lm_head.weight.device)
-        # Gather an FSDP2 student head once, so the number of collectives doesn't depend on the teachers this rank routes
-        # to. Same cast as in `_chunked_divergence_loss`.
-        student_lm_head_weight, student_lm_head_bias = student_lm_head.weight, student_lm_head.bias
-        if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
-            student_lm_head_weight = student_lm_head_weight.full_tensor().to(student_hidden_states.dtype)
-            if student_lm_head_bias is not None:
-                student_lm_head_bias = student_lm_head_bias.full_tensor()
-
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
@@ -2038,11 +2030,6 @@ class DistillationTrainer(_BaseTrainer):
                     f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
                     f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
                 )
-            teacher_lm_head_weight, teacher_lm_head_bias = teacher_lm_head.weight, teacher_lm_head.bias
-            if isinstance(teacher_lm_head_weight, torch.distributed.tensor.DTensor):
-                teacher_lm_head_weight = teacher_lm_head_weight.full_tensor().to(teacher_hidden_states.dtype)
-                if teacher_lm_head_bias is not None:
-                    teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
             # ZeRO-3 gathers the output heads in both passes of the chunked loss, so the loss also runs on the
             # masked-out row
             teacher_loss_mask = loss_mask[scored] if rows else torch.zeros_like(loss_mask[:1])
@@ -2064,13 +2051,13 @@ class DistillationTrainer(_BaseTrainer):
             teacher_loss, teacher_entropy_sum, teacher_n_valid = _chunked_divergence_loss(
                 student_hidden_states[scored],
                 teacher_hidden_states,
-                student_lm_head_weight,
-                teacher_lm_head_weight,
+                student_lm_head.weight,
+                teacher_lm_head.weight,
                 teacher_loss_mask,
                 self.beta,
                 num_items_in_batch=denominator,
-                student_lm_head_bias=student_lm_head_bias,
-                teacher_lm_head_bias=teacher_lm_head_bias,
+                student_lm_head_bias=student_lm_head.bias,
+                teacher_lm_head_bias=teacher_lm_head.bias,
                 student_logit_scale=student_logit_scale,
                 teacher_logit_scale=teacher_logit_scale,
                 student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
