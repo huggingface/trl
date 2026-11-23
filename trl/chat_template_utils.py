@@ -821,6 +821,12 @@ smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encodi
 
 smolvlm_v2_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_v2.jinja").read_text(encoding="utf-8")
 
+# Stored chat templates, keyed without the single trailing newline that Jinja drops when rendering (#8502)
+_STORED_CHAT_TEMPLATES = {
+    template.removesuffix("\n"): template
+    for template in (path.read_text(encoding="utf-8") for path in _CHAT_TEMPLATES_DIR.glob("*.jinja"))
+}
+
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
 
@@ -866,6 +872,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
+    # Match a copy that only adds or drops the trailing newline (#8502)
+    if isinstance(chat_template, str):
+        chat_template = _STORED_CHAT_TEMPLATES.get(chat_template.removesuffix("\n"), chat_template)
     if chat_template in [
         deepseekv3_chat_template,
         deepseekv3_training_chat_template,
@@ -1405,6 +1414,9 @@ def get_training_chat_template(
     chat_template = processing_class.chat_template
     if isinstance(chat_template, dict):
         chat_template = chat_template["default"]
+    # Match a copy that only adds or drops the trailing newline (#8502)
+    if isinstance(chat_template, str):
+        chat_template = _STORED_CHAT_TEMPLATES.get(chat_template.removesuffix("\n"), chat_template)
 
     # A stored template gets its training template, even when it has markers of its own (#8182)
     if chat_template == cohere_chat_template:
