@@ -22,8 +22,6 @@ import pytest
 import torch
 from transformers.utils import is_peft_available, is_torch_xpu_available
 
-# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
-import trl  # noqa: F401
 from trl.import_utils import is_vllm_available
 
 
@@ -188,7 +186,8 @@ def apply_model_revisions(monkeypatch):
         def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                if kwargs.get("revision") is None:
+                # The scripts pass the default revision "main" explicitly (see #8263)
+                if kwargs.get("revision") in (None, "main"):
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -204,7 +203,7 @@ def apply_model_revisions(monkeypatch):
     def create_method_wrapper(original_method):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
 
@@ -231,7 +230,7 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)
 

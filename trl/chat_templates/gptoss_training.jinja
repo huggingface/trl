@@ -3,6 +3,8 @@
   Modifications vs the original:
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the `<|start|>assistant` that the generation prompt pre-fills before {% generation %}, so that
+      assistant-only loss doesn't train it.
 
   In addition to the normal inputs of `messages` and `tools`, this template also accepts the
   following kwargs:
@@ -275,7 +277,7 @@
                 {{- raise_exception("You have passed a message containing <|channel|> tags in the thinking field. Instead of doing this, you should pass analysis messages (the string between '<|message|>' and '<|end|>') in the 'thinking' field, and final messages (the string between '<|message|>' and '<|end|>') in the 'content' field.") }}
             {%- endif %}
         {%- endif %}
-        {%- generation %}
+        {%- set turn %}
         {%- if "tool_calls" in message %}
             {#- We need very careful handling here - we want to drop the tool call analysis message if the model #}
             {#- has output a later <|final|> message, but otherwise we want to retain it. This is the only case #}
@@ -320,6 +322,10 @@
             {{- "<|start|>assistant<|channel|>final<|message|>" + message.content + "<|end|>" }}
             {%- set last_tool_call.name = none %}
         {%- endif %}
+        {%- endset %}
+        {{- "<|start|>assistant" }}
+        {%- generation %}
+        {{- turn[("<|start|>assistant" | length):] }}
         {%- endgeneration %}
     {%- elif message.role == 'tool' -%}
         {%- if last_tool_call.name is none %}

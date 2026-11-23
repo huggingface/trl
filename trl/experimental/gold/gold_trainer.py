@@ -881,8 +881,14 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
         row_sums.scatter_add_(0, indices[0], vals)
         vals = vals / row_sums[indices[0]].clamp_min(torch.finfo(vals.dtype).eps)
 
+    # Indices are bounds-filtered above, so skip torch's invariant checks (see #8384)
     sparse = torch.sparse_coo_tensor(
-        indices, vals, (student_vocab_size, teacher_vocab_size), device=device, dtype=torch.float32
+        indices,
+        vals,
+        (student_vocab_size, teacher_vocab_size),
+        device=device,
+        dtype=torch.float32,
+        check_invariants=False,
     ).coalesce()
     _SPARSE_PROJ_CACHE[key] = sparse
     return sparse
@@ -1065,6 +1071,7 @@ class XTokenLoss(nn.Module):
                     projection.values()[keep],
                     (self.student_vocab_size, top_idx.numel()),
                     device=device,
+                    check_invariants=False,
                 ).coalesce()
 
         kd_terms = []

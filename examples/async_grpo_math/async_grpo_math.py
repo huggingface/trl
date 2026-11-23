@@ -24,7 +24,7 @@
 """
 pip install math_verify
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B --gpu-memory-utilization 0.9 \
     --max-model-len 2048 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -34,7 +34,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/async_grpo_math/async_grpo_math.py
 
 from datasets import load_dataset
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.rewards import accuracy_reward
 
 

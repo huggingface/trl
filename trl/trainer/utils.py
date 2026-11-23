@@ -1603,6 +1603,9 @@ def add_fused_lm_head(
     tokens at each position as well, returned as `score_log_probs` and normalized like `log_probs`. It is aligned and
     shifted like `support_ids`.
 
+    For MoE models, `loss` includes the load-balancing loss weighted by `router_aux_loss_coef`, the one of the model
+    config unless passed to the forward.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1648,6 +1651,7 @@ def add_fused_lm_head(
         num_items_in_batch=None,
         support_ids=None,
         score_ids=None,
+        router_aux_loss_coef=None,
         **kwargs,
     ):
         if not fused_lm_head:
@@ -1759,7 +1763,9 @@ def add_fused_lm_head(
             else:
                 # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
                 aux_loss = loss.new_zeros(())
-            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
+            if router_aux_loss_coef is None:
+                router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0)
+            loss = loss + router_aux_loss_coef * aux_loss
 
         return FusedCausalLMOutput(
             loss=loss,
@@ -1835,17 +1841,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int | Non
         total_layer_flops = L * (attn_flops + mlp_flops)
     else:
         # Routed experts (gate + up + down, 3 matmuls each) + router.
-        if Version(transformers.__version__) >= Version("5.1.0"):
-            num_experts = config.num_local_experts
-        else:
-            num_experts = config.num_experts
+        is_sparse = [layer_idx % config.decoder_sparse_step == 0 for layer_idx in range(L)]
         moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
-        moe_mlp_flops += 2 * h * num_experts
+        moe_mlp_flops += 2 * h * config.num_experts
         dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
-        sparse_step = config.decoder_sparse_step
-        total_layer_flops = sum(
-            attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
-        )
+        total_layer_flops = sum(attn_flops + (moe_mlp_flops if sparse else dense_mlp_flops) for sparse in is_sparse)
 
     # Embedding is a lookup (no FLOPs); lm_head is a 2*V*h matmul, tied or not.
     lm_head_flops = 2 * V * h

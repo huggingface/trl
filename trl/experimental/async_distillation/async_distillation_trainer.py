@@ -38,9 +38,9 @@ from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from torch.distributed._tensor import DTensor
+from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -55,6 +55,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     get_config_model_id,
     get_peak_flops_per_device,
     is_trackio_available,
@@ -81,8 +82,8 @@ MetricValue = float | tuple[float, float]
 def _reduce_metric(key: str, values: list[MetricValue]) -> float:
     """Reduce one logging window into the number that gets logged.
 
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer._reduce_metric`]. The value's shape and the
-    key's suffix declare the reduction, so nothing has to be registered or configured:
+    Ported verbatim from [`~trainer.async_grpo_trainer._reduce_metric`]. The value's shape and the key's suffix declare
+    the reduction, so nothing has to be registered or configured:
 
     - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
       what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
@@ -372,7 +373,7 @@ def _chunked_jsd_loss(
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
-    Ported verbatim from [`~trl.experimental.async_grpo.async_grpo_trainer.TokenBudgetBatcher`].
+    Ported verbatim from [`~trainer.async_grpo_trainer.TokenBudgetBatcher`].
     """
 
     def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
@@ -461,10 +462,9 @@ class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
     An epoch is counted in distinct prompts actually trained (accumulated in the collator, which runs on the main
-    process just before the model forward). Where [`~trl.experimental.async_grpo.async_grpo_trainer`] counts
-    prompt-groups, one prompt here yields exactly one training sample, so a prompt and a group are the same thing. Only
-    the main process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep
-    data-parallel workers in lockstep.
+    process just before the model forward). Where [`~trainer.async_grpo_trainer`] counts prompt-groups, one prompt here
+    yields exactly one training sample, so a prompt and a group are the same thing. Only the main process collates
+    (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
@@ -489,9 +489,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
     Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
     show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
     is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
-    training. Ported from [`~trl.experimental.async_grpo.async_grpo_trainer.log_rollout_traces`]; unlike GRPO's
-    version, there is no `advantage`/`group_id` to log (distillation has no group-relative baseline, see
-    `RolloutSample`).
+    training. Ported from [`~trainer.async_grpo_trainer.log_rollout_traces`]; unlike GRPO's version, there is no
+    `advantage`/`group_id` to log (distillation has no group-relative baseline, see `RolloutSample`).
 
     Args:
         samples (`list[RolloutSample]`):
@@ -659,10 +658,9 @@ class DataCollatorForRollout(DataCollatorMixin):
     `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
     `compute_loss`.
 
-    Structurally the same as [`~trl.experimental.async_grpo.async_grpo_trainer.DataCollatorForRollout`], with
-    `advantages` replaced by `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to
-    `teacher_top_k + 1` candidates with id `-1` / logprob `-inf`, then packed along the sequence dimension like every
-    other per-token field).
+    Structurally the same as [`~trainer.async_grpo_trainer.DataCollatorForRollout`], with `advantages` replaced by
+    `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to `teacher_top_k + 1` candidates with
+    id `-1` / logprob `-inf`, then packed along the sequence dimension like every other per-token field).
 
     Args:
         pad_token_id (`int`):
@@ -1060,12 +1058,12 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncDistil
 
 class AsyncDistillationTrainer(_BaseTrainer):
     """
-    Async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected exactly like
-    [`~trl.experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's on-policy
-    completions and scores them against a teacher server while training proceeds concurrently, decoupling rollout from
-    the gradient-update loop. Where GRPO's clipped policy-gradient loss reads a group-relative advantage, this
-    trainer's `compute_loss` reads a sparse per-position teacher distribution and minimizes a generalized JSD against
-    it (see `AsyncDistillationConfig.beta`), always on-policy: the student generates every completion it trains on.
+    Async counterpart to [`DistillationTrainer`], architected exactly like [`AsyncGRPOTrainer`]: a background rollout
+    worker generates the student's on-policy completions and scores them against a teacher server while training
+    proceeds concurrently, decoupling rollout from the gradient-update loop. Where GRPO's clipped policy-gradient loss
+    reads a group-relative advantage, this trainer's `compute_loss` reads a sparse per-position teacher distribution
+    and minimizes a generalized JSD against it (see `AsyncDistillationConfig.beta`), always on-policy: the student
+    generates every completion it trains on.
 
     Unlike the synchronous `DistillationTrainer`, this trainer only supports scoring against a teacher served over HTTP
     (an external vLLM server). A local (in-process, GPU) teacher forward pass cannot run inside the rollout worker's
@@ -1093,8 +1091,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
-              [`~transformers.AutoModelForCausalLM.from_pretrained`].
+              [`~transformers.PreTrainedModel.save_pretrained`]. The model is loaded with the architecture declared in
+              its config: [`~transformers.AutoModelForImageTextToText`] for a vision-language checkpoint,
+              [`~transformers.AutoModelForCausalLM`] otherwise.
             - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
               FlashAttention backend for padding-free training.
 
@@ -1174,17 +1173,18 @@ class AsyncDistillationTrainer(_BaseTrainer):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
-            model_init_kwargs.setdefault("attn_implementation", attn_implementation)
+            attn_implementation = model_init_kwargs.pop("attn_implementation", attn_implementation)
             model_revision = model_init_kwargs.get("revision")
-            model = AutoModelForCausalLM.from_pretrained(model, device_map=None, **model_init_kwargs)
+            model = create_model_from_path(model, device_map=None, **model_init_kwargs)
         else:
             model_revision = None
-            model.set_attn_implementation(attn_implementation)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `AsyncDistillationConfig`, but your model is already "
                     "instantiated. The `model_init_kwargs` will be ignored."
                 )
+        # Models that refuse FlashAttention take it on their language model (#8400)
+        (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(attn_implementation)
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1200,6 +1200,19 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+
+        self._is_vlm = text_config is not model.config
+        if self._is_vlm:
+            # Train the text model only. It is located through the text config, since module names differ across
+            # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
+            text_model = next(
+                module
+                for module in model.modules()
+                if isinstance(module, PreTrainedModel) and module is not model and module.config is text_config
+            )
+            model.requires_grad_(False)
+            text_model.requires_grad_(True)
+            model.get_output_embeddings().requires_grad_(True)
 
         # Processing class
         if processing_class is None:
@@ -1505,24 +1518,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         )
 
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed. In
-        # AsyncDistillationTrainer, we need additional columns to compute the loss, hence the override.
-        if self._signature_columns is None:
-            self._signature_columns = [
-                "input_ids",
-                "attention_mask",
-                "completion_mask",
-                "position_ids",
-                "teacher_topk_ids",
-                "teacher_topk_logprobs",
-                "teacher_id",
-                "teacher_id_idx",
-                "global_n_tokens",
-                "global_n_forward_tokens",
-                "mean_seq_len",
-            ]
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Route the whole loss (backbone + `lm_head` projection + JSD) through the DDP/FSDP wrapper via
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP keeps the student's
@@ -1600,7 +1595,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # fp32 hidden states and errors. Under PEFT, `base_model` is the `LoraModel` tuner, whose forward runs the full
         # causal LM, so the backbone is reached through `get_base_model()`; its layers carry the adapters in place.
         causal_lm = unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model
-        backbone = causal_lm.base_model
+        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
+        # Fall back to `.model` there.
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = causal_lm.model
+        else:
+            backbone = causal_lm.base_model
         forward_start = time.time()
         # MoE models: request router logits so the load-balancing loss can be computed below
         router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
@@ -1920,6 +1920,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
+            self.model_version += 1
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
 
@@ -1930,7 +1933,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
         # `finally` is not optional: leaving it merged would train merged weights from the next step on.
         if is_peft_model(model):
-            model.merge_adapter()
+            with implicit_replication():
+                model.merge_adapter()
         try:
             if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
@@ -1940,7 +1944,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     pass
         finally:
             if is_peft_model(model):
-                model.unmerge_adapter()
+                with implicit_replication():
+                    model.unmerge_adapter()
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
@@ -1948,9 +1953,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
             self.weight_transfer.resume()
-            self.model_version += 1
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
     def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:

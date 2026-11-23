@@ -85,6 +85,10 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
@@ -531,8 +535,6 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
-            # peft <= 0.17.1 (peft#2821).
             if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
                     "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
@@ -546,7 +548,10 @@ class DistillationTrainer(_BaseTrainer):
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -561,12 +566,15 @@ class DistillationTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
@@ -581,9 +589,9 @@ class DistillationTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
-                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
-                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -608,6 +616,10 @@ class DistillationTrainer(_BaseTrainer):
                     "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
         # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
@@ -1108,7 +1120,7 @@ class DistillationTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
@@ -1700,9 +1712,11 @@ class DistillationTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
+        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):

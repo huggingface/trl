@@ -37,7 +37,7 @@ import torch
 import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
@@ -104,9 +104,13 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -465,25 +469,16 @@ class GRPOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
-            if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
-            ):
-                raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
-                )
             # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -498,12 +493,15 @@ class GRPOTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
@@ -518,9 +516,9 @@ class GRPOTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
-                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
-                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -574,6 +572,10 @@ class GRPOTrainer(_BaseTrainer):
                     "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
         # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
@@ -1160,29 +1162,13 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_vllm:
             # vLLM normalizes its log-probs over the top-k/top-p/min-p candidate set, so the trainer must too
             filtered_sampling = self.top_p < 1.0 or self.top_k > 0 or (self.min_p or 0.0) > 0.0
+            # In server mode, the server's `--return-sampling-mask` flag also decides, checked below
             return_sampling_mask = (
                 self.vllm_importance_sampling_correction
                 and filtered_sampling
-                and self.vllm_mode == "colocate"
                 and self.temperature > 0
                 and is_vllm_available(min_version="0.28.0")
             )
-            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
-                args.generation_kwargs or {}
-            )
-            if self.vllm_importance_sampling_correction and structured_outputs and not return_sampling_mask:
-                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
-                raise ValueError(
-                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
-                    "sampled token, which takes `vllm_mode='colocate'` and vLLM >= 0.28. Alternatively, set "
-                    "`vllm_importance_sampling_correction=False`."
-                )
-            if self.vllm_importance_sampling_correction and filtered_sampling and not return_sampling_mask:
-                logger.warning(
-                    "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
-                    "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
-                    "takes `vllm_mode='colocate'` and vLLM >= 0.28."
-                )
             # Initialize vLLM generation backend
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
@@ -1219,19 +1205,53 @@ class GRPOTrainer(_BaseTrainer):
                 return_sampling_mask=return_sampling_mask,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
-            # The importance sampling correction needs logprobs after temperature scaling and logit processing.
             if (
                 self.vllm_mode == "server"
                 and self.vllm_importance_sampling_correction
                 and self.accelerator.is_main_process
             ):
-                logprobs_mode = self.vllm_generation.vllm_client.get_server_info()["model_config"]["logprobs_mode"]
-                if logprobs_mode != "processed_logprobs":
+                model_config = self.vllm_generation.vllm_client.get_server_info()["model_config"]
+                # The importance sampling correction needs logprobs after temperature scaling and logit processing.
+                if model_config["logprobs_mode"] != "processed_logprobs":
                     logger.warning(
-                        f"The vLLM server runs with `--logprobs-mode {logprobs_mode}`, which biases the importance "
-                        "sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or set "
-                        "`vllm_importance_sampling_correction=False`."
+                        f"The vLLM server runs with `--logprobs-mode {model_config['logprobs_mode']}`, which biases "
+                        "the importance sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or "
+                        "set `vllm_importance_sampling_correction=False`."
                     )
+                # Only a server started with `--return-sampling-mask` returns the candidate sets
+                if self.vllm_generation.return_sampling_mask and not model_config["return_sampling_mask"]:
+                    self.vllm_generation.return_sampling_mask = False
+            if self.vllm_mode == "server":
+                # Only the main process queries the server, so the other processes take its answer
+                return_sampling_mask = [self.vllm_generation.return_sampling_mask]
+                broadcast_object_list(return_sampling_mask, from_process=0)
+                self.vllm_generation.return_sampling_mask = return_sampling_mask[0]
+            structured_outputs = args.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+                args.generation_kwargs or {}
+            )
+            if (
+                self.vllm_importance_sampling_correction
+                and structured_outputs
+                and not self.vllm_generation.return_sampling_mask
+            ):
+                # Without the candidate set the grammar leaves, the importance ratio is ~0 and training stalls: #7954
+                raise ValueError(
+                    "Structured outputs with the vLLM importance sampling correction need the candidate set of each "
+                    "sampled token, which takes vLLM >= 0.28 and, in server mode, a server started with "
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30). Alternatively, set "
+                    "`vllm_importance_sampling_correction=False`."
+                )
+            if (
+                self.vllm_importance_sampling_correction
+                and filtered_sampling
+                and not self.vllm_generation.return_sampling_mask
+            ):
+                logger.warning(
+                    "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
+                    "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
+                    "takes vLLM >= 0.28 and, in server mode, a server started with "
+                    "`--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30)."
+                )
         else:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
@@ -1932,7 +1952,7 @@ class GRPOTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
@@ -2687,9 +2707,11 @@ class GRPOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
+        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):

@@ -68,7 +68,9 @@ class GRPOConfig(_BaseConfig):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the generated completion.
+            Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the whole
+            multi-turn completion after the prompt (all model turns plus tool results), unlike [`AsyncGRPOConfig`],
+            where it caps each turn.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -326,12 +328,13 @@ class GRPOConfig(_BaseConfig):
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
             and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
-            the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
-            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`,
-            `min_p > 0` and structured outputs, which restrict it to the tokens the grammar allows, require `top_k > 0`
-            (e.g. `top_k=512`). Structured outputs, which would otherwise stall training, also require
-            `vllm_mode="colocate"` and vLLM 0.28 or later. vLLM also applies `repetition_penalty` to the logprobs it
-            returns, so `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
+            the candidate set each token was sampled from, which requires vLLM 0.28 or later and, in server mode, a
+            server started with `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30); otherwise, the IS
+            ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured
+            outputs, which restrict it to the tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`).
+            Structured outputs, which would otherwise stall training, also require that candidate set. vLLM also
+            applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires
+            `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -500,7 +503,11 @@ class GRPOConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={
+            "help": "Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the "
+            "whole multi-turn completion after the prompt (all model turns plus tool results), unlike "
+            "`AsyncGRPOConfig`, where it caps each turn."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
@@ -939,10 +946,12 @@ class GRPOConfig(_BaseConfig):
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
             "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
-            '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
+            "vLLM 0.28 or later and, in server mode, a server started with `--return-sampling-mask` (and "
+            "`--enable-scale-out` from vLLM 0.30); otherwise, the IS "
+            "ratios are biased. vLLM bounds that "
             "candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured outputs, which restrict it to the "
             "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`). Structured outputs, which would "
-            'otherwise stall training, also require `vllm_mode="colocate"` and vLLM 0.28 or later. vLLM also applies '
+            "otherwise stall training, also require that candidate set. vLLM also applies "
             "`repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
             "`vllm_importance_sampling_correction=False`."
         },

@@ -38,14 +38,14 @@ generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 
 text_config = {
     "num_hidden_layers": 2,
-    "hidden_size": 16,
+    "hidden_size": 32,  # head size 32 // 4 = 8, as Flash Attention requires
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
     "layer_types": None,
-    "rope_scaling": {"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
+    "rope_scaling": {"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
 }
 vision_config = {
-    "hidden_size": 16,
+    "hidden_size": 32,  # the merger's output width, which follows the text width
     "num_heads": 4,
     "embed_dim": 64,
     "depth": 2,
@@ -55,7 +55,7 @@ config = AutoConfig.from_pretrained(
     MODEL_ID,
     text_config=text_config,
     vision_config=vision_config,
-    rope_scaling={"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
+    rope_scaling={"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
 )
 model = Qwen2VLForConditionalGeneration(config).to(dtype=torch.bfloat16)
 smoke_test(model, processor)

@@ -269,9 +269,12 @@ FEEDBACK = re.compile(r"Feedback:\n([A-Z ]+)\n([GYX ]+)")
 
 class WordleEnv:
     def __init__(self):
-        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space")
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
 
     def reset(self, **kwargs) -> str | None:
+        # One connection per game, see "Long runs against a Space" above
+        self.client.close()
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
         result = self.client.reset()
         self._last_full_feedback = result.observation.messages[0].content
         self.done = False
@@ -365,7 +368,7 @@ A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays
 
 ### Running the example
 
-Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=64` variable on your copy.
+Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=96` variable on your copy (64 games, plus the sessions still being closed between games).
 
 <hfoptions id="wordle_vllm_mode">
 
@@ -387,7 +390,7 @@ This runs vLLM in the same process as training, requiring only a single GPU. In 
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -450,7 +453,7 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL).sync()
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
@@ -461,7 +464,7 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            self._catch_client = OpenSpielEnv(base_url=CATCH_URL).sync()
             result = self._catch_client.reset()
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
@@ -655,7 +658,7 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
 > [!NOTE]
 > This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.
@@ -672,14 +675,14 @@ Each rollout runs in its own isolated session, with its own sandbox and its own 
 
 ### Wiring
 
-`HarnessAsyncGRPOTrainer` takes the model, config and dataset like [`experimental.async_grpo.AsyncGRPOTrainer`], with a session factory in place of `reward_funcs`, `tools` and `environment_factory`. Without a `harness_adapter`, the agent owns its loop. The trainer builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
+`HarnessAsyncGRPOTrainer` takes the model, config and dataset like [`AsyncGRPOTrainer`], with a session factory in place of `reward_funcs`, `tools` and `environment_factory`. Without a `harness_adapter`, the agent owns its loop. The trainer builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
 
 ```python
 from functools import partial
 
 from harbor_env.harness import HarborSessionFactory
 
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer
 
 factory = partial(
@@ -736,7 +739,7 @@ Malformed captures fail at the OpenEnv boundary and stop training. Transport fai
 
 ### Metrics
 
-The harness trainer logs the [tool metrics](async_grpo_trainer#tools) of [`experimental.async_grpo.AsyncGRPOTrainer`] under the same names, with these differences:
+The harness trainer logs the [tool metrics](async_grpo_trainer#tool-metrics) of [`AsyncGRPOTrainer`] under the same names, with these differences:
 
 - When the agent owns its loop (no `harness_adapter`), failures are estimated from the tool results in the last request: a result counts as failed when its text contains `error`, `failed`, `traceback` or `exception` (case-insensitive), and results with the same tool and the same first 200 characters count once. `tools/latency_s` and `tools/<name>/latency_s` aren't logged, because OpenEnv's trace has no timestamps.
 - With a `harness_adapter`, a tool call counts as failed when the harness reports an error for it. The time between one model reply and the next request is split evenly across that turn's tool calls and logged as their `tools/latency_s`, so it includes the harness's own overhead. The last turn isn't timed.
@@ -755,7 +758,7 @@ MAX_CONCURRENT_ENVS=9 openenv harbor serve --dataset <hf-dataset> --port 8200 --
 The vLLM server must expose tool calling and real token ids, and enable NCCL weight sync so the agent always hits the current policy. Rollouts and weight updates must use the same vLLM server:
 
 ```bash
-vllm serve <model> \
+vllm serve <model> --gpu-memory-utilization 0.9 \
     --enable-auto-tool-choice --tool-call-parser <parser> \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
