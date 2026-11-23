@@ -56,7 +56,7 @@ jobs:
           python scripts/check_chat_templates.py
 
       - name: Post to Slack
-        if: always() && github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && !cancelled()
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
