@@ -235,7 +235,7 @@ Units:
 - `batch/masked_token_frac`: The fraction of forwarded tokens that are not trained.
 - `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max`: The number of samples per row, and the average and maximum number of forwarded tokens per row.
 - `batch/row_fill_frac`: The fraction of `token_budget` the rows use.
-- `batch/row_imbalance`: The ratio of the most expensive row's attention cost to the average one. The process with the most expensive row stalls the others at the gradient all-reduce; `1.0` is perfect balance.
+- `batch/row_imbalance`: The ratio of the most expensive row's estimated time (its tokens' own work plus their attention) to the average one. The process with the most expensive row stalls the others at the gradient all-reduce; `1.0` is perfect balance.
 - `batch/packing_ratio`: The number of tokens before packing per forwarded token: the factor by which packing shrinks the forward, `1.0` when nothing is shared.
 - `batch/pad_frac`: The fraction of padding added to make the rows the same length. It only costs transfer, it is removed before the forward.
 - `batch/dropped_oversize_count`: The number of samples dropped for exceeding `token_budget`.
@@ -380,7 +380,7 @@ On two rollouts of one prompt, where `p` is the prompt and `a`, `b` the two comp
 
 A few consequences:
 
-- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. A sample goes to the row that already holds its group, where its prompt already is. When that row is full, the sample goes to another row if a process still has an empty one, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
+- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner fills a whole optimizer step (`gradient_accumulation_steps × num_processes` rows of `token_budget` tokens), then places its samples longest first, each into the row it leaves the least loaded, where a row's load counts each token's own work and the attention it pays. A sample goes to the row that already holds its group, where its prompt already is, as long as that row stays within its share of the step's load, and no sample takes a row past that share: it waits for the next step instead, where it goes first. The rows are then emitted most loaded first, so each micro-batch holds rows of similar load.
 - **Nothing shared is plain packing**: every sample is then its own segment, which is ordinary padding-free packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with grouped-query attention.
 - **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, ...): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state.

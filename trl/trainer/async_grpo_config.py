@@ -114,12 +114,12 @@ class AsyncGRPOConfig(_BaseConfig):
             `--max-logprobs` bounds it.
         token_budget (`int`, *optional*):
             Maximum number of tokens forwarded in a single row (one DP rank's forward). A `TokenBudgetBatcher` forms
-            attention-cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory
-            independently of the sample count (the number of samples per row becomes dynamic). The budget bounds unique
-            tokens rather than raw ones, so tokens shared by several samples count once, and it bounds the row's loss
-            terms too. If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) —
-            the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer
-            than `token_budget` fits in no row and is dropped with a warning.
+            cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory independently of
+            the sample count (the number of samples per row becomes dynamic). The budget bounds unique tokens rather
+            than raw ones, so tokens shared by several samples count once, and it bounds the row's loss terms too. If
+            `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) — the cap on
+            prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer than
+            `token_budget` fits in no row and is dropped with a warning.
 
         > Parameters that control the async rollout pipeline
 
@@ -347,7 +347,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward). A "
-            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this "
+            "`TokenBudgetBatcher` forms cost-balanced micro-batches whose rows each stay within this "
             "budget, bounding peak memory independently of the sample count. If None (default), it is set to the "
             "vLLM server's `max_model_len` (queried at train start), so no rollout sample can ever exceed the budget. "
             "A sample longer than `token_budget` fits in no row and is dropped with a warning."
