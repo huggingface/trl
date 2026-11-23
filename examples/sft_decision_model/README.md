@@ -25,7 +25,7 @@ The data is 40k questions of [tasksource/tasksource-jev-typed-decisions](https:/
 python examples/sft_decision_model/1_sft.py
 ```
 
-On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes. The loss goes from 0.98 to 0.59 and the accuracy on the training questions from 59% to 78%.
+On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes. Building the prompts beforehand takes about 130 ms each with transformers 5.23 and 5.24, so the script spreads it over 8 processes. The loss goes from 0.98 to 0.59 and the accuracy on the training questions from 59% to 78%.
 
 The trained model is on the Hub as [rycerzes/Qwen3.5-4B-Decision](https://huggingface.co/rycerzes/Qwen3.5-4B-Decision) (with your own run, use the output directory). Serve it with `transformers serve`, which needs `requests` on top of the `serving` extra:
 

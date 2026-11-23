@@ -102,7 +102,8 @@ class DecisionTrainer(SFTTrainer):
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
 dataset = load_train(num_samples=40_000)
-dataset = dataset.map(tokenize, fn_kwargs={"tokenizer": tokenizer}, remove_columns=dataset.column_names)
+# In parallel: `prepare_inputs` takes about 130 ms per prompt with Qwen3.5's tokenizer in transformers 5.23 and 5.24
+dataset = dataset.map(tokenize, fn_kwargs={"tokenizer": tokenizer}, remove_columns=dataset.column_names, num_proc=8)
 dataset = dataset.filter(lambda example: len(example["input_ids"]) <= MAX_LENGTH)
 # The text model: the vision tower of Qwen3.5 is not needed for text-only questions
 model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16)
