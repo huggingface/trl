@@ -154,6 +154,10 @@ Patched LFM2 template, later revision. Diff vs `lfm2_v2.jinja`:
 
 Wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the branch that renders `tool_calls` and the plain-content branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|im_start|>assistant\n` prompt cue stays outside the generation block, while the content, the tool calls and `<|im_end|>\n` sit inside.
 
+### `lfm2_v3_training.jinja`
+
+Patched LFM2-24B-A2B template, earlier revision. Same diff as `lfm2_training.jinja`, applied to `lfm2_v3.jinja`.
+
 ### `llama3_training.jinja`
 
 Patched Llama 3 template. Diff vs `llama3.jinja`:

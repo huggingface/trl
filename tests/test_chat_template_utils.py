@@ -57,6 +57,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    lfm2_v3_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
@@ -1371,6 +1372,7 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v3_chat_template), id="lfm2-v3"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
