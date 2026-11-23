@@ -134,7 +134,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-NemotronHForCausalLM-nano": "fd6746d3f4f5c3950d43c6c4adc909d5fd5dd483",
     "trl-internal-testing/tiny-NemotronHForCausalLM-super": "3099eedcee3794932297381fb276d8639aa2cf26",
     "trl-internal-testing/tiny-NemotronHForCausalLM-ultra": "6056386efc9b68589b7a3a5b5174f7275250a6f5",
-    "trl-internal-testing/tiny-OPTForCausalLM": "188dff9fed850b6c79fb9a20f6cf2da359432171",
+    "trl-internal-testing/tiny-OPTForCausalLM": "b62ab91d8bf79cfb278e9461352b33761596a307",
     "trl-internal-testing/tiny-Olmo3ForCausalLM": "cb9b96ec80fe91efa16b1603292957296526745b",
     "trl-internal-testing/tiny-PeftModel": "0b1efa692a53354c185750da2477f2ec616e1409",
     "trl-internal-testing/tiny-PeftModel-2": "04c82ed36f7936065b195bce1a26ae5aa04a81d6",
