@@ -81,7 +81,7 @@ Patched DeepSeek-V3.2-Exp template (used by `deepseek-ai/DeepSeek-V3.2-Exp` and 
 
 Patched DiffusionGemma template. Diff vs `diffusion_gemma.jinja`:
 
-Wrap the parts of a model turn that the model emits (thinking channel, tool calls, content, and the closing `<turn|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Tool responses embedded in the turn come from the environment and stay outside the generation block.
+Wrap the parts of a model turn that the model emits (thinking channel, tool calls with the `<|tool_response>` that follows them, content, and the closing `<turn|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Tool responses embedded in the turn come from the environment and stay outside the generation block.
 
 ### `gemma_training.jinja`
 
