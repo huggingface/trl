@@ -82,6 +82,7 @@ from trl.chat_template_utils import (
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
     qwen3_coder_v2_chat_template,
+    qwen3_instruct_2507_v2_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
@@ -363,6 +364,11 @@ class TestAddResponseSchema:
             ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template, id="qwen2.5-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template, id="qwen3-v2"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+                qwen3_instruct_2507_v2_chat_template,
+                id="qwen3-instruct-2507-v2",
+            ),
         ],
     )
     def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
@@ -1845,6 +1851,10 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param(("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template), id="qwen3-v2"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", qwen3_instruct_2507_v2_chat_template),
+            id="qwen3_instruct_2507_v2",
+        ),
         pytest.param(
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
             id="qwen3_thinking_2507",

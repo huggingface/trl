@@ -315,7 +315,11 @@ Original Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 
 
 ### `qwen3_instruct_2507.jinja`
 
-Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507`). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507` and the other Qwen3-Instruct-2507 checkpoints since [cdbee75](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/commit/cdbee75f17c01a7cc42f958dc650907174af0554)). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+
+### `qwen3_instruct_2507_v2.jinja`
+
+Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507` and the other Qwen3-Instruct-2507 checkpoints before [cdbee75](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/commit/cdbee75f17c01a7cc42f958dc650907174af0554), and still by re-uploads such as `unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit`). Same as `qwen3.jinja`, without the `enable_thinking` flag. Response parsing reuses `qwen3_template`.
 
 ### `qwen3_thinking_2507.jinja`
 
@@ -688,6 +692,10 @@ Patched original Qwen3 template. Same diff as `qwen3_training.jinja`, applied to
 Patched Qwen3-Instruct-2507 template. Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_instruct_2507_v2_training.jinja`
+
+Patched original Qwen3-Instruct-2507 template. Same diff as `qwen3_training.jinja` (always include the thinking block for prefix-preservation, and `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss), applied to `qwen3_instruct_2507_v2.jinja`, without the `enable_thinking` pre-fill handling, since this template has no `enable_thinking` flag.
 
 ### `qwen3_thinking_2507_training.jinja`
 
