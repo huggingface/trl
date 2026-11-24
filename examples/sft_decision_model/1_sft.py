@@ -70,7 +70,7 @@ class DecisionCollator(DataCollatorForLanguageModeling):
         return batch
 
 
-class DecisionTrainer(SFTTrainer):
+class DecisionSFTTrainer(SFTTrainer):
     # The loss is a mean over the questions of the batch, which `Trainer` must divide by the accumulation steps
     loss_is_scaled_for_ga = False
 
@@ -122,7 +122,7 @@ training_args = SFTConfig(
     save_strategy="no",
     report_to="trackio",
 )
-trainer = DecisionTrainer(
+trainer = DecisionSFTTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
