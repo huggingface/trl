@@ -34,6 +34,7 @@ from trl.chat_template_utils import (
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
     deepseekv3_v5_chat_template,
+    deepseekv3_v6_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
@@ -1356,6 +1357,9 @@ class TestIsChatTemplateStopTokenTrained:
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template), id="deepseekv3-v6"
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
             id="diffusion_gemma",
             marks=[
@@ -1783,8 +1787,11 @@ class TestGetTrainingChatTemplate:
             # assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
-        elif tokenizer_name == ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template):
-            # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template),
+        ):
+            # Same, after the `</think>` that DeepSeek-V3.1 and V3.2-Exp render to open a non-thinking assistant turn
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
         else:
@@ -1806,6 +1813,7 @@ class TestGetTrainingChatTemplate:
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template),
         ):
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
             # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
@@ -2087,6 +2095,9 @@ class TestDeepseekTrainingChatTemplates:
             pytest.param(
                 ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
             ),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template), id="deepseekv3-v6"
+            ),
         ],
     )
     def test_assistant_masks_exclude_turn_openers(self, tokenizer_name):
@@ -2119,11 +2130,18 @@ class TestDeepseekTrainingChatTemplates:
         assert "<｜Assistant｜>" not in trained
         assert "<｜tool▁outputs▁end｜>" not in trained
 
-    def test_deepseekv3_v5_thinking_trains_reasoning(self):
-        # With `thinking=True`, the DeepSeek-V3.1 generation prompt ends with `<think>`, so the training template must
-        # open the assistant turn the same way and train the reasoning that follows
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(deepseekv3_v5_chat_template, id="deepseekv3-v5"),
+            pytest.param(deepseekv3_v6_chat_template, id="deepseekv3-v6"),
+        ],
+    )
+    def test_deepseekv3_thinking_trains_reasoning(self, chat_template):
+        # With `thinking=True`, the DeepSeek-V3.1 and V3.2-Exp generation prompts end with `<think>`, so the training
+        # template must open the assistant turn the same way and train the reasoning that follows
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
-        tokenizer.chat_template = deepseekv3_v5_chat_template
+        tokenizer.chat_template = chat_template
         chat_template = get_training_chat_template(tokenizer)
         messages = [
             {"role": "user", "content": "What color is the sky?"},

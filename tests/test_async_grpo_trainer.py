@@ -4429,11 +4429,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
-    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
-    "text config",
-    strict=True,
-)
 _FA2_AVAILABLE = pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed")
 
 _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
@@ -4555,13 +4550,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, None, id="smolvlm"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, None, id="llava"),
         pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, None, id="idefics3"),
-        pytest.param(
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
-            {},
-            None,
-            id="internvl",
-            marks=_VLM_TEXT_HEAD_DIM_4,
-        ),
+        pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, None, id="internvl"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             {},
