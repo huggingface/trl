@@ -153,6 +153,10 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 
 Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them. Response parsing reuses `lfm2_2_5_template`.
 
+### `lfm2_v3.jinja`
+
+LFM2 chat template shipped by `LiquidAI/LFM2-24B-A2B` from [6a74feb](https://huggingface.co/LiquidAI/LFM2-24B-A2B/commit/6a74febc3a311b88d84b3b58162ba7c7bb09c38f) until [a3bbacd](https://huggingface.co/LiquidAI/LFM2-24B-A2B/commit/a3bbacd91a678b97712f0e323e52f8c24ba29542), and still by its re-uploads (e.g. `lmstudio-community/LFM2-24B-A2B-MLX-4bit`). Like `lfm2.jinja`, it never reads `message['tool_calls']`. Unlike it, the tool list is not wrapped in `<|tool_list_start|>` / `<|tool_list_end|>`, tool message content is not wrapped in `<|tool_response_start|>` / `<|tool_response_end|>`, list content is flattened (`text` items concatenated, `image` items rendered as `<image>`), and assistant turns before the last one drop their reasoning (everything up to `</think>`) unless `keep_past_thinking` is set.
+
 ### `lfm2_2_5.jinja`
 
 Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` before [13a5383](https://huggingface.co/LiquidAI/LFM2.5-230M/commit/13a53837c4906b4f7405932532ba85d182bb013b), and still by `LiquidAI/LFM2.5-230M-Base`). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
@@ -505,6 +509,10 @@ Split the unified message output line into role-specific branches, so the `<|im_
 Patched LFM2 template, later revision. Diff vs `lfm2_v2.jinja`:
 
 Wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the branch that renders `tool_calls` and the plain-content branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|im_start|>assistant\n` prompt cue stays outside the generation block, while the content, the tool calls and `<|im_end|>\n` sit inside.
+
+### `lfm2_v3_training.jinja`
+
+Patched LFM2-24B-A2B template, earlier revision. Same diff as `lfm2_training.jinja`, applied to `lfm2_v3.jinja`.
 
 ### `llama3_training.jinja`
 
