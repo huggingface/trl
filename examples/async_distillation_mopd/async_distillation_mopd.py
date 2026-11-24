@@ -34,7 +34,7 @@ Runs on 4 GPUs: the student's vLLM server, two teachers sharing a GPU, the third
 gets a larger `--max-model-len` than the student, because scoring sends the student's whole sequence plus one token.
 Start the teachers that share GPU 1 one after the other, since vLLM sizes its cache from the memory free at startup.
 
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT --gpu-memory-utilization 0.9 \
     --port 8000 \
     --max-model-len 19456 \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_mopd/async_distillation_mopd.py
+CUDA_VISIBLE_DEVICES=3 python examples/async_distillation_mopd/async_distillation_mopd.py
 """
 
 from datasets import interleave_datasets, load_dataset

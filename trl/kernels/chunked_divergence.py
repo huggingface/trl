@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import math
+from functools import partial
 
 import torch
 from transformers.utils import is_triton_available
@@ -661,7 +662,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                     _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                     _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                    fold = _stats_kernel[(n,)] if _use_triton(device) else _stats_tile
+                    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+                    fold = partial(_stats_kernel[(n,)], enable_fp_fusion=False) if _use_triton(device) else _stats_tile
                     fold(
                         s_tile,
                         s_tile.stride(0),
@@ -691,7 +693,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     if end != vocab:
                         _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                         _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                    fold = _ratio_kernel[(n,)] if _use_triton(device) else _ratio_tile
+                    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+                    fold = partial(_ratio_kernel[(n,)], enable_fp_fusion=False) if _use_triton(device) else _ratio_tile
                     fold(
                         s_tile,
                         s_tile.stride(0),
@@ -724,7 +727,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         if start != 0:
                             _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                             _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                        fold = _jsd_kernel[(n,)] if _use_triton(device) else _jsd_tile
+                        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+                        fold = partial(_jsd_kernel[(n,)], enable_fp_fusion=False) if _use_triton(device) else _jsd_tile
                         fold(
                             s_tile,
                             s_tile.stride(0),
@@ -831,8 +835,9 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                     _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                     _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                    # Disable FP fusion, as Triton 3.10 does by default (see #8136)
                     fold = (
-                        _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))]
+                        partial(_backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))], enable_fp_fusion=False)
                         if _use_triton(student_hidden.device)
                         else _backward_tile
                     )

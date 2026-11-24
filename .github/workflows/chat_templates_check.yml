@@ -24,8 +24,10 @@ jobs:
       contents: read
     name: Check chat templates against the Hub
     runs-on: ubuntu-latest
-    # Pull requests from forks get no `HF_TOKEN`, which the gated reference repos require
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Pull requests from forks or Dependabot get no `HF_TOKEN`, which the gated reference repos require
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -54,7 +56,7 @@ jobs:
           python scripts/check_chat_templates.py
 
       - name: Post to Slack
-        if: always() && github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && !cancelled()
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}

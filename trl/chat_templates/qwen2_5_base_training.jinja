@@ -2,6 +2,8 @@
     Modifications vs the original:
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the `\n` that the generation prompt pre-fills after `<|im_start|>assistant` before {% generation %},
+      so that assistant-only loss doesn't train it.
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -27,19 +29,22 @@
     {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
         {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
     {%- elif message.role == "assistant" %}
-        {{- '<|im_start|>assistant' }}
+        {{- '<|im_start|>assistant\n' }}
         {%- generation %}
         {%- if not message.tool_calls %}
-            {{- '\n' + message.content + '<|im_end|>\n' }}
+            {{- message.content + '<|im_end|>\n' }}
         {%- else %}
             {%- if message.content %}
-                {{- '\n' + message.content }}
+                {{- message.content }}
             {%- endif %}
             {%- for tool_call in message.tool_calls %}
                 {%- if tool_call.function is defined %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {{- '\n<tool_call>\n{"name": "' }}
+                {%- if message.content or not loop.first %}
+                    {{- '\n' }}
+                {%- endif %}
+                {{- '<tool_call>\n{"name": "' }}
                 {{- tool_call.name }}
                 {{- '", "arguments": ' }}
                 {{- tool_call.arguments | tojson }}

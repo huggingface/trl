@@ -363,7 +363,7 @@ if __name__ == "__main__":
         eval_dataset = _prepare_split(raw_eval_dataset, script_args)
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-    model.config.use_cache = False if training_args.gradient_checkpointing else True
+    model.config.use_cache = False if training_args.activation_checkpointing else True
 
     trainer = SDFTTrainer(
         model=model,

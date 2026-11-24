@@ -1,6 +1,6 @@
 # ORPO Trainer
 
-[![model badge](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![model badge](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
+[![model badge](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl)
 
 ## Overview
 
@@ -49,7 +49,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_orpo.py
+torchrun --nproc_per_node 8 train_orpo.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.

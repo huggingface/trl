@@ -668,14 +668,10 @@ model = PeftModel.from_pretrained(base_model, "username/model-name-lora")
 
 ## Multi-GPU Training
 
-PEFT works seamlessly with TRL's multi-GPU support through `accelerate`:
+PEFT works seamlessly with TRL's multi-GPU support:
 
 ```bash
-# Configure accelerate
-accelerate config
-
-# Launch training
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --use_peft \
@@ -686,7 +682,7 @@ accelerate launch trl/scripts/sft.py \
 For QLoRA with multiple GPUs, the base model is automatically sharded:
 
 ```bash
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path meta-llama/Llama-2-70b-hf \
     --load_in_4bit \
     --use_peft \
@@ -725,7 +721,7 @@ model = AutoModelForCausalLM.from_pretrained(
 > [!IMPORTANT]
 > - Keep the `lm_head` module on the first GPU (device 0) to avoid errors
 > - See this [tutorial on device maps](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) for proper configuration
-> - Run training scripts directly (not with `accelerate launch`): `python script.py`
+> - Run training scripts directly (not with `torchrun`): `python script.py`
 > - Data Parallelism is not yet supported with NPP
 
 ## Resources
@@ -734,7 +730,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 - **[SFT with LoRA/QLoRA Notebook](https://github.com/huggingface/trl/blob/main/examples/sft_qlora/sft_qlora.ipynb)** - Complete working example showing both LoRA and QLoRA implementations
 - **[TRL Examples Directory](https://github.com/huggingface/trl/tree/main/examples)** - Collection of training scripts demonstrating PEFT with different trainers
-- **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/transformers)** - Step-by-step guides for common PEFT training scenarios
+- **[TRL Cookbook Recipes](https://github.com/huggingface/cookbook/tree/main/notebooks/en)** - Step-by-step guides for common PEFT training scenarios
 
 ### Documentation
 

@@ -190,6 +190,7 @@ def main() -> None:
         "vllm", "serve", f"{MODEL_PREFIX}-MixSFT",
         "--port", "8000",
         "--max-model-len", str(args.max_model_len),
+        "--gpu-memory-utilization", "0.9",
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
     student = _spawn(student_cmd, student_log, env={"CUDA_VISIBLE_DEVICES": "0", "VLLM_SERVER_DEV_MODE": "1"})
