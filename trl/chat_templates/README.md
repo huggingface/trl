@@ -488,6 +488,14 @@ Patched Llama 3 template. Diff vs `llama3.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `llama3_1_training.jinja`
+
+Patched Llama 3.1 template. Diff vs `llama3_1.jinja`: wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the plain-content branch and the tool-call branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start_header_id|>assistant<|end_header_id|>\n\n` prompt cue stays outside the generation block, while the content or the tool call and its `<|eot_id|>` / `<|eom_id|>` sit inside. The rendered text is unchanged.
+
+### `llama3_2_training.jinja`
+
+Patched Llama 3.2 template. Same diff as `llama3_1_training.jinja`, applied to `llama3_2.jinja`.
+
 ### `llava_next_training.jinja`
 
 Patched Llava-Next template. Diff vs `llava_next.jinja`:

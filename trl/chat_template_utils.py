@@ -913,7 +913,12 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = None, glm4moe_template
     elif chat_template in [gptoss_chat_template, gptoss_training_chat_template]:
         schema, template = gptoss_schema, gptoss_template
-    elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
+    elif chat_template in [
+        llama3_1_chat_template,
+        llama3_1_training_chat_template,
+        llama3_2_chat_template,
+        llama3_2_training_chat_template,
+    ]:
         schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
@@ -1305,6 +1310,10 @@ lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja"
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
+llama3_1_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1_training.jinja").read_text(encoding="utf-8")
+
+llama3_2_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2_training.jinja").read_text(encoding="utf-8")
+
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
 
 mistral_large_4_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4_training.jinja").read_text(
@@ -1583,6 +1592,12 @@ def get_training_chat_template(
 
     if chat_template == llama3_chat_template:
         return llama3_training_chat_template
+
+    if chat_template == llama3_1_chat_template:
+        return llama3_1_training_chat_template
+
+    if chat_template == llama3_2_chat_template:
+        return llama3_2_training_chat_template
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template

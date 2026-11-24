@@ -1565,6 +1565,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
