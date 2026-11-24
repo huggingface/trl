@@ -696,6 +696,10 @@ cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encodi
 
 deepseek_r1_distill_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill.jinja").read_text(encoding="utf-8")
 
+deepseek_r1_distill_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill_v2.jinja").read_text(
+    encoding="utf-8"
+)
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
 deepseekv3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2.jinja").read_text(encoding="utf-8")
@@ -1304,6 +1308,10 @@ deepseek_r1_distill_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1
     encoding="utf-8"
 )
 
+deepseek_r1_distill_v2_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "deepseek_r1_distill_v2_training.jinja"
+).read_text(encoding="utf-8")
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
 deepseekv3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2_training.jinja").read_text(
@@ -1584,6 +1592,9 @@ def get_training_chat_template(
 
     if chat_template == deepseek_r1_distill_chat_template:
         return deepseek_r1_distill_training_chat_template
+
+    if chat_template == deepseek_r1_distill_v2_chat_template:
+        return deepseek_r1_distill_v2_training_chat_template
 
     if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template

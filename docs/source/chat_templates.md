@@ -45,6 +45,10 @@ Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 - Removes the `'</think>'` split on assistant content. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn, and the `<think>\n` that the generation prompt pre-fills after `<｜Assistant｜>`, stay outside the markers, since the prompt already ends with them.
 
+### `deepseek_r1_distill_v2_training.jinja`
+
+Patched original DeepSeek-R1-Distill template (as first shipped by the distill checkpoints, whose generation prompt does not pre-fill `<think>\n`). Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseek_r1_distill_v2.jinja`, except that the `<think>\n` stays inside the markers, since the model generates it.
+
 ### `deepseekv3_training.jinja`
 
 Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
