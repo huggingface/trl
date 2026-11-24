@@ -49,6 +49,10 @@ DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and
 
 DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepseek-ai/DeepSeek-V3.1-Terminus` and `deepseek-ai/DeepSeek-V3.1-Base`). Unlike the earlier DeepSeek templates, it opens each assistant turn with `<｜Assistant｜>` followed by `</think>`, or by `<think>` in the generation prompt when `thinking=True`, and renders tool calls as `name<｜tool▁sep｜>arguments` with no type or JSON fence. It drops the reasoning from assistant content, and renders tool-call arguments only as strings.
 
+### `deepseekv3_v6.jinja`
+
+DeepSeek-V3.2-Exp chat template (as shipped by `deepseek-ai/DeepSeek-V3.2-Exp` and `deepseek-ai/DeepSeek-V3.2-Exp-Base`). Same as `deepseekv3_v5.jinja`, except for the conditions under which it opens an assistant turn and renders the generation prompt (also after a system-only prompt, and the generation prompt also after an assistant message that is not a prefix).
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -203,7 +207,11 @@ Original Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Op
 
 ### `muse_spark_v2.jinja`
 
-Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant from [4c0e167](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/4c0e167c8b) to [a604fa7](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/a604fa753b)). Same as `muse_spark_training.jinja` without its header comment: the Hub repos adopted its `{% generation %}` markers, so `get_training_chat_template` maps it to `muse_spark_training.jinja`.
+
+### `muse_spark_v3.jinja`
+
+Muse Spark Open chat template (as shipped by `meta-models/Muse-Spark-Open-816B-A42B` and its NVFP4 variant since [a604fa7](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/commit/a604fa753b)). Same as `muse_spark_v2.jinja`, plus a system message line stating the JSON schema when `response_format` is a `json_schema`. It keeps the same `{% generation %}` markers, so `muse_spark_v3_training.jinja` only adds the header comment.
 
 ### `nemotron_3_nano.jinja`
 
@@ -244,6 +252,10 @@ Original Phi-4-mini-reasoning chat template (`microsoft/Phi-4-mini-reasoning`). 
 ### `qwen2_5.jinja`
 
 Original Qwen2.5 chat template.
+
+### `qwen2_5_v2.jinja`
+
+Qwen2.5 chat template shipped on release day by `Qwen/Qwen2.5-7B-Instruct`, `Qwen/Qwen2.5-Coder-7B-Instruct` and the other Qwen2.5 instruct checkpoints, before [acbd965](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/commit/acbd96531cda22292a3ceaa67e984955d3965282), and still by re-uploads such as `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit`. Same as `qwen2_5.jinja`, except that the tool-calling instructions show the call format as `{{"name": ..., "arguments": ...}}` instead of `{"name": ..., "arguments": ...}`. Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
 
 ### `qwen2_5_base.jinja`
 
@@ -370,6 +382,10 @@ Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, 
 
 Patched DeepSeek-V3.1 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v5.jinja`: `| tojson` on tool-call arguments, the `'</think>'` split removed, `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜Assistant｜>` and the think tag that open an assistant turn left outside them, and `message.get('content')` for the content check. It also opens the assistant turn with `<think>` whenever `thinking=True`, as the generation prompt does, where the original does so only for a prefix message.
 
+### `deepseekv3_v6_training.jinja`
+
+Patched DeepSeek-V3.2-Exp template. Same diff as `deepseekv3_v5_training.jinja`, applied to `deepseekv3_v6.jinja`.
+
 ### `diffusion_gemma_training.jinja`
 
 Patched DiffusionGemma template. Diff vs `diffusion_gemma.jinja`:
@@ -386,6 +402,38 @@ Split the unified message output line into role-specific branches, so the `<star
 
 Patched Gemma 3 template. Same diff as `gemma_training.jinja` (split the unified output line into role-specific branches so the `<start_of_turn>model\n` prompt cue sits outside the generation block, and wrap the assistant content with `{% generation %}` / `{% endgeneration %}`), applied to the Gemma 3 base template that supports system messages and multimodal content blocks.
 
+### `gemma4_training.jinja`
+
+Patched Gemma 4 template. Diff vs `gemma4.jinja`: wrap the model output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss: the thought channel, the tool calls with the `<|tool_response>` the model emits after them, the content and the turn terminator. Tool responses, which the template renders inside the model turn, stay outside the markers.
+
+### `gemma4_v3_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v3.jinja`.
+
+### `gemma4_v4_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v4.jinja`.
+
+### `gemma4_v5_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v5.jinja`. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
+### `gemma4_v7_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v7.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v8_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v8.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v9_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v9.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v10_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v10.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
 ### `glm4moe_training.jinja`
 
 Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
@@ -395,6 +443,10 @@ Close each assistant turn inside the generation block with the role marker that 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
+
+### `glm4_7_training.jinja` / `glm5_training.jinja` / `glm5_1_training.jinja` / `glm5_2_training.jinja` / `glm5_3_training.jinja` / `glm5_3_flash_training.jinja`
+
+Patched GLM-4.7, GLM-5, GLM-5.1, GLM-5.2, GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm4moe_training.jinja`, applied to `glm4_7.jinja`, `glm5.jinja`, `glm5_1.jinja`, `glm5_2.jinja`, `glm5_3.jinja` and `glm5_3_flash.jinja`: each assistant turn is closed inside the generation block with the role marker that opens the next turn, and the assistant output is wrapped with `{% generation %}` / `{% endgeneration %}`. The generation prompt of these templates always pre-fills the start of the thinking block (`<think>`, or with thinking disabled `</think>` up to GLM-5.1 and `<think></think>` from GLM-5.2), so that part of a rendered thinking block stays outside the markers. With thinking disabled (GLM-4.7 to GLM-5.2), the whole thinking block stays outside them, like in `glm4moe_training.jinja`, since the generation prompt already ends after `</think>`. The GLM-4.7 to GLM-5.2 training templates also render `None` content as empty text, like `glm4moe_training.jinja` (the GLM-5.3 templates already do).
 
 ### `gptoss_training.jinja`
 
@@ -453,6 +505,10 @@ Patched Muse Glimmer template. Same diff as `muse_glimmer_training.jinja`, appli
 ### `muse_spark_training.jinja`
 
 Patched Muse Spark Open template. Diff vs `muse_spark.jinja`: the original's `{% generation %}` markers also cover the `<|start|>assistant` that opens the turn, which the generation prompt already ends with. The training template emits it before the markers, so that `return_assistant_tokens_mask=True` doesn't train it. The rendered text is unchanged. Also used for `muse_spark_v2.jinja`, which the Hub repos ship since they adopted this template.
+
+### `muse_spark_v3_training.jinja`
+
+Patched Muse Spark Open template. Same as `muse_spark_v3.jinja` with the header comment of `muse_spark_training.jinja`: the Hub template already keeps the `<|start|>assistant` out of its `{% generation %}` markers.
 
 ### `nemotron_3_nano_training.jinja`
 
@@ -513,6 +569,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
+
+### `qwen2_5_v2_training.jinja`
+
+Patched release-day Qwen2.5 template. Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_v2.jinja`.
 
 ### `qwen2_5_base_training.jinja`
 

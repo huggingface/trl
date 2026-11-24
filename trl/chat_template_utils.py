@@ -679,6 +679,8 @@ deepseekv3_v4_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v4.jinja").read
 
 deepseekv3_v5_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v5.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v6_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v6.jinja").read_text(encoding="utf-8")
+
 diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
@@ -759,6 +761,8 @@ muse_spark_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark.jinja").read_text(
 
 muse_spark_v2_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v2.jinja").read_text(encoding="utf-8")
 
+muse_spark_v3_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v3.jinja").read_text(encoding="utf-8")
+
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
 
 nemotron_3_super_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_super.jinja").read_text(encoding="utf-8")
@@ -780,6 +784,8 @@ phi4_mini_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini.jinja").read_text(en
 phi4_mini_reasoning_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_reasoning.jinja").read_text(encoding="utf-8")
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
+
+qwen2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_v2.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
 
@@ -818,6 +824,12 @@ smollm2_chat_template = (_CHAT_TEMPLATES_DIR / "smollm2.jinja").read_text(encodi
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
 
 smolvlm_v2_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_v2.jinja").read_text(encoding="utf-8")
+
+# Stored chat templates, keyed without the single trailing newline that Jinja drops when rendering (#8502)
+_STORED_CHAT_TEMPLATES = {
+    template.removesuffix("\n"): template
+    for template in (path.read_text(encoding="utf-8") for path in _CHAT_TEMPLATES_DIR.glob("*.jinja"))
+}
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -864,6 +876,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
+    # Match a copy that only adds or drops the trailing newline (#8502)
+    if isinstance(chat_template, str):
+        chat_template = _STORED_CHAT_TEMPLATES.get(chat_template.removesuffix("\n"), chat_template)
     if chat_template in [
         deepseekv3_chat_template,
         deepseekv3_training_chat_template,
@@ -879,11 +894,17 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template in [
         glm4_7_chat_template,
+        glm4_7_training_chat_template,
         glm5_chat_template,
+        glm5_training_chat_template,
         glm5_1_chat_template,
+        glm5_1_training_chat_template,
         glm5_2_chat_template,
+        glm5_2_training_chat_template,
         glm5_3_chat_template,
+        glm5_3_training_chat_template,
         glm5_3_flash_chat_template,
+        glm5_3_flash_training_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
@@ -895,6 +916,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     elif chat_template in [
         qwen2_5_chat_template,
         qwen2_5_training_chat_template,
+        qwen2_5_v2_chat_template,
+        qwen2_5_v2_training_chat_template,
         qwen2_5_base_chat_template,
         qwen2_5_base_training_chat_template,
         qwen3_chat_template,
@@ -961,6 +984,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         gemma4_v8_chat_template,
         gemma4_v9_chat_template,
         gemma4_v10_chat_template,
+        gemma4_training_chat_template,
+        gemma4_v3_training_chat_template,
+        gemma4_v4_training_chat_template,
+        gemma4_v5_training_chat_template,
+        gemma4_v7_training_chat_template,
+        gemma4_v8_training_chat_template,
+        gemma4_v9_training_chat_template,
+        gemma4_v10_training_chat_template,
     ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
@@ -1216,6 +1247,10 @@ deepseekv3_v5_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v5_tra
     encoding="utf-8"
 )
 
+deepseekv3_v6_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v6_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1224,7 +1259,35 @@ gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma_training.jinja").re
 
 gemma3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3_training.jinja").read_text(encoding="utf-8")
 
+gemma4_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v3_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v4_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v5_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v7_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v7_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v8_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v8_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v9_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v9_training.jinja").read_text(encoding="utf-8")
+
+gemma4_v10_training_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v10_training.jinja").read_text(encoding="utf-8")
+
 glm4moe_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe_training.jinja").read_text(encoding="utf-8")
+
+glm4_7_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm4_7_training.jinja").read_text(encoding="utf-8")
+
+glm5_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_training.jinja").read_text(encoding="utf-8")
+
+glm5_1_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_1_training.jinja").read_text(encoding="utf-8")
+
+glm5_2_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2_training.jinja").read_text(encoding="utf-8")
+
+glm5_3_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_training.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_training.jinja").read_text(encoding="utf-8")
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
 
@@ -1253,6 +1316,10 @@ muse_glimmer_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_v2
 )
 
 muse_spark_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_training.jinja").read_text(encoding="utf-8")
+
+muse_spark_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_spark_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 nemotron_3_nano_training_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano_training.jinja").read_text(
     encoding="utf-8"
@@ -1283,6 +1350,8 @@ phi4_mini_reasoning_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi4_mini_r
 )
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
+
+qwen2_5_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_v2_training.jinja").read_text(encoding="utf-8")
 
 qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
 
@@ -1399,6 +1468,9 @@ def get_training_chat_template(
     chat_template = processing_class.chat_template
     if isinstance(chat_template, dict):
         chat_template = chat_template["default"]
+    # Match a copy that only adds or drops the trailing newline (#8502)
+    if isinstance(chat_template, str):
+        chat_template = _STORED_CHAT_TEMPLATES.get(chat_template.removesuffix("\n"), chat_template)
 
     # A stored template gets its training template, even when it has markers of its own (#8182)
     if chat_template == cohere_chat_template:
@@ -1425,6 +1497,9 @@ def get_training_chat_template(
     if chat_template == deepseekv3_v5_chat_template:
         return deepseekv3_v5_training_chat_template
 
+    if chat_template == deepseekv3_v6_chat_template:
+        return deepseekv3_v6_training_chat_template
+
     if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
 
@@ -1434,8 +1509,50 @@ def get_training_chat_template(
     if chat_template == gemma3_chat_template:
         return gemma3_training_chat_template
 
+    if chat_template == gemma4_chat_template:
+        return gemma4_training_chat_template
+
+    if chat_template == gemma4_v3_chat_template:
+        return gemma4_v3_training_chat_template
+
+    if chat_template == gemma4_v4_chat_template:
+        return gemma4_v4_training_chat_template
+
+    if chat_template == gemma4_v5_chat_template:
+        return gemma4_v5_training_chat_template
+
+    if chat_template == gemma4_v7_chat_template:
+        return gemma4_v7_training_chat_template
+
+    if chat_template == gemma4_v8_chat_template:
+        return gemma4_v8_training_chat_template
+
+    if chat_template == gemma4_v9_chat_template:
+        return gemma4_v9_training_chat_template
+
+    if chat_template == gemma4_v10_chat_template:
+        return gemma4_v10_training_chat_template
+
     if chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
+
+    if chat_template == glm4_7_chat_template:
+        return glm4_7_training_chat_template
+
+    if chat_template == glm5_chat_template:
+        return glm5_training_chat_template
+
+    if chat_template == glm5_1_chat_template:
+        return glm5_1_training_chat_template
+
+    if chat_template == glm5_2_chat_template:
+        return glm5_2_training_chat_template
+
+    if chat_template == glm5_3_chat_template:
+        return glm5_3_training_chat_template
+
+    if chat_template == glm5_3_flash_chat_template:
+        return glm5_3_flash_training_chat_template
 
     if chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
@@ -1474,6 +1591,9 @@ def get_training_chat_template(
     if chat_template == muse_spark_v2_chat_template:
         return muse_spark_training_chat_template
 
+    if chat_template == muse_spark_v3_chat_template:
+        return muse_spark_v3_training_chat_template
+
     if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
@@ -1503,6 +1623,9 @@ def get_training_chat_template(
 
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
+
+    if chat_template == qwen2_5_v2_chat_template:
+        return qwen2_5_v2_training_chat_template
 
     if chat_template == qwen2_5_base_chat_template:
         return qwen2_5_base_training_chat_template
