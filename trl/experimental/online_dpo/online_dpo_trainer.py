@@ -60,7 +60,13 @@ from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_callable_name, get_config_model_id
+from ...trainer.utils import (
+    disable_dropout_in_model,
+    ensure_master_addr_port,
+    get_callable_name,
+    get_config_model_id,
+    model_accepts_images,
+)
 from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_cache, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
@@ -296,7 +302,8 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config),
                 revision=model_revision,
                 truncation_side="left",
