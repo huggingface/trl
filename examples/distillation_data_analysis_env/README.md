@@ -50,19 +50,10 @@ By default it runs the 61 tasks of SmolDataEnvs `eval_verified` (checked answers
 
 ## Results
 
-We trained both versions with three seeds, then evaluated the base model and the six students in the same job, with 8 runs per task. Scores are the share of correct answers, and the brackets hold the 95% bootstrap interval over tasks of the paired difference between whole episodes and the first turn of the same seed:
+We trained both versions with three seeds and evaluated them and the base model in the same job, with 8 runs per task:
 
-| | `eval_verified`, 61 tasks, 16 turns | `test`, 194 tasks, 10 turns |
-| --- | --- | --- |
-| Qwen3.5-2B | 0.189 | 0.143 |
-| First turn, seeds 42, 43, 44 | 0.287, 0.285, 0.287 | 0.239, 0.227, 0.222 |
-| Whole episodes, seeds 42, 43, 44 | 0.355, 0.344, 0.350 | 0.281, 0.273, 0.282 |
-| Whole episodes minus first turn, seed 42 | +0.068 [+0.033, +0.105] | +0.042 [+0.016, +0.069] |
-| Seed 43 | +0.059 [+0.023, +0.096] | +0.046 [+0.021, +0.070] |
-| Seed 44 | +0.064 [+0.029, +0.100] | +0.059 [+0.034, +0.084] |
+![Mean reward of the base model and of the students distilled on the first turn and on whole episodes](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/distillation_data_analysis_env/results.png)
 
-Both kinds of distillation beat the base model, and for every seed whole episodes beat the first turn with the interval above 0 on both task sets. The students trained on whole episodes explore longer before they answer, so their lead grows when the evaluation allows more turns: with 10 turns on the 61 `eval_verified` tasks, it was smaller, +0.04 to +0.05, and one seed's interval touched 0.
+Whole episodes beat the first turn for every seed on both task sets, by +0.064 on `eval_verified` and +0.049 on `test` on average, and each seed's 95% paired interval is above 0.
 
-On tasks where the first attempt decides most of the score, the later turns have little left to fix. On MBPP coding problems, with Qwen3-1.7B learning from Qwen3-8B over up to six rounds of tool calls in OpenEnv's coding environment, whole episodes and the first turn tied in our runs: -0.007 [-0.036, +0.020] on 257 MBPP test problems. That is why this example uses data analysis.
-
-The six models are on the Hub: whole episodes ([seed 42](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s42), [43](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s43), [44](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s44)) and first turn ([seed 42](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s42), [43](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s43), [44](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s44)). The training curves are on [Trackio](https://huggingface.co/spaces/training-agents-course/distill-data-analysis-trackio). Those runs come from an earlier version of this script: their logged reward is named `rewards/DataEnv/mean` and also counts answers given in a final reply. This script logs `rewards/DataAnalysisSession/mean`, which only counts answers sent with `submit_answer`. `evaluate.py` also reads an answer from a final reply without a tool call, so the evaluation numbers above count both.
+The six models are on the Hub: whole episodes ([seed 42](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s42), [43](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s43), [44](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-episodes-s44)) and first turn ([seed 42](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s42), [43](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s43), [44](https://huggingface.co/training-agents-course/qwen3.5-2b-distill-data-firstturn-s44)). The training curves are on [Trackio](https://huggingface.co/spaces/training-agents-course/distill-data-analysis-trackio), logged by an earlier version of this script as `rewards/DataEnv/mean`.
