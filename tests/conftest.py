@@ -15,6 +15,7 @@
 import gc
 import logging
 import os
+import sys
 import traceback
 from functools import wraps
 
@@ -73,6 +74,29 @@ def pytest_runtest_makereport(item, call):
 
 
 # ============================================================================
+# Peak host memory per test
+# ============================================================================
+# Print the tests that raise their process's peak RSS by 2 GB or more, to catch memory regressions (#8429)
+# Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
+if sys.platform == "linux":
+    import resource
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        yield
+        increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+        item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
+
+    def pytest_runtest_logreport(report):
+        # Written as each test ends, so it reaches the log even when the job is killed before the summary (#8429)
+        if report.when == "call":
+            increase = dict(report.user_properties)["peak_rss_increase_gb"]
+            if increase >= 2:
+                print(f"\n{report.nodeid} raised its process's peak host memory by {increase:.2f} GB", flush=True)  # noqa: T201
+
+
+# ============================================================================
 # Tiny Model Revisions
 # ============================================================================
 # Tiny models are test fixtures: each one the tests load is pinned to a commit sha of its Hub repo, so that every TRL
@@ -99,8 +123,8 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion": "95af0b2bf27db2637cd62d086e27db3cc85c94ae",
     "trl-internal-testing/tiny-FalconMambaForCausalLM": "32e6aa438302dfac0af01c357d268d631c3467ab",
     "trl-internal-testing/tiny-GPT2LMHeadModel": "ce0e1654a5f88d887cae3899ed6a73a2e452a8ce",
-    "trl-internal-testing/tiny-GPTNeoXForCausalLM": "8927455dded3e103b3ba19312a9b4e09ca1d5a7b",
-    "trl-internal-testing/tiny-GPTNeoXForSequenceClassification": "cd9804dc4f17b4407935223ae85bac4e77acc4b7",
+    "trl-internal-testing/tiny-GPTNeoXForCausalLM": "76f5e9019accfedbdc35b70518218ca2dac0909b",
+    "trl-internal-testing/tiny-GPTNeoXForSequenceClassification": "24554e9fc0c179af69687fbb447a75598f2ee448",
     "trl-internal-testing/tiny-Gemma2ForCausalLM": "5b25f835b5ed059c0c282e79f7227f4a929ab235",
     "trl-internal-testing/tiny-Gemma3ForConditionalGeneration": "82a229b52bdddb50c4d1d79d723e48579a9b79f7",
     "trl-internal-testing/tiny-Gemma4ForConditionalGeneration": "0dc1746b7f9f623b748e735ed5a4302eb4baf346",
@@ -111,9 +135,9 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-GraniteMoeForCausalLM": "76b45c5376916fcc17bdeb598df3337cd14a4f5e",
     "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM": "0ea8ef8b1cb6b15f9d47860269de792c96e69d23",
     "trl-internal-testing/tiny-Idefics2ForConditionalGeneration": "05488b3ae9bb1815d8bc16019d3a60f5387e3f54",
-    "trl-internal-testing/tiny-Idefics3ForConditionalGeneration": "9c15ab22340fc1f688542824b7a433ebef714b8e",
+    "trl-internal-testing/tiny-Idefics3ForConditionalGeneration": "ae70d0c8b17b38347e1f7d15d064efc077048781",
     "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
-    "trl-internal-testing/tiny-InternVLForConditionalGeneration": "8ba51de653e16737a65cce56e057d7ddab90482e",
+    "trl-internal-testing/tiny-InternVLForConditionalGeneration": "99c02d42d51fd4f83e12f19850a126627d473109",
     "trl-internal-testing/tiny-Lfm2ForCausalLM": "a8b729ddf80657a21272c71d36a7edc2be1bf6b4",
     "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5": "1e9ac722a12cea565443504973060b960a328c37",
     "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5": "af6b0e20385279de1530104e215a3a2f5155d182",
