@@ -9,10 +9,10 @@ Launch support usually covers "loads, trains a step, template recognized". The c
 
 ```python
 import torch, transformers
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig, ProcessorMixin
 from trl.chat_template_utils import (
-    add_response_schema, get_training_chat_template, has_generation_markers, is_chat_template_prefix_preserving,
-    is_chat_template_stop_token_trained, parse_response, supports_tool_calling,
+    add_response_schema, get_training_chat_template, is_chat_template_stop_token_trained, parse_response,
+    supports_tool_calling,
 )
 
 tok = AutoTokenizer.from_pretrained(model_id, revision=sha)  # for a VLM, AutoProcessor, and its .tokenizer for ids
@@ -39,26 +39,31 @@ known = {p.read_text(): p.name for p in Path("trl/chat_templates").glob("*.jinja
 print(known.get(tok.chat_template, "not stored"))
 ```
 
-The generation prompt is a token prefix of the rendered turn, for every setting the template reads (`enable_thinking`, `reasoning_effort`, ...), with and without reasoning:
+TRL trains with its stored training template when it has one, which already fixes the gaps it knows about (Qwen3 dropping reasoning from history), so the checks below run on that template. `get_training_chat_template` raising means `assistant_only_loss=True` fails, and so does GRPO with tools when the template isn't prefix-preserving after a tool turn:
 
 ```python
-for kw in ({}, {"enable_thinking": False}):
-    for msgs in (turn, [*user, {"role": "assistant", "content": "Hello"}]):
-        prompt = ids(render(user, add_generation_prompt=True, **kw))
-        assert ids(render(msgs, **kw))[: len(prompt)] == prompt, kw
+template = get_training_chat_template(tok) or tok.chat_template
+```
+
+The generation prompt is a token prefix of the rendered turn, for every setting the template reads (`enable_thinking`, `reasoning_effort`, ...), with and without reasoning (reasoning with thinking off is a contradictory input, so skip it):
+
+```python
+answer = [*user, {"role": "assistant", "content": "Hello"}]
+for kw, msgs in (({}, turn), ({}, answer), ({"enable_thinking": False}, answer)):
+    prompt = ids(render(user, add_generation_prompt=True, chat_template=template, **kw))
+    assert ids(render(msgs, chat_template=template, **kw))[: len(prompt)] == prompt, kw
 ```
 
 Appending a turn leaves the earlier ones unchanged (dropping reasoning from history breaks it):
 
 ```python
-assert render([*turn, {"role": "user", "content": "And?"}]).startswith(render(turn))
-assert is_chat_template_prefix_preserving(tok)  # the same after a tool turn, which GRPO's tool loop needs
+follow_up = [*turn, {"role": "user", "content": "And?"}]
+assert render(follow_up, chat_template=template).startswith(render(turn, chat_template=template))
 ```
 
-The assistant mask starts right after the generation prompt (a prefilled `<think>` is not trained) and ends on the end-of-turn token. `get_training_chat_template` raising means `assistant_only_loss=True` fails:
+The assistant mask starts right after the generation prompt (a prefilled `<think>` is not trained) and ends on the end-of-turn token:
 
 ```python
-template = tok.chat_template if has_generation_markers(tok.chat_template) else get_training_chat_template(tok)
 out = tok.apply_chat_template(turn, chat_template=template, return_dict=True, return_assistant_tokens_mask=True)
 print(tok.decode([t for t, m in zip(out["input_ids"], out["assistant_masks"]) if m]))
 assert is_chat_template_stop_token_trained(tok, template)
@@ -69,7 +74,8 @@ Small things that break rendering in training but not in a chat demo:
 ```python
 assert render(user, tools=[]) == render(user)
 assert len({render([*user, {**call, "content": c}]) for c in (None, "")} | {render([*user, call])}) == 1
-assert render([{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]) == render(user)  # TRL sends parts to processors
+if isinstance(tok, ProcessorMixin):  # TRL sends content as parts to processors only
+    assert render([{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]) == render(user)
 assert "SYSTEM_SENTINEL" in render([{"role": "system", "content": "SYSTEM_SENTINEL"}, *user])
 assert supports_tool_calling(tok)
 calls = [{"type": "function", "function": {"name": n, "arguments": {"zip": "75001"}}} for n in ("lookup_a", "lookup_b")]
@@ -124,6 +130,12 @@ TRL's fused LM head (`add_fused_lm_head` in `trl/trainer/utils.py`) must read th
 print({k: v for k, v in text.to_dict().items() if any(s in k for s in ("softcap", "logit", "scale", "multiplier"))})
 ```
 
+A `head_dim` above 256 rules out Flash Attention 3, so padding-free and AsyncGRPO. Read it here: the tiny model below shrinks `text` in place, and tiny models hide it anyway:
+
+```python
+print({k: v for k, v in text.to_dict().items() if "head_dim" in k})
+```
+
 The Reward trainer needs `AutoModelForSequenceClassification.from_config(config)` to work. A quantized release must load by name dequantized (`SFTTrainer(model=model_id)`) and survive `save_pretrained` then reload with the same logits.
 
 ## Architecture
@@ -147,20 +159,22 @@ print(len(router_logits), router_logits[0].shape, text.num_experts_per_tok)
 print([n for n, _ in peft_model.named_parameters() if "lora" in n and "expert" in n][:3])
 ```
 
-Packing doesn't leak across documents, through attention, conv and recurrent layers (run with the flash attention path TRL's padding-free uses; noise stays under 1e-2, a leak is largest on the first tokens):
+Packing doesn't leak across documents, through attention, conv and recurrent layers (run with the flash attention path TRL's padding-free uses; noise stays under 1e-2, a leak is largest on the first tokens). Build the batch with TRL's padding-free collator and pass all its keys: gated-DeltaNet layers split documents on `cu_seq_lens_q` and `seq_idx`, not on `position_ids` alone:
 
 ```python
-def logps(before, doc):
-    x = torch.cat([before, doc])[None]
-    pos = torch.cat([torch.arange(len(before)), torch.arange(len(doc))])[None].cuda()
-    return model(input_ids=x, position_ids=pos).logits[0, len(before):].float().log_softmax(-1)
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+
+collator = DataCollatorForLanguageModeling(pad_token_id=tok.pad_token_id, padding_free=True)
+def logps(before, doc):  # lists of token ids
+    batch = collator([{"input_ids": before}, {"input_ids": doc}])
+    batch = {k: v.cuda() if torch.is_tensor(v) else v for k, v in batch.items() if k != "labels"}
+    return model(**batch).logits[0, len(before):].float().log_softmax(-1)
 print((logps(doc_a, doc) - logps(doc_b, doc)).abs().amax(-1))
 ```
 
 Also:
 - `layer_types` declares every non-attention layer: AsyncGRPO tree packing reads it.
 - The fast kernels for linear attention and conv layers are installed: the PyTorch fallback is silent and about 10x slower, so grep the logs for "falling back".
-- A `head_dim` above 256 (`print({k: v for k, v in text.to_dict().items() if "head_dim" in k})`) rules out Flash Attention 3, so padding-free and AsyncGRPO. Tiny models hide it.
 - VLM: `config.image_token_id` is the processor's image token, the checkpoint also trains text-only through `AutoModelForCausalLM`, and every processor output key reaches the model.
 - vLLM in TRL's range serves it (`trl vllm-serve --model <id> --revision <sha>`), and one GRPO step with `use_vllm=True` and one AsyncGRPO step sync every weight.
 
