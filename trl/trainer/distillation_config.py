@@ -40,21 +40,24 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
             for both the student and teacher.
-        teacher_model_name_or_path (`str`, *optional*):
-            Model name or path for the teacher model. Used when the teacher is loaded locally.
+        teacher_model_name_or_path (`str` or `dict[str, str]`, *optional*):
+            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from teacher
+            ID to model name or path uses several teachers, where the `teacher_id` column of each row selects its
+            teacher.
         teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
+            from a string. When `teacher_model_name_or_path` is a mapping, provide a mapping from teacher ID to loading
+            kwargs instead, e.g. `{"math": {"dtype": "bfloat16"}, "code": {"revision": "main"}}`. Omitted teachers use
+            the default loading kwargs.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the column `"prompt"` in the dataset. The trainer consumes the raw prompt column and
-            generates completions on-policy, so it defaults to `False`.
+            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, and `"teacher_id"`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum number of tokens to generate per completion during on-policy generation. With `tools`, it caps the
             whole multi-turn completion after the prompt (all model turns plus tool results).
@@ -166,6 +169,7 @@ class DistillationConfig(_BaseConfig):
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
+        "teacher_model_name_or_path",
         "teacher_model_init_kwargs",
         "generation_kwargs",
         "chat_template_kwargs",
@@ -194,9 +198,11 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    teacher_model_name_or_path: str | None = field(
+    teacher_model_name_or_path: dict[str, str] | str | None = field(
         default=None,
-        metadata={"help": "Model name or path for the teacher model."},
+        metadata={
+            "help": "Model name or path for the teacher model, or a mapping from teacher ID to model name or path."
+        },
     )
     teacher_model_revision: str | None = field(
         default=None,
@@ -205,7 +211,8 @@ class DistillationConfig(_BaseConfig):
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher, or "
+            "a mapping from teacher ID to such kwargs."
         },
     )
     disable_dropout: bool = field(
@@ -219,8 +226,7 @@ class DistillationConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the column 'prompt' in the dataset. The trainer consumes the raw prompt "
-            "column and generates completions on-policy, so it defaults to `False`."
+            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', and 'teacher_id'."
         },
     )
     max_completion_length: int | None = field(
