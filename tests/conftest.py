@@ -78,7 +78,7 @@ def pytest_runtest_makereport(item, call):
 # ============================================================================
 # Peak host memory per test
 # ============================================================================
-# List the tests that raise their process's peak RSS the most, to catch memory regressions before an OOM kill (#8429)
+# Print the tests that raise their process's peak RSS by 2 GB or more, to catch memory regressions (#8429)
 # Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
 if sys.platform == "linux":
     import resource
@@ -90,16 +90,12 @@ if sys.platform == "linux":
         increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
         item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
 
-    def pytest_terminal_summary(terminalreporter):
-        reports = terminalreporter.stats.get("passed", []) + terminalreporter.stats.get("failed", [])
-        increases = [
-            (dict(report.user_properties)["peak_rss_increase_gb"], report.nodeid)
-            for report in reports
-            if report.when == "call"
-        ]
-        terminalreporter.write_sep("=", "largest peak host memory increases")
-        for increase, nodeid in sorted(increases, reverse=True)[:10]:
-            terminalreporter.write_line(f"{increase:6.2f} GB {nodeid}")
+    def pytest_runtest_logreport(report):
+        # Written as each test ends, so it reaches the log even when the job is killed before the summary (#8429)
+        if report.when == "call":
+            increase = dict(report.user_properties)["peak_rss_increase_gb"]
+            if increase >= 2:
+                print(f"\n{report.nodeid} raised its process's peak host memory by {increase:.2f} GB", flush=True)  # noqa: T201
 
 
 # ============================================================================
