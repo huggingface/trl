@@ -1358,7 +1358,7 @@ class GRPOTrainer(_BaseTrainer):
         # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
         # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "environment"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -2055,17 +2055,20 @@ class GRPOTrainer(_BaseTrainer):
                 prefix_ids = prefix_ids.tolist()
                 full_ids = full_ids.tolist()
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        # Some chat templates render whitespace after the token that ends the assistant turn (e.g. Qwen3 renders
+        # "<|im_end|>\n"). The model stops generating at that token, so drop the whitespace to start the suffix right
+        # after it.
+        while not self._tokenizer.decode(prefix_ids[-1:]).strip():
+            prefix_ids = prefix_ids[:-1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+            raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(
         self, prompts, prompt_ids, completion_ids, completions, logprobs, sampling_mask, images, multimodal_fields
