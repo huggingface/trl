@@ -124,7 +124,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-FalconMambaForCausalLM": "32e6aa438302dfac0af01c357d268d631c3467ab",
     "trl-internal-testing/tiny-GPT2LMHeadModel": "ce0e1654a5f88d887cae3899ed6a73a2e452a8ce",
     "trl-internal-testing/tiny-GPTNeoXForCausalLM": "76f5e9019accfedbdc35b70518218ca2dac0909b",
-    "trl-internal-testing/tiny-GPTNeoXForSequenceClassification": "cd9804dc4f17b4407935223ae85bac4e77acc4b7",
+    "trl-internal-testing/tiny-GPTNeoXForSequenceClassification": "24554e9fc0c179af69687fbb447a75598f2ee448",
     "trl-internal-testing/tiny-Gemma2ForCausalLM": "5b25f835b5ed059c0c282e79f7227f4a929ab235",
     "trl-internal-testing/tiny-Gemma3ForConditionalGeneration": "82a229b52bdddb50c4d1d79d723e48579a9b79f7",
     "trl-internal-testing/tiny-Gemma4ForConditionalGeneration": "0dc1746b7f9f623b748e735ed5a4302eb4baf346",
