@@ -35,6 +35,8 @@ from trl.chat_template_utils import (
     deepseekv3_v4_chat_template,
     deepseekv3_v5_chat_template,
     deepseekv3_v6_chat_template,
+    deepseekv4_1_flash_1017_chat_template,
+    deepseekv4_1_flash_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
@@ -1386,6 +1388,14 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         ),
         pytest.param(
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template), id="deepseekv3-v6"
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv4_1_flash_chat_template),
+            id="deepseekv4.1-flash",
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv4_1_flash_1017_chat_template),
+            id="deepseekv4.1-flash-1017",
         ),
         pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
