@@ -105,6 +105,7 @@ REPOS = [
     "Qwen/Qwen3.5-4B",
     "Qwen/Qwen3.6-35B-A3B",
     "Qwen/Qwen3.8-27B",
+    "thinkingmachines/Inkling",
     "zai-org/GLM-4.5",
     "zai-org/GLM-4.5-Air",
     "zai-org/GLM-4.7",

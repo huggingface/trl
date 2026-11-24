@@ -725,6 +725,8 @@ gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding
 
 idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
 
+inkling_chat_template = (_CHAT_TEMPLATES_DIR / "inkling.jinja").read_text(encoding="utf-8")
+
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
@@ -1295,6 +1297,8 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
 
+inkling_training_chat_template = (_CHAT_TEMPLATES_DIR / "inkling_training.jinja").read_text(encoding="utf-8")
+
 lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
@@ -1567,6 +1571,9 @@ def get_training_chat_template(
 
     if chat_template == idefics3_chat_template:
         return idefics3_training_chat_template
+
+    if chat_template == inkling_chat_template:
+        return inkling_training_chat_template
 
     if chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
