@@ -315,7 +315,7 @@ Original Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 
 
 ### `qwen3_instruct_2507.jinja`
 
-Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507`). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507` and the other Qwen3-Instruct-2507 checkpoints since [cdbee75](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/commit/cdbee75f17c01a7cc42f958dc650907174af0554)). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
 
 ### `qwen3_instruct_2507_v2.jinja`
 
