@@ -692,14 +692,21 @@ class TestAddResponseSchema:
             ),
         ],
     )
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(deepseekv3_v5_chat_template, id="deepseekv3-v5"),
+            pytest.param(deepseekv3_v6_chat_template, id="deepseekv3-v6"),
+        ],
+    )
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
-        reason="DeepSeek-V3.1 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+        reason="DeepSeek-V3.1 and V3.2-Exp response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
-    def test_add_response_schema_deepseekv3_v5(self, thinking, completion, expected):
+    def test_add_response_schema_deepseekv3_v5(self, chat_template, thinking, completion, expected):
         # The generation prompt pre-fills `</think>`, or `<think>` with `thinking=True`
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
-        tokenizer.chat_template = deepseekv3_v5_chat_template  # DeepSeek-V3.1 has no tiny model of its own
+        tokenizer.chat_template = chat_template  # DeepSeek-V3.1 and V3.2-Exp have no tiny model of their own
         tokenizer = add_response_schema(tokenizer)
         messages = [{"role": "user", "content": "What is the weather in Paris and Lyon?"}]
         prefix = tokenizer.apply_chat_template(
@@ -708,14 +715,21 @@ class TestAddResponseSchema:
         response = tokenizer(completion, add_special_tokens=False).input_ids
         assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
 
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(deepseekv3_v5_chat_template, id="deepseekv3-v5"),
+            pytest.param(deepseekv3_v6_chat_template, id="deepseekv3-v6"),
+        ],
+    )
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
-        reason="DeepSeek-V3.1 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+        reason="DeepSeek-V3.1 and V3.2-Exp response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
-    def test_add_response_schema_deepseekv3_v5_after_tool_outputs(self):
+    def test_add_response_schema_deepseekv3_v5_after_tool_outputs(self, chat_template):
         # After tool outputs the template adds no generation prompt, so the model continues right after them
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
-        tokenizer.chat_template = deepseekv3_v5_chat_template  # DeepSeek-V3.1 has no tiny model of its own
+        tokenizer.chat_template = chat_template  # DeepSeek-V3.1 and V3.2-Exp have no tiny model of their own
         tokenizer = add_response_schema(tokenizer)
         messages = [
             {"role": "user", "content": "What is the weather in Paris?"},
