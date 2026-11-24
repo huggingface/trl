@@ -44,6 +44,7 @@ from trl.chat_template_utils import (
     gemma4_v8_chat_template,
     gemma4_v9_chat_template,
     gemma4_v10_chat_template,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     glm4_7_chat_template,
     glm5_1_chat_template,
@@ -1286,6 +1287,27 @@ class TestIsChatTemplatePrefixPreserving:
             {{- '<|im_start|>assistant\n' }}
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(processor) is True
+
+
+class TestGetChatTemplateEndOfTurnTokenId:
+    @pytest.mark.parametrize(
+        "model_id, expected_token",
+        [
+            ("trl-internal-testing/tiny-GemmaForCausalLM", "<end_of_turn>"),
+            ("trl-internal-testing/tiny-Qwen3ForCausalLM", "<|im_end|>"),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "<|return|>"),  # not the <|end|> of non-final messages
+        ],
+    )
+    def test_end_of_turn_token(self, model_id, expected_token):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        assert get_chat_template_end_of_turn_token_id(tokenizer) == tokenizer.convert_tokens_to_ids(expected_token)
+
+    def test_final_turn_not_closed(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = (
+            "{% for message in messages %}{{ message.role + ': ' + message.content }}{% endfor %}"
+        )
+        assert get_chat_template_end_of_turn_token_id(tokenizer) is None
 
 
 class TestIsChatTemplateStopTokenTrained:
