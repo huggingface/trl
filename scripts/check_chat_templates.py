@@ -37,6 +37,9 @@ from huggingface_hub import HfApi, hf_hub_download
 
 
 REPOS = [
+    "allenai/Olmo-3-7B-Think",
+    "allenai/Olmo-3-7B-Think-SFT",
+    "allenai/Olmo-3-32B-Think",
     "CohereLabs/aya-expanse-8b",
     "CohereLabs/tiny-aya-earth",
     "deepseek-ai/DeepSeek-R1",
@@ -47,6 +50,7 @@ REPOS = [
     "deepseek-ai/DeepSeek-V3",
     "deepseek-ai/DeepSeek-V3-0324",
     "deepseek-ai/DeepSeek-V3.1",
+    "deepseek-ai/DeepSeek-V3.2-Exp",
     "google/diffusiongemma-26B-A4B-it",
     "google/gemma-2-2b-it",
     "google/gemma-3-4b-it",
@@ -74,6 +78,9 @@ REPOS = [
     "meta-models/Muse-Spark-Open-816B-A42B",
     "microsoft/Phi-3-mini-4k-instruct",
     "microsoft/Phi-3.5-mini-instruct",
+    "microsoft/phi-4",
+    "microsoft/Phi-4-mini-instruct",
+    "microsoft/Phi-4-mini-reasoning",
     "mistralai/Mistral-Large-4-1T-A52B",
     "mistralai/Mistral-Medium-3.5-128B",
     "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
@@ -101,6 +108,7 @@ REPOS = [
     "Qwen/Qwen3.5-4B",
     "Qwen/Qwen3.6-35B-A3B",
     "Qwen/Qwen3.8-27B",
+    "thinkingmachines/Inkling",
     "zai-org/GLM-4.5",
     "zai-org/GLM-4.5-Air",
     "zai-org/GLM-4.7",

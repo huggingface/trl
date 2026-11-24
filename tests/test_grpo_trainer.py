@@ -30,6 +30,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -37,7 +38,7 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE, deepseekv3_v5_chat_template
 from trl.generation.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 
@@ -3622,6 +3623,60 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="GLM4 tokenizer requires transformers>=5.0.0",
+    )
+    @require_response_parsing
+    def test_train_with_tools_glm4moe(self):
+        # GLM ends a tool call with `<|observation|>`, and its chat template opens the tool result with it too
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "\n<think></think>\n<tool_call>multiply_tool\n<arg_key>a</arg_key>\n<arg_value>3</arg_value>\n"
+                "<arg_key>b</arg_key>\n<arg_value>4</arg_value>\n</tool_call><|observation|>",
+                "I don't know any tool<|user|>",
+            ],
+            after_tool="Done!<|user|>",
+        )
+
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's `<|observation|>`, without repeating it
+                assert trainer.processing_class.decode(input_ids[0]).count("<|observation|>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
@@ -3766,6 +3821,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
             num_generations=2,
             shuffle_dataset=False,  # keep the [counter, counter, echo, echo] batch layout deterministic
+            remove_unused_columns=True,  # `environment` must survive column removal
             report_to="none",
         )
 
@@ -4460,6 +4516,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.24.0"),
+                        reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                    ),
+                    pytest.mark.xfail(
+                        raises=AssertionError,
+                        reason="The tiny model's random completions never open an answer, so they all parse to the same "
+                        "empty one, get the same reward and leave nothing to learn",
+                        strict=True,
+                    ),
+                ],
+            ),
             "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -4822,6 +4893,13 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                ),
+            ),
         ],
     )
     @require_vllm
@@ -5070,7 +5148,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_response_parsing
-    def test_train_with_tools_gemma4(self):
+    @pytest.mark.parametrize("eos_token", ["<eos>", "<turn|>"])
+    def test_train_with_tools_gemma4(self, eos_token):
         # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -5082,11 +5161,15 @@ class TestGRPOTrainerVLM(TrlTestCase):
             max_completion_length=512,
             report_to="none",
         )
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        # Gemma 4's eos is `<eos>`, but fine-tuned copies may set it to `<turn|>`, e.g. `SFTConfig(eos_token="<turn|>")`
+        processor.tokenizer.eos_token = eos_token
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
+            processing_class=processor,
             tools=[screenshot_tool],
         )
 
@@ -5101,7 +5184,14 @@ class TestGRPOTrainerVLM(TrlTestCase):
             after_tool="Done!<turn|>",
             tool_response_marker="<tool_response|>",
         )
-        with patch.object(trainer.model, "generate", script.generate):
+
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's only tool call
+                assert processor.tokenizer.decode(input_ids[0]).count("<|tool_call>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -5152,6 +5242,134 @@ class TestGRPOTrainerVLM(TrlTestCase):
             tool_response_marker="<｜tool▁output▁begin｜>",
         )
         with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3_0528(self):
+        # DeepSeek-R1-0528's template only renders string tool-call arguments, so the trainer must swap in the training
+        # one, and its generation prompt doesn't pre-fill `<think>`, so the model opens it itself
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<think>\n\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
+                        [128798, 271, 128799, 271, 128806, 128808, 8701, 128814, 16640, 29717, 3682, 1458, 201, 9854, 14479, 201, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 1778, 9854, 128809, 128807, 1],
+                        # "<think>\n\n</think>\n\nI don't know any tool<｜end▁of▁sentence｜>" + padding
+                        [128798, 271, 128799, 271, 43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<｜end▁of▁sentence｜>'
+                        [68520, 3, 1],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3.1 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3_v5(self):
+        # DeepSeek-V3.1's template only renders string tool-call arguments, so the trainer must swap in the training one
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        tokenizer.chat_template = deepseekv3_v5_chat_template  # DeepSeek-V3.1 has no tiny model of its own
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>multiply_tool<｜tool▁sep｜>{"a": 3, "b": 4}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
+                        [128806, 128808, 16640, 29717, 3682, 1458, 128814, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 95, 128809, 128807, 1],
+                        # "I don't know any tool<｜end▁of▁sentence｜>" + padding
+                        [43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<｜end▁of▁sentence｜>'
+                        [68520, 3, 1],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
