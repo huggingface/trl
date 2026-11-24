@@ -637,6 +637,16 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (drop the `loop.in
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss, with the part of the thinking block that the generation prompt pre-fills left outside them.
 
+### `qwen3_coder_training.jinja`
+
+Patched Qwen3-Coder template. Diff vs `qwen3_coder.jinja`:
+
+Wrap assistant message output, including tool calls, with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
+
+### `qwen3_coder_next_training.jinja`
+
+Patched Qwen3-Coder-Next template. Same diff as `qwen3_coder_training.jinja`, applied to `qwen3_coder_next.jinja`.
+
 ### `smollm2_training.jinja`
 
 Patched SmolLM2 template. Diff vs `smollm2.jinja`:
