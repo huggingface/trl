@@ -259,6 +259,8 @@ Patched OLMo 3 Instruct template. Same diff as `olmo3_instruct_training.jinja`, 
 
 Patched OLMo 3 Instruct template. Same diff as `olmo3_instruct_training.jinja`, applied to `olmo3_instruct_v3.jinja`.
 
+`allenai/Olmo-3.1-32B-Instruct`, which ships this template, stops generating only on `<|endoftext|>`: set `eos_token="<|im_end|>"` in [`SFTConfig`] so that the trained model stops at the end of its turn.
+
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:
