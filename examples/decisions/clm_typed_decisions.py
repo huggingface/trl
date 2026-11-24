@@ -37,7 +37,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset, Features, Json, Value, load_dataset
 from transformers import AutoModel, AutoTokenizer, EarlyStoppingCallback, set_seed
 from transformers.decision import parse_questions
 
@@ -55,7 +55,6 @@ class DataCollatorForClm(DataCollatorForDecision):
     states and unique candidates into one prompt and builds soft targets over the candidate pool. `option_mask`
     restricts reported probabilities to each question's own candidates; the model's contrastive loss uses the full
     pool. Candidate identity is determined by its token IDs after truncation.
-
 
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
@@ -85,33 +84,21 @@ class DataCollatorForClm(DataCollatorForDecision):
 
     def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
         """Render and tokenize one decision with the native Transformers template."""
-        inputs, question, targets = self.prepare_example(example)
-        marks = inputs["marks"]
-        if len(marks) != len(question.options) + 1:
-            raise ValueError("The decision template must mark one state span and one span per option")
+        state_ids, option_ids, question, targets = self.tokenize_spans(
+            example,
+            max_state_length=self.max_state_length,
+            max_option_length=self.max_option_length,
+            truncation=self.truncation,
+        )
+        if asdict(question).get("allow_null", False):
+            raise ValueError("CLM does not support nullable decisions")
 
-        segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
-        sequences = []
-        for index, segment in enumerate(segments):
-            limit = self.max_state_length if index == 0 else self.max_option_length
-            if self.truncation == "error" and len(segment) > limit:
-                raise ValueError(
-                    f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'"
-                )
-            segment = segment[-limit:] if self.tokenizer.truncation_side == "left" else segment[:limit]
-            sequences.append(segment.tolist())
-
-        features = {
-            "input_ids": sequences[0],
-            "option_input_ids": sequences[1:],
-            "labels": list(targets),
-            "allow_null": asdict(question).get("allow_null", False),
+        return {
+            "input_ids": state_ids,
+            "option_input_ids": option_ids,
+            "labels": list(targets[1:]),
             "is_choice": question.type == "choice",
         }
-        if features["allow_null"]:
-            raise ValueError("CLM does not support nullable decisions")
-        features["labels"] = features["labels"][1:]
-        return features
 
     def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         if "input_ids" not in features[0]:
@@ -172,7 +159,7 @@ class ClmModelArguments(ModelConfig):
 
 
 def prepare_dataset(dataset, decision_config):
-    examples = []
+    requests, target_probs = [], []
     for row in dataset:
         state = json.loads(row["state"])
         questions = json.loads(row["questions"])
@@ -184,20 +171,15 @@ def prepare_dataset(dataset, decision_config):
             label = answer["label"]
             label = str(label).lower() if isinstance(label, bool) else str(label)
             probabilities = answer.get("probabilities") or {}
-            targets = [float(probabilities.get(option, 0.0)) for option in question.options]
-            total = sum(targets)
-            targets = (
-                [value / total for value in targets]
-                if total
-                else [float(option == label) for option in question.options]
-            )
-            examples.append(
-                {
-                    "request": json.dumps({"state": state, "questions": {question.name: questions[question.name]}}),
-                    "target_probs": [0.0, *targets],
-                }
-            )
-    return Dataset.from_list(examples)
+            targets = {option: float(probabilities[option]) for option in question.options if option in probabilities}
+            total = sum(targets.values())
+            targets = {option: value / total for option, value in targets.items()} if total else {label: 1.0}
+            requests.append(json.dumps({"state": state, "questions": {question.name: questions[question.name]}}))
+            target_probs.append(targets)
+    return Dataset.from_dict(
+        {"request": requests, "target_probs": target_probs},
+        features=Features({"request": Value("string"), "target_probs": Json()}),
+    )
 
 
 def compute_metrics(prediction):

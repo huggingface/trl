@@ -92,25 +92,16 @@ class DataCollatorForJeva(DataCollatorForDecision):
 
     def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
         """Render and tokenize one decision with the native Transformers template."""
-        inputs, question, targets = self.prepare_example(example)
-        marks = inputs["marks"]
-        if len(marks) != len(question.options) + 1:
-            raise ValueError("The decision template must mark one state span and one span per option")
-
-        segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
-        sequences = []
-        for index, segment in enumerate(segments):
-            limit = self.max_state_length if index == 0 else self.max_option_length
-            if self.truncation == "error" and len(segment) > limit:
-                raise ValueError(
-                    f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'"
-                )
-            segment = segment[-limit:] if self.tokenizer.truncation_side == "left" else segment[:limit]
-            sequences.append(segment.tolist())
+        state_ids, option_ids, question, targets = self.tokenize_spans(
+            example,
+            max_state_length=self.max_state_length,
+            max_option_length=self.max_option_length,
+            truncation=self.truncation,
+        )
 
         return {
-            "input_ids": sequences[0],
-            "option_input_ids": sequences[1:],
+            "input_ids": state_ids,
+            "option_input_ids": option_ids,
             "labels": list(targets),
             "allow_null": asdict(question).get("allow_null", False),
             "is_choice": question.type == "choice",

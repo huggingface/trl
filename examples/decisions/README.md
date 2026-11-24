@@ -32,7 +32,8 @@ gradient accumulation does not enlarge the pool.
 
 Requires [Transformers #50586](https://github.com/huggingface/transformers/pull/50586).
 Each dataset row contains one question in `request` (JSON), or `state` / `questions`, plus one of `target_index`,
-`target_probs`, `p_true`, or `score`. `target_probs` contains a zero null entry followed by option probabilities.
+`target_probs`, `p_true`, or `score`. Supply `target_probs` by option name, or as a list starting with zero
+followed by the probabilities in option order.
 The script prepares native model fields and uses Transformers' `default_data_collator`.
 
 ```bash

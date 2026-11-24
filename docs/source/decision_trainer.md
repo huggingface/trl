@@ -41,15 +41,20 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 | Field | Meaning |
 |---|---|
 | `target_index` | Zero-based option index, or `None` for a nullable choice. |
-| `target_probs` | Null probability, then one probability per option. |
+| `target_probs` | A mapping from option names to probabilities, or a list with the null probability first followed by the option probabilities in order. |
 | `p_true` | Probability of true for a `noul` question. |
 | `score` | Numeric score, interpolated between rubric levels. |
+
+With named probabilities, omitted options receive zero mass. Use the list form to assign probability to null.
+For Arrow datasets with different option names across rows, store this column as `datasets.Json()`.
 
 Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and
 may supply numeric `values`. The [Jeva example collator](https://github.com/huggingface/trl/blob/main/examples/decisions/jeva_banking77.py)
 uses Transformers' template to prepare separate state and option spans. It subclasses `DataCollatorForDecision`,
-which delegates request rendering to `model.decision_config.prepare_inputs`. Preprocess once with
-`dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so batches only need padding.
+which delegates request rendering to `model.decision_config.prepare_inputs`. Pass raw rows and the example
+collator to `DecisionTrainer`, or cache tokenization with
+`dataset.map(collator.tokenize, remove_columns=dataset.column_names)`. Custom collators can reuse
+`tokenize_spans` for templates that mark the state and each option, then implement their model's batching.
 
 
 ## CLM example
@@ -116,3 +121,4 @@ answers = decide(request)
 
 [[autodoc]] experimental.decision.DataCollatorForDecision
     - prepare_example
+    - tokenize_spans

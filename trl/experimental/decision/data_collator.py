@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+import torch
 from transformers import PreTrainedTokenizerBase
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.decision import DecisionConfig as TransformersDecisionConfig
@@ -58,8 +59,16 @@ def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float,
     probs = [0.0] * (k + 1)
     if label == "target_probs":
         raw_probs = row[label]
-        if not isinstance(raw_probs, (list, tuple)) or len(raw_probs) != k + 1:
-            raise ValueError("target_probs must contain null probability followed by one per option")
+        if isinstance(raw_probs, Mapping):
+            # Arrow structs fill absent keys with None when rows have different options.
+            named_probs = {option: value for option, value in raw_probs.items() if value is not None}
+            if named_probs.keys() - set(question.options):
+                raise ValueError("target_probs contains unknown option names")
+            raw_probs = [0.0, *(named_probs.get(option, 0.0) for option in question.options)]
+        elif not isinstance(raw_probs, (list, tuple)) or len(raw_probs) != k + 1:
+            raise ValueError(
+                "target_probs must be keyed by option name or contain null probability followed by one per option"
+            )
         probs = [_finite(value, "target_probs") for value in raw_probs]
         if min(probs) < 0 or not math.isclose(sum(probs), 1.0, rel_tol=0, abs_tol=1e-5):
             raise ValueError("target_probs must be nonnegative and sum to one")
@@ -136,3 +145,30 @@ class DataCollatorForDecision(DataCollatorMixin):
         inputs, questions = prompts[0]
         question = questions[0]
         return inputs, question, normalize_target(example, question)
+
+    def tokenize_spans(
+        self,
+        example: dict[str, Any],
+        *,
+        max_state_length: int,
+        max_option_length: int,
+        truncation: str = "error",
+    ) -> tuple[list[int], list[list[int]], Question, tuple[float, ...]]:
+        """Return state and option token IDs, the question, and its targets for a template with span marks."""
+        inputs, question, targets = self.prepare_example(example)
+        marks = inputs["marks"]
+        if len(marks) != len(question.options) + 1:
+            raise ValueError("The decision template must mark one state span and one span per option")
+
+        segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
+        sequences = []
+        for index, segment in enumerate(segments):
+            limit = max_state_length if index == 0 else max_option_length
+            if truncation == "error" and len(segment) > limit:
+                raise ValueError(
+                    f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'"
+                )
+            segment = segment[-limit:] if self.tokenizer.truncation_side == "left" else segment[:limit]
+            sequences.append(segment.tolist())
+
+        return sequences[0], sequences[1:], question, targets

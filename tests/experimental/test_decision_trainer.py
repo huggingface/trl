@@ -38,6 +38,7 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
+from transformers.decision import DecisionConfig as TransformersDecisionConfig
 from transformers.loss.loss_utils import LOSS_MAPPING
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
@@ -488,6 +489,52 @@ class TestDecisionTrainerJeva(TrlTestCase):
         assert np.isfinite(result.training_loss)
 
 
+class TestDataCollatorForDecision(TrlTestCase):
+    @pytest.mark.parametrize(
+        "question, label, target",
+        [
+            ({"type": "choice", "criteria": {"a": None, "b": None}}, {"target_index": 1}, [0, 0, 1]),
+            ({"type": "noul", "instructions": "Is it true?"}, {"p_true": 0.8}, [0, 0.8, 0.2]),
+            (
+                {"type": "choice", "criteria": {"a": None, "b": None, "c": None}},
+                {"target_probs": {"b": 0.75, "a": 0.25}},
+                [0, 0.25, 0.75, 0],
+            ),
+            (
+                {"type": "choice", "criteria": {"c": None, "b": None, "a": None}},
+                {"target_probs": {"b": 0.75, "a": 0.25}},
+                [0, 0, 0.75, 0.25],
+            ),
+            pytest.param(
+                {"type": "choice", "criteria": {"a": None}, "allow_null": True},
+                {"target_index": None},
+                [1, 0],
+                marks=pytest.mark.skipif(not HAS_JEVA, reason="Requires nullable question parsing"),
+            ),
+            pytest.param(
+                {"type": "score", "criteria": ["bad", "good"], "values": [1, 3]},
+                {"score": 2},
+                [0, 0.5, 0.5],
+                marks=pytest.mark.skipif(not HAS_JEVA, reason="Requires custom rubric values"),
+            ),
+        ],
+    )
+    def test_decision_labels(self, tokenizer, question, label, target):
+        collator = DataCollatorForDecision(tokenizer, TransformersDecisionConfig())
+        row = {"state": "A state", "questions": {"decision": question}, **label}
+        assert collator.prepare_example(row)[2] == pytest.approx(target)
+
+    def test_unknown_target_option(self, tokenizer):
+        collator = DataCollatorForDecision(tokenizer, TransformersDecisionConfig())
+        row = {
+            "state": "A state",
+            "questions": {"decision": {"type": "choice", "criteria": {"a": None, "b": None}}},
+            "target_probs": {"typo": 1.0},
+        }
+        with pytest.raises(ValueError, match="unknown option"):
+            collator.prepare_example(row)
+
+
 @pytest.mark.skipif(not HAS_JEVA, reason="Requires Transformers #50614")
 class TestDataCollatorForJeva(TrlTestCase):
     @pytest.mark.parametrize("pretokenized", [False, True])
@@ -535,19 +582,6 @@ class TestDataCollatorForJeva(TrlTestCase):
             )
             torch.testing.assert_close(ids[mask.bool()], expected)
 
-    @pytest.mark.parametrize(
-        "question, label, target",
-        [
-            ({"type": "choice", "criteria": {"a": None, "b": None}}, {"target_index": 1}, [0, 0, 1]),
-            ({"type": "choice", "criteria": {"a": None}, "allow_null": True}, {"target_index": None}, [1, 0]),
-            ({"type": "noul"}, {"p_true": 0.8}, [0, 0.2, 0.8]),
-            ({"type": "score", "criteria": ["bad", "good"], "values": [1, 3]}, {"score": 2}, [0, 0.5, 0.5]),
-        ],
-    )
-    def test_decision_labels(self, collator, question, label, target):
-        batch = collator([{"state": "A state", "questions": {"decision": question}, **label}])
-        torch.testing.assert_close(batch["labels"], torch.tensor([target], dtype=torch.float32))
-
     def test_truncation(self, tokenizer, collator):
         row = {
             "state": "A long state",
@@ -581,9 +615,9 @@ class TestDataCollatorForClm(TrlTestCase):
         model.base_model.requires_grad_(False)
         collator = DataCollatorForClm(tokenizer, model.decision_config)
         records = [
-            ("An invoice", {"billing": None, "delivery": None}, [0, 0.75, 0.25]),
-            ("A different request", {"delivery": None, "other": None}, [0, 0.2, 0.8]),
-            ("Another invoice", {"billing": None, "delivery": None}, [0, 1, 0]),
+            ("An invoice", {"billing": None, "delivery": None}, {"billing": 0.75, "delivery": 0.25}),
+            ("A different request", {"delivery": None, "other": None}, {"delivery": 0.2, "other": 0.8}),
+            ("Another invoice", {"billing": None, "delivery": None}, {"billing": 1.0}),
         ]
         dataset = Dataset.from_list(
             [
