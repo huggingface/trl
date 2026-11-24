@@ -191,7 +191,7 @@ Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4
 
 ### `mistral_large_4_v2.jinja`
 
-Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B` since [6c0166e](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/commit/6c0166e17ab8a3d504ff1553804abec9fb0993dc)). Same format as `mistral_large_4.jinja`, plus the `developer` role read as `system`, empty text parts dropped, missing tool `description` / `parameters` filled in, and conversations allowed to start with an assistant message. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
+Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B` since [6c0166e](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/commit/6c0166e17ab8a3d504ff1553804abec9fb0993dc)). Same format as `mistral_large_4.jinja`, plus the `developer` role read as `system`, empty text parts dropped, missing tool `description` / `parameters` filled in, conversations of several messages allowed to start with an assistant message, and an empty conversation or a single message other than a user or system one rejected. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
 
 ### `mistral_medium_3_5.jinja`
 
