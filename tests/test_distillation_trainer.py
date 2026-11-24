@@ -377,7 +377,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             train_dataset=dataset,
         )
 
@@ -393,7 +393,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -424,7 +424,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -450,7 +450,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -594,7 +594,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -618,7 +618,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -640,7 +640,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -655,7 +655,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -679,7 +679,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -702,7 +702,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -741,7 +741,7 @@ class TestDistillationTrainer(TrlTestCase):
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -791,7 +791,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -818,7 +818,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -838,7 +838,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -859,7 +859,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -885,7 +885,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -907,7 +907,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -928,7 +928,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -960,7 +960,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -985,7 +985,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1077,7 +1077,7 @@ class TestDistillationTrainer(TrlTestCase):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
             trainer = DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
@@ -1103,7 +1103,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1143,7 +1143,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",  # identifier, so that the trainer quantizes it
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -1188,7 +1188,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",  # identifier, so that the trainer quantizes it
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -1234,7 +1234,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1271,7 +1271,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert training_args.gradient_checkpointing
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1305,7 +1305,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1330,7 +1330,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -1345,7 +1345,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
@@ -1358,7 +1358,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
@@ -1371,7 +1371,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Prompt-learning"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
@@ -1410,7 +1410,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
             train_dataset=dataset,
         )
@@ -1447,7 +1447,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.25, report_to="none"),
             train_dataset=dataset,
         )
@@ -1521,6 +1521,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
             "trl-internal-testing/tiny-InternVLForConditionalGeneration",
@@ -1647,6 +1654,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
         ],
