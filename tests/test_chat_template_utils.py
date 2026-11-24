@@ -59,6 +59,7 @@ from trl.chat_template_utils import (
     lfm2_chat_template,
     lfm2_v2_chat_template,
     mistral_large_4_v2_chat_template,
+    mistral_medium_3_5_v2_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
@@ -1597,6 +1598,17 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(
             "trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
             id="mistral3",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Mistral3ForConditionalGeneration", mistral_medium_3_5_v2_chat_template),
+            id="mistral3_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(

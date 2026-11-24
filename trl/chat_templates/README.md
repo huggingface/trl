@@ -199,7 +199,11 @@ Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B`
 
 ### `mistral_medium_3_5.jinja`
 
-Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B`). Renders the Mistral `[INST] ... [/INST]` format with reasoning in `[THINK] ... [/THINK]`, tools in `[AVAILABLE_TOOLS]`, tool calls as `[TOOL_CALLS]name[ARGS]{...}` and tool results in `[TOOL_RESULTS]`, and writes the `reasoning_effort` into a `[MODEL_SETTINGS]` block before the first user turn.
+Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B` before [ff62230](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B/commit/ff62230e1c990bdf05bbf6efa1c73fefe094ebf4)). Renders the Mistral `[INST] ... [/INST]` format with reasoning in `[THINK] ... [/THINK]`, tools in `[AVAILABLE_TOOLS]`, tool calls as `[TOOL_CALLS]name[ARGS]{...}` and tool results in `[TOOL_RESULTS]`, and writes the `reasoning_effort` into a `[MODEL_SETTINGS]` block before the first user turn.
+
+### `mistral_medium_3_5_v2.jinja`
+
+Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B` since [ff62230](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B/commit/ff62230e1c990bdf05bbf6efa1c73fefe094ebf4)). Same format as `mistral_medium_3_5.jinja`, plus today's and yesterday's dates filled in the default system prompt (the original prints `{today}` and `{yesterday}` literally), the `developer` role read as `system`, empty text parts dropped, missing tool `description` / `parameters` filled in, conversations of several messages allowed to start with an assistant message, and an empty conversation or a single message other than a user or system one rejected. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
 
 ### `muse_glimmer.jinja`
 

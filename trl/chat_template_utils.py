@@ -757,6 +757,8 @@ mistral_large_4_v2_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4_v2.ji
 
 mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
 
+mistral_medium_3_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_v2.jinja").read_text(encoding="utf-8")
+
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
 muse_glimmer_v2_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_v2.jinja").read_text(encoding="utf-8")
