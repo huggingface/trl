@@ -1643,6 +1643,11 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
+    def test_merged_sync_and_lora_bias_raises(self, fake_vllm):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(fake_vllm, self._lora_config(lora_bias=True))
+
     def test_merged_sync_sends_merged_lora_weights(self, fake_vllm):
         from peft.tuners.lora import LoraLayer
 

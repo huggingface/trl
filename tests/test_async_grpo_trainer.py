@@ -2818,6 +2818,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
+            save_only_model=True,
             vllm_server_base_url=server_url,
             report_to="none",
         )
@@ -5867,6 +5868,11 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
+
+    def test_merged_sync_and_lora_bias_raises(self, server):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(server, self._lora_config(lora_bias=True))
 
     def test_merged_sync_sends_merged_lora_weights(self, server):
         from peft.tuners.lora import LoraLayer
