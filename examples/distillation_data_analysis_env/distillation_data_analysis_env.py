@@ -272,8 +272,8 @@ def main() -> None:
                 try:
                     action = CallToolAction(tool_name="submit_answer", arguments={"answer": str(answer)})
                     self.reward = float(self.client.step(action).reward or 0.0)
-                except Exception:
-                    pass
+                except Exception:  # a lost connection loses the session, the episode scores 0
+                    self.client = None
             return "Answer received."
 
         def get_reward(self) -> float:
