@@ -154,7 +154,7 @@ class ServerDistillationTrainer(DistillationTrainer):
         if args is None:
             args = ServerDistillationConfig(output_dir="tmp_server_distillation")
 
-        # No local teacher: the base sets `self.teacher_model = None`, then we attach the server client below.
+        # No local teacher: the base sets `self.teacher_models = {}`, then we attach the server client below.
         super().__init__(
             model=model,
             teacher_model=None,
