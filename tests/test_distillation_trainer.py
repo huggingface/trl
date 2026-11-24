@@ -2287,6 +2287,61 @@ class TestDistillationTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_reset_does_not_receive_teacher_id(self, monkeypatch):
+        # When `teacher_model` is a dict, each example selects its teacher via its `teacher_id` field. Like
+        # `environment` in multi-environment mode, `teacher_id` is a control field, so it must not reach `reset`.
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "teacher_id": ["a", "b"] * 2}
+        )
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 examples per teacher, so a batch mixes both teachers
+            remove_unused_columns=True,  # `teacher_id` must survive column removal
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model={
+                "a": "trl-internal-testing/tiny-Qwen3ForCausalLM",
+                "b": "trl-internal-testing/tiny-Qwen3ForCausalLM",
+            },
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=CounterEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=['<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Every rollout was reset, and `teacher_id` is a control field not forwarded to `reset`.
+        records = recorded(record_path)
+        assert records["reset_counter"]
+        assert all("teacher_id" not in kwargs for kwargs in records["reset_counter"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
         # environment should fail with a clear error rather than a bare KeyError mid-rollout.

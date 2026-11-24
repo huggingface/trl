@@ -1836,6 +1836,9 @@ class DistillationTrainer(_BaseTrainer):
             for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
                 # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
                 reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
+                # `teacher_id` is a control field in multi-teacher mode, so it is not forwarded to `reset` either.
+                if self._multi_teacher:
+                    reset_kwargs = {k: v for k, v in reset_kwargs.items() if k != "teacher_id"}
                 observation = environment.reset(**reset_kwargs)
                 if observation is None:
                     continue
