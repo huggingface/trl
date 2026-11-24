@@ -1346,6 +1346,23 @@ class TestDPOTrainer(TrlTestCase):
         assert len(trainer.train_dataset) == 1
         assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
+    def test_all_examples_fully_truncated_raises(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["This is a very long prompt that fills up the whole max_length budget on its own"],
+                "chosen": [" yes"],
+                "rejected": [" no"],
+            }
+        )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, max_length=6, truncation_mode="keep_start", report_to="none"
+        )
+
+        with pytest.raises(ValueError, match="Every example in the train dataset was dropped"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
     def test_train_toolcall_data(self):
         dataset = load_dataset("trl-internal-testing/toolcall", "preference", split="train")
 

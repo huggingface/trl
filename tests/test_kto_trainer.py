@@ -428,6 +428,19 @@ class TestKTOTrainer(TrlTestCase):
         assert len(trainer.train_dataset) == 1
         assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
+    def test_all_examples_fully_truncated_raises(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["This is a very long prompt that fills up the whole max_length budget on its own"] * 2,
+                "completion": [" yes", " no"],
+                "label": [True, False],
+            }
+        )
+        training_args = KTOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+
+        with pytest.raises(ValueError, match="Every example in the train dataset was dropped"):
+            KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize(
         "eval_dataset_type",

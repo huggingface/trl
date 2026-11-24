@@ -1217,6 +1217,12 @@ class DPOTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
                     map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
                 dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
+                if isinstance(dataset, Dataset) and len(dataset) == 0:
+                    raise ValueError(
+                        f"Every example in the {dataset_name} dataset was dropped because its prompt alone fills "
+                        f"`max_length={args.max_length}`, so `truncation_mode='keep_start'` would leave no completion "
+                        "tokens. Increase `max_length` or use `truncation_mode='keep_end'`."
+                    )
 
         return dataset
 

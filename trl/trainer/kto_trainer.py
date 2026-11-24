@@ -1199,6 +1199,12 @@ class KTOTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.filter` does not support `desc`
                     map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
                 dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
+                if isinstance(dataset, Dataset) and len(dataset) == 0:
+                    raise ValueError(
+                        f"Every example in the {dataset_name} dataset was dropped because its prompt alone fills "
+                        f"`max_length={args.max_length}`, leaving no completion tokens to train on. Increase "
+                        "`max_length`."
+                    )
 
             # Add KL completions if needed. The KL term is estimated from mismatched (prompt, completion) pairs, built
             # by rotating the completions by +1 within each batch of size `per_device_train_batch_size`:
