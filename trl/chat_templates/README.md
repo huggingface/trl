@@ -402,6 +402,38 @@ Split the unified message output line into role-specific branches, so the `<star
 
 Patched Gemma 3 template. Same diff as `gemma_training.jinja` (split the unified output line into role-specific branches so the `<start_of_turn>model\n` prompt cue sits outside the generation block, and wrap the assistant content with `{% generation %}` / `{% endgeneration %}`), applied to the Gemma 3 base template that supports system messages and multimodal content blocks.
 
+### `gemma4_training.jinja`
+
+Patched Gemma 4 template. Diff vs `gemma4.jinja`: wrap the model output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss: the thought channel, the tool calls with the `<|tool_response>` the model emits after them, the content and the turn terminator. Tool responses, which the template renders inside the model turn, stay outside the markers.
+
+### `gemma4_v3_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v3.jinja`.
+
+### `gemma4_v4_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v4.jinja`.
+
+### `gemma4_v5_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v5.jinja`. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
+### `gemma4_v7_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v7.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v8_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v8.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v9_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v9.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v10_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v10.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
 ### `glm4moe_training.jinja`
 
 Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
