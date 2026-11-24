@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324, DeepSeek-V3.1 and DeepSeek-V3.2-Exp), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Phi-4, Phi-4-mini (including Phi-4-mini-flash-reasoning), Phi-4-mini-reasoning, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324, DeepSeek-V3.1 and DeepSeek-V3.2-Exp), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, Inkling (including Inkling-Small), LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Phi-4, Phi-4-mini (including Phi-4-mini-flash-reasoning), Phi-4-mini-reasoning, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -93,6 +93,38 @@ Split the unified assistant output so that the `<start_of_turn>model\n` header (
 
 Patched Gemma 3 template. Same diff as `gemma_training.jinja` (split the unified output line into role-specific branches so the `<start_of_turn>model\n` prompt cue sits outside the generation block, and wrap the assistant content with `{% generation %}` / `{% endgeneration %}`), applied to the Gemma 3 base template that supports system messages and multimodal content blocks.
 
+### `gemma4_training.jinja`
+
+Patched Gemma 4 template. Diff vs `gemma4.jinja`: wrap the model output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss: the thought channel, the tool calls with the `<|tool_response>` the model emits after them, the content and the turn terminator. Tool responses, which the template renders inside the model turn, stay outside the markers.
+
+### `gemma4_v3_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v3.jinja`.
+
+### `gemma4_v4_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v4.jinja`.
+
+### `gemma4_v5_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v5.jinja`. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
+### `gemma4_v7_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v7.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v8_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v8.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v9_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v9.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt.
+
+### `gemma4_v10_training.jinja`
+
+Patched Gemma 4 template. Same diff as `gemma4_training.jinja`, applied to `gemma4_v10.jinja`. With thinking disabled, the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`) that the original doesn't render in the conversation: the training template renders it outside the markers in a model turn after the last user message that has no thought, so the conversation continues the generation prompt. With thinking enabled, the generation prompt after a tool response pre-fills `<|channel>thought\n`, which stays outside the markers.
+
 ### `glm4moe_training.jinja`
 
 Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
@@ -102,6 +134,10 @@ Close each assistant turn inside the generation block with the role marker that 
 Wrap assistant message output (including the thinking block and tool calls) with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
+
+### `glm4_7_training.jinja` / `glm5_training.jinja` / `glm5_1_training.jinja` / `glm5_2_training.jinja` / `glm5_3_training.jinja` / `glm5_3_flash_training.jinja`
+
+Patched GLM-4.7, GLM-5, GLM-5.1, GLM-5.2, GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm4moe_training.jinja`, applied to `glm4_7.jinja`, `glm5.jinja`, `glm5_1.jinja`, `glm5_2.jinja`, `glm5_3.jinja` and `glm5_3_flash.jinja`: each assistant turn is closed inside the generation block with the role marker that opens the next turn, and the assistant output is wrapped with `{% generation %}` / `{% endgeneration %}`. The generation prompt of these templates always pre-fills the start of the thinking block (`<think>`, or with thinking disabled `</think>` up to GLM-5.1 and `<think></think>` from GLM-5.2), so that part of a rendered thinking block stays outside the markers. With thinking disabled (GLM-4.7 to GLM-5.2), the whole thinking block stays outside them, like in `glm4moe_training.jinja`, since the generation prompt already ends after `</think>`. The GLM-4.7 to GLM-5.2 training templates also render `None` content as empty text, like `glm4moe_training.jinja` (the GLM-5.3 templates already do).
 
 ### `qwen3_training.jinja`
 
@@ -146,6 +182,12 @@ Patched Idefics3 template. Diff vs `idefics3.jinja`:
 
 Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
 
+### `inkling_training.jinja`
+
+Patched Inkling template. Diff vs `inkling.jinja`:
+
+Capture each assistant turn and wrap it with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The first `<|message_model|>` of the turn stays outside the markers, since the generation prompt already ends with it; the later ones (between reasoning, text and tool calls) and the closing `<|content_model_end_sampling|>` are generated by the model, so they stay inside.
+
 ### `lfm2_training.jinja`
 
 Patched LFM2 template. Diff vs `lfm2.jinja`:
@@ -163,6 +205,14 @@ Wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in bo
 Patched Llama 3 template. Diff vs `llama3.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `llama3_1_training.jinja`
+
+Patched Llama 3.1 template. Diff vs `llama3_1.jinja`: wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the plain-content branch and the tool-call branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|start_header_id|>assistant<|end_header_id|>\n\n` prompt cue stays outside the generation block, while the content or the tool call and its `<|eot_id|>` / `<|eom_id|>` sit inside. The rendered text is unchanged.
+
+### `llama3_2_training.jinja`
+
+Patched Llama 3.2 template. Same diff as `llama3_1_training.jinja`, applied to `llama3_2.jinja`.
 
 ### `llava_next_training.jinja`
 
@@ -287,6 +337,16 @@ Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same as `qwen3_training.jinja
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted — prefix-preservation then holds even when the caller passes `preserve_thinking=False` — and wrap assistant output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss, with the part of the thinking block that the generation prompt pre-fills left outside them.
+
+### `qwen3_coder_training.jinja`
+
+Patched Qwen3-Coder template. Diff vs `qwen3_coder.jinja`:
+
+Wrap assistant message output, including tool calls, with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
+
+### `qwen3_coder_next_training.jinja`
+
+Patched Qwen3-Coder-Next template. Same diff as `qwen3_coder_training.jinja`, applied to `qwen3_coder_next.jinja`.
 
 ### `smollm2_training.jinja`
 
