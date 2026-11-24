@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
+import torch
+
 from .base_config import _BaseConfig
 
 
@@ -88,7 +90,9 @@ class SFTConfig(_BaseConfig):
             of this parameter.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
-            Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
+            Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on NVIDIA GPUs of
+            compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in host memory. It
+            does not pad elsewhere.
         eval_packing (`bool`, *optional*):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -248,8 +252,10 @@ class SFTConfig(_BaseConfig):
     pad_to_multiple_of: int | str | None = field(
         default="auto",
         metadata={
-            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple of "
-            "128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere."
+            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple "
+            "of 128 on Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on NVIDIA "
+            "GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in host "
+            "memory. It does not pad elsewhere."
         },
     )
     eval_packing: bool | None = field(
@@ -309,8 +315,14 @@ class SFTConfig(_BaseConfig):
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
         if self.pad_to_multiple_of == "auto":
-            # Neuron compiles once per input shape, so padding bounds the number of compilations
-            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
+            # Neuron compiles and cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+            cudnn_sdpa = (
+                torch.version.cuda is not None
+                and self.device.type == "cuda"
+                and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+                and (self.model_init_kwargs or {}).get("attn_implementation") in (None, "sdpa")
+            )
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" or cudnn_sdpa else None
         if self.loss_type == "chunked_nll":
             warnings.warn(
                 "`loss_type='chunked_nll'` is deprecated and will be removed in v2.0.0. Use `loss_type='nll'` (the "
