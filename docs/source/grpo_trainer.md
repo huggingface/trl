@@ -966,6 +966,8 @@ Tested with:
 
 - **Beam** — e.g., `reflection/Beam-1.0-501B-A23B`
 - [**DeepSeek-R1**](https://huggingface.co/collections/deepseek-ai/deepseek-r1) — e.g., `deepseek-ai/DeepSeek-R1` or `deepseek-ai/DeepSeek-R1-0528`
+- [**DeepSeek-V3.1**](https://huggingface.co/collections/deepseek-ai/deepseek-v31) — e.g., `deepseek-ai/DeepSeek-V3.1`
+- [**DeepSeek-V3.2**](https://huggingface.co/collections/deepseek-ai/deepseek-v32) — e.g., `deepseek-ai/DeepSeek-V3.2-Exp`
 - [**Gemma4**](https://huggingface.co/collections/google/gemma-4) — e.g., `google/gemma-4-E2B-it`
 - **GLM-4-MoE** ([4.5](https://huggingface.co/collections/zai-org/glm-45), [4.6](https://huggingface.co/collections/zai-org/glm-46) or [4.7](https://huggingface.co/collections/zai-org/glm-47)) — e.g., `zai-org/GLM-4.7`
 - [**GPT-OSS**](https://huggingface.co/collections/openai/gpt-oss) — e.g., `openai/gpt-oss-20b`
