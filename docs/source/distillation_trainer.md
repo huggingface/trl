@@ -270,7 +270,7 @@ You can also provide tools through `environment_factory`. In this mode, [`Distil
 > `environment_factory` requires `transformers>=5.2.0`.
 
 > [!NOTE]
-> The trainer keeps one environment instance per rollout in the generation batch, so `per_device_train_batch_size × gradient_accumulation_steps × num_processes` instances exist at once across processes, reused between batches. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
+> The trainer keeps one environment instance per rollout in the generation batch, so `per_device_train_batch_size × gradient_accumulation_steps × num_processes` instances exist at once across processes (more if `per_device_eval_batch_size` is larger), reused between batches. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
 
 Per rollout, the trainer samples one row of the `train_dataset`, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments, so the environment reads the task from the dataset.
 
