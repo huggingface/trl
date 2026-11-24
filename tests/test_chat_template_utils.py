@@ -58,6 +58,7 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    mistral_large_4_v2_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
@@ -1497,6 +1498,17 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(
             "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
             id="mistral_large4",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.22.0"),
+                    reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration", mistral_large_4_v2_chat_template),
+            id="mistral_large4_v2",
             marks=[
                 require_vision,
                 pytest.mark.skipif(

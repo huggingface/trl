@@ -187,7 +187,11 @@ Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b
 
 ### `mistral_large_4.jinja`
 
-Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B`). Same format as `mistral_medium_3_5.jinja`, without the default system prompt, with `reasoning_effort` set to `low`, `medium` or `high` (defaults to `high`), and with `response_format` (JSON object or JSON schema) written into the `[MODEL_SETTINGS]` block.
+Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B` before [6c0166e](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/commit/6c0166e17ab8a3d504ff1553804abec9fb0993dc)). Same format as `mistral_medium_3_5.jinja`, without the default system prompt, with `reasoning_effort` set to `low`, `medium` or `high` (defaults to `high`), and with `response_format` (JSON object or JSON schema) written into the `[MODEL_SETTINGS]` block.
+
+### `mistral_large_4_v2.jinja`
+
+Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B` since [6c0166e](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B/commit/6c0166e17ab8a3d504ff1553804abec9fb0993dc)). Same format as `mistral_large_4.jinja`, plus the `developer` role read as `system`, empty text parts dropped, missing tool `description` / `parameters` filled in, and conversations allowed to start with an assistant message. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
 
 ### `mistral_medium_3_5.jinja`
 
