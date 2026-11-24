@@ -637,7 +637,7 @@ class TransformersVLLMServer:
             )
         # With top-k or top-p, the worker first checks that the server returns the candidate set of each sampled token
         if path == "/version":
-            return 200, {"version": "0.28.0"}  # the first vLLM that returns it
+            return 200, {"version": "0.32.0"}  # the first vLLM with integer token ids in the logprobs
         if path == "/server_info":
             return 200, {
                 "vllm_config": {
@@ -682,7 +682,7 @@ class TransformersVLLMServer:
                                 {
                                     "logprob": logprob,
                                     "top_logprobs": [
-                                        {"token": f"token_id:{i}", "logprob": value}
+                                        {"token_id": i, "logprob": value}
                                         for i, value in zip(ids, values, strict=True)
                                         if value > -math.inf
                                     ],
@@ -4935,6 +4935,8 @@ class TestGenerateOneTurn(TrlTestCase):
 
     def test_sampler_logprobs_from_the_candidate_set_endpoint(self):
         loop = _rollout_loop(top_p=0.9, top_k=4, num_sampler_logprobs=2)
+        model_config = {"return_sampling_mask": True, "logprobs_mode": "processed_logprobs"}
+        self._check(loop, model_config, {"/inference/v1/generate": {}}, version="0.31.0")
         top_4 = [{"token": "token_id:7", "logprob": -0.5}, {"token": "token_id:4", "logprob": -1.0}]
         top_5 = [{"token": "token_id:5", "logprob": 0.0}, {"token": "token_id:8", "logprob": -9999.0}]
         response = {

@@ -1032,6 +1032,7 @@ class AsyncRolloutLoop:
             )
             self.sampling_replay = False
             return
+        self.generate_logprobs_by_id = Version(version) >= Version("0.32.0")
         async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
             r.raise_for_status()
             model_config = (await r.json())["vllm_config"]["model_config"]
@@ -1768,9 +1769,12 @@ class AsyncRolloutLoop:
         logprobs = [token["logprob"] for token in content]
         sampler_logprobs = None
         if self.num_sampler_logprobs:
-            sampler_logprobs = _by_token_id(
-                [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
-            )
+            if self.generate_logprobs_by_id:
+                sampler_logprobs = [{t["token_id"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
+            else:
+                sampler_logprobs = _by_token_id(
+                    [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
+                )
         return TurnRecord(
             prompt_ids,
             choice["token_ids"],
