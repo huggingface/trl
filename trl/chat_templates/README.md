@@ -241,6 +241,18 @@ Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-U
 
 Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `olmo3_think.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-7B-Think` and `allenai/Olmo-3-7B-Think-DPO`). Its generation prompt pre-fills `<think>`, and the reasoning is read inline in the assistant content. Does not support tool calling.
+
+### `olmo3_think_v2.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-7B-Think-SFT` and `allenai/Olmo-3.1-32B-Think`). Same as `olmo3_think.jinja`, with a different default system prompt.
+
+### `olmo3_think_v3.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-32B-Think`, `allenai/Olmo-3-32B-Think-SFT` and `allenai/Olmo-3-32B-Think-DPO`). Same as `olmo3_think.jinja`, with a different default system prompt.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -563,6 +575,18 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
+
+### `olmo3_think_training.jinja`
+
+Patched OLMo 3 Think template. Diff vs `olmo3_think.jinja`: wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, with the `<think>` that the generation prompt pre-fills left outside them.
+
+### `olmo3_think_v2_training.jinja`
+
+Patched OLMo 3 Think template. Same diff as `olmo3_think_training.jinja`, applied to `olmo3_think_v2.jinja`.
+
+### `olmo3_think_v3_training.jinja`
+
+Patched OLMo 3 Think template. Same diff as `olmo3_think_training.jinja`, applied to `olmo3_think_v3.jinja`.
 
 ### `phi3_training.jinja`
 
