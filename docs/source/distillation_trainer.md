@@ -244,10 +244,11 @@ from datasets import Dataset
 from trl import DistillationConfig, DistillationTrainer
 
 # Each row carries the prompt and the task data (here, the counter target to reach).
+targets = [i % 6 + 1 for i in range(64)]
 dataset = Dataset.from_dict(
     {
-        "prompt": [[{"role": "user", "content": f"Increment the counter to {i}."}] for i in range(1, 7)],
-        "target": list(range(1, 7)),
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {t}."}] for t in targets],
+        "target": targets,
     }
 )
 
