@@ -48,7 +48,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-m
     --max-model-len 4096
 ```
 
-With score centering enabled and either `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
+With `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and, with score centering, incorrect centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
 
 Then execute the script on GPU 1 using the following command:
 
