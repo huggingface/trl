@@ -56,6 +56,7 @@ import os
 import random
 from dataclasses import dataclass, field
 
+import aiohttp
 import numpy as np
 from datasets import Dataset
 from harness import Chat, Settings, run_team
@@ -112,6 +113,14 @@ class TeamRolloutLoop(AsyncRolloutLoop):
         kwargs = {"enable_thinking": self._settings.enable_thinking, **self.chat_template_kwargs}
         self._chat = Chat(self.tokenizer, chat_template=self.chat_template, **kwargs)
         self._rng = random.Random(os.getpid())
+        # every agent of every team can have a request in flight: size the HTTP pool for all of them, not one per team
+        self.session = self._team_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=c.max_concurrent_rollouts * c.team_agents + 1),
+            timeout=self.session.timeout,
+        )
+
+    async def close(self) -> None:
+        await self._team_session.close()
 
     async def generate(self, prompt_ids, max_tokens):
         """The harness's sampler: one `generate_one_turn` of up to `max_completion_length` tokens (the harness's
