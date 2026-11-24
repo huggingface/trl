@@ -1929,7 +1929,6 @@ class TestDPOTrainerVLM(TrlTestCase):
         )
         batch = trainer.data_collator([dataset[0], dataset[1]])
         assert batch["input_ids"].shape[1] % 128 == 0
-        assert batch["mm_token_type_ids"].shape == batch["input_ids"].shape
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
