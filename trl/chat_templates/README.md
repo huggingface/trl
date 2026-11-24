@@ -195,7 +195,7 @@ Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medi
 
 ### `mistral_medium_3_5_v2.jinja`
 
-Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B` since [ff62230](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B/commit/ff62230e1c990bdf05bbf6efa1c73fefe094ebf4)). Same format as `mistral_medium_3_5.jinja`, plus today's and yesterday's dates filled in the default system prompt (the original prints `{today}` and `{yesterday}` literally), the `developer` role read as `system`, empty text parts dropped, and conversations allowed to start with an assistant message. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
+Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B` since [ff62230](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B/commit/ff62230e1c990bdf05bbf6efa1c73fefe094ebf4)). Same format as `mistral_medium_3_5.jinja`, plus today's and yesterday's dates filled in the default system prompt (the original prints `{today}` and `{yesterday}` literally), the `developer` role read as `system`, empty text parts dropped, missing tool `description` / `parameters` filled in, conversations of several messages allowed to start with an assistant message, and an empty conversation or a single message other than a user or system one rejected. It ships its own `{% generation %}` markers and `response_template`, so `get_training_chat_template` uses it as is.
 
 ### `muse_glimmer.jinja`
 
