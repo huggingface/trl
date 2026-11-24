@@ -143,6 +143,28 @@ class TestDistributed(TrlTestCase):
             {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
         )
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_merged_lora_sync(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_expert_parallel_merged_sync_sends_merged_lora_weights_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
     @pytest.mark.parametrize(
         "config",
         [
