@@ -27,7 +27,7 @@ Original Cohere2 chat template (as shipped by `CohereLabs/tiny-aya-earth`).
 
 ### `deepseek_r1_distill.jinja`
 
-Original DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
+DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones) since February 2025 (for example `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` since [3865e12](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/commit/3865e12a1eb7cbd641ab3f9dfc28c588c6b0c1e9)). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
 
 ### `deepseek_r1_distill_v2.jinja`
 

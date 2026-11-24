@@ -1249,6 +1249,10 @@ class TestSupportsToolCalling:
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
+                id="r1_distill_v2",
+            ),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         ],
