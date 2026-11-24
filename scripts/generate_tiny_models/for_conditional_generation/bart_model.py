@@ -26,7 +26,7 @@ MODEL_ID = "facebook/bart-base"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 config = AutoConfig.from_pretrained(MODEL_ID)
-config.d_model = 24
+config.d_model = 96  # head size 96 // 12 = 8, as Flash Attention requires
 model = BartModel(config).to(dtype=torch.float32)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)

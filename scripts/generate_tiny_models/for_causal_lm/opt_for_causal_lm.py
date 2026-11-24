@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = OPTConfig(
     vocab_size=50272,
-    hidden_size=8,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
     num_hidden_layers=2,
     ffn_dim=32,

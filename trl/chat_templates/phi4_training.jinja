@@ -1,0 +1,20 @@
+{#- Training variant of the Phi-4 chat template (see phi4.jinja for the original).
+    Modifications vs the original:
+    - Added {% generation %} / {% endgeneration %} around assistant message output to support
+      assistant-only loss masking in SFT training.
+-#}
+{%- for message in messages %}
+    {%- if message['role'] == 'system' %}
+        {{- '<|im_start|>system<|im_sep|>' + message['content'] + '<|im_end|>' }}
+    {%- elif message['role'] == 'user' %}
+        {{- '<|im_start|>user<|im_sep|>' + message['content'] + '<|im_end|>' }}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<|im_start|>assistant<|im_sep|>' }}
+        {%- generation %}
+        {{- message['content'] + '<|im_end|>' }}
+        {%- endgeneration %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant<|im_sep|>' }}
+{%- endif %}
