@@ -88,9 +88,18 @@ def main(script_args, training_args, model_args, dataset_args):
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
-    if training_args.teacher_model_init_kwargs is not None:
-        teacher_model_init_kwargs.update(training_args.teacher_model_init_kwargs)
-    training_args.teacher_model_init_kwargs = teacher_model_init_kwargs
+    if isinstance(training_args.teacher_model_name_or_path, dict):
+        # With several teachers, the per-teacher kwargs override the defaults above. Unknown IDs are kept, so that the
+        # trainer reports them.
+        per_teacher_kwargs = training_args.teacher_model_init_kwargs or {}
+        training_args.teacher_model_init_kwargs = {
+            teacher_id: {**teacher_model_init_kwargs, **per_teacher_kwargs.get(teacher_id, {})}
+            for teacher_id in {**training_args.teacher_model_name_or_path, **per_teacher_kwargs}
+        }
+    else:
+        if training_args.teacher_model_init_kwargs is not None:
+            teacher_model_init_kwargs.update(training_args.teacher_model_init_kwargs)
+        training_args.teacher_model_init_kwargs = teacher_model_init_kwargs
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
