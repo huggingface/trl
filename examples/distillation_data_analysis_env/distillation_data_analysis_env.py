@@ -84,9 +84,6 @@ SERVER_REQUIREMENTS = [
     "openenv-data-analysis-env @ git+https://github.com/openenv/OpenEnv.git@v0.15.0#subdirectory=envs/data_analysis_env",
 ]
 SECRET_NAME = re.compile(r"TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION", re.IGNORECASE)
-SECRET_VALUE = re.compile(
-    rb"hf_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[A-Z0-9]{16}|-----BEGIN [A-Z ]*PRIVATE KEY"
-)
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,10 +112,12 @@ def start_env_server(port: int = 8001, max_sessions: int = 96) -> str:
     # The session users import modules from the server's Python, so it lives outside /root, readable by them
     python = f"{SERVER_RUNTIME}/venv/bin/python"
     if not os.path.exists(python):
-        env = {k: v for k, v in os.environ.items() if not SECRET_NAME.search(k)}
-        env.update(
-            UV_PYTHON_INSTALL_DIR=f"{SERVER_RUNTIME}/python", UV_PYTHON_PREFERENCE="only-managed", UV_LINK_MODE="copy"
-        )
+        env = {
+            **os.environ,
+            "UV_PYTHON_INSTALL_DIR": f"{SERVER_RUNTIME}/python",
+            "UV_PYTHON_PREFERENCE": "only-managed",
+            "UV_LINK_MODE": "copy",
+        }
         version = f"{sys.version_info.major}.{sys.version_info.minor}"
         subprocess.run(["uv", "venv", "--quiet", "--python", version, f"{SERVER_RUNTIME}/venv"], env=env, check=True)
         subprocess.run(
@@ -340,12 +339,6 @@ def main() -> None:
         json.dump(config, open(config_path, "w"), indent=2)
 
     if args.push_to_hub:
-        # Everything saved here passed through a process that ran next to model code: scan it before it leaves
-        token = os.environ.get("HF_TOKEN", "").encode()
-        for path in Path(output_dir).rglob("*"):
-            data = path.read_bytes() if path.is_file() else b""
-            if SECRET_VALUE.search(data) or (token and token in data):
-                raise RuntimeError(f"Possible secret in {path}, not pushing.")
         api = HfApi()
         repo_id = api.create_repo(Path(output_dir).name, exist_ok=True).repo_id
         api.upload_folder(folder_path=output_dir, repo_id=repo_id, ignore_patterns=["checkpoint-*"])

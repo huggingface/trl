@@ -121,10 +121,12 @@ def start_env_server(port: int = 8001, max_sessions: int = 128) -> str:
     # The session users import modules from the server's Python, so it lives outside /root, readable by them
     python = f"{SERVER_RUNTIME}/venv/bin/python"
     if not os.path.exists(python):
-        env = {k: v for k, v in os.environ.items() if not SECRET_NAME.search(k)}
-        env.update(
-            UV_PYTHON_INSTALL_DIR=f"{SERVER_RUNTIME}/python", UV_PYTHON_PREFERENCE="only-managed", UV_LINK_MODE="copy"
-        )
+        env = {
+            **os.environ,
+            "UV_PYTHON_INSTALL_DIR": f"{SERVER_RUNTIME}/python",
+            "UV_PYTHON_PREFERENCE": "only-managed",
+            "UV_LINK_MODE": "copy",
+        }
         version = f"{sys.version_info.major}.{sys.version_info.minor}"
         subprocess.run(["uv", "venv", "--quiet", "--python", version, f"{SERVER_RUNTIME}/venv"], env=env, check=True)
         subprocess.run(

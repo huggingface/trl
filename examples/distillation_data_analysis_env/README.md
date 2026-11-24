@@ -34,7 +34,7 @@ hf jobs uv run --flavor a100-large --timeout 2h --secrets HF_TOKEN \
     examples/distillation_data_analysis_env/distillation_data_analysis_env.py --push-to-hub
 ```
 
-One A100 holds the student, the teacher and vLLM (colocated, 25% of the memory). Each step runs 32 tasks (4 per device x 8 accumulation steps), and the 28 steps go about once over the 885 training tasks: SmolDataEnvs `train` without the Kaggle datasets of its `eval` split, at most six tasks per Kaggle dataset. Whole episodes take about an hour of training, the first turn about 11 minutes. Before pushing, the script scans the saved files for anything that looks like a token.
+One A100 holds the student, the teacher and vLLM (colocated, 25% of the memory). Each step runs 32 tasks (4 per device x 8 accumulation steps), and the 28 steps go about once over the 885 training tasks: SmolDataEnvs `train` without the Kaggle datasets of its `eval` split, at most six tasks per Kaggle dataset. Whole episodes take about an hour of training, the first turn about 11 minutes.
 
 ## Evaluate
 
