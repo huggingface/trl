@@ -720,24 +720,13 @@ class TestSFTTrainer(TrlTestCase):
             checkpointing_args = {"activation_checkpointing": False}
         else:
             checkpointing_args = {"gradient_checkpointing": False}
-        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
         if peft_type == "prompt_tuning":
-            peft_config = PromptTuningConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-                tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            )
+            peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         elif peft_type == "prefix_tuning":
-            peft_config = PrefixTuningConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-            )
+            peft_config = PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         elif peft_type == "prompt_encoder":
-            peft_config = PromptEncoderConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-                encoder_hidden_size=model.config.hidden_size,  # This will be overwritten below
-            )
+            peft_config = PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
