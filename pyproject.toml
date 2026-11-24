@@ -254,7 +254,7 @@ filterwarnings = [
     # `get_peft_model` call (upstream, not actionable in TRL: TRL reads `is_activation_checkpointing` on 5.23)
     # Triggered by every test that trains with a PEFT config
     # Tracking issue: https://github.com/huggingface/trl/issues/8386
-    # Upstream fix (merged, unreleased as of peft 0.21.3): https://github.com/huggingface/peft/pull/4114
+    # Upstream fix (released in peft 0.22.0): https://github.com/huggingface/peft/pull/4114
     # Remove once: no supported peft version emits it
     "ignore:`is_gradient_checkpointing` is deprecated:FutureWarning",
 ]
