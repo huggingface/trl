@@ -326,8 +326,9 @@ class DistillationTrainer(_BaseTrainer):
 
             With a single callable, every example uses the same environment, with one instance per rollout so their
             interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
-            environment by name, and only that environment's tools are exposed in its prompt. This feature is
-            experimental and may change or be removed at any time without prior notice.
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     loss_is_scaled_for_ga = True

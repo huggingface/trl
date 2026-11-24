@@ -264,10 +264,13 @@ trainer = DistillationTrainer(
 
 ### Environments
 
-You can also provide tools through `environment_factory`, with the same contract as in [`GRPOTrainer`](grpo_trainer#environments). [`DistillationTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. The student runs a multi-turn episode against its own instance, the teacher scores every token the student generated with the whole episode (tool results included) as context, and the tool-result tokens are masked out of the loss.
+You can also provide tools through `environment_factory`. In this mode, [`DistillationTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. The student runs a multi-turn episode against its own instance, the teacher scores every token the student generated with the whole episode (tool results included) as context, and the tool-result tokens are masked out of the loss.
 
 > [!IMPORTANT]
 > `environment_factory` requires `transformers>=5.2.0`.
+
+> [!NOTE]
+> The trainer keeps one environment instance per rollout in the generation batch, so `per_device_train_batch_size × gradient_accumulation_steps × num_processes` instances exist at once across processes, reused between batches. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
 
 Per rollout, the trainer samples one row of the `train_dataset`, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments, so the environment reads the task from the dataset.
 
@@ -320,9 +323,9 @@ trainer.train()
 
 The counter task is solved in one tool call, so it only shows the API. For a task where the later turns matter, see the [`distillation_data_analysis_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_data_analysis_env) example and its comparison of whole episodes against the first turn.
 
-An environment class has two reserved methods, `reset` and `get_reward`, which are not exposed to the model as tools:
+An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
 
-- `reset` (required) is called when the rollout starts. It can return either `None` or a string: when it returns a string, that string is appended to the last user message.
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In distillation, when it returns a string, that string is appended to the last user message.
 - `get_reward` (optional) takes no argument and returns a `float`. Distillation has no reward, so it is called once per completed rollout only to log the episode's score as `rewards/{EnvironmentClass}/mean`, which is handy to follow task success while the loss goes down. It also lets an environment release per-episode resources. It runs on every rollout, so an expensive `get_reward` (for example one that runs a test suite) adds to the time of every step.
 
 > [!IMPORTANT]
