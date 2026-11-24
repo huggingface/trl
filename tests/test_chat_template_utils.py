@@ -34,6 +34,7 @@ from trl.chat_template_utils import (
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
     deepseekv3_v5_chat_template,
+    deepseekv3_v6_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
@@ -59,12 +60,15 @@ from trl.chat_template_utils import (
     lfm2_v2_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
+    muse_spark_v3_chat_template,
     parse_response,
     phi4_chat_template,
     phi4_mini_chat_template,
     phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
+    qwen2_5_v2_chat_template,
     qwen3_6_v2_chat_template,
+    qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
@@ -334,6 +338,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template, id="qwen2.5-base"
             ),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template, id="qwen2.5-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template, id="qwen3-v2"),
         ],
     )
@@ -772,6 +777,8 @@ class TestAddResponseSchema:
             pytest.param(gemma4_v8_chat_template, id="gemma4-v8"),
             pytest.param(gemma4_v9_chat_template, id="gemma4-v9"),
             pytest.param(gemma4_v10_chat_template, id="gemma4-v10"),
+            # Re-uploads may add or drop the trailing newline (#8502)
+            pytest.param(gemma4_v10_chat_template.removesuffix("\n"), id="gemma4-v10-no-trailing-newline"),
         ],
     )
     @pytest.mark.parametrize(
@@ -864,6 +871,14 @@ class TestSupportsToolCalling:
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2_loop",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
             pytest.param(
@@ -1342,6 +1357,9 @@ class TestIsChatTemplateStopTokenTrained:
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template), id="deepseekv3-v6"
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
             id="diffusion_gemma",
             marks=[
@@ -1465,6 +1483,7 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), id="qwen2.5_base"
         ),
+        pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template), id="qwen2.5_v2"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl", marks=require_vision
         ),
@@ -1552,6 +1571,18 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        # Re-uploads may add or drop the trailing newline (#8502)
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_chat_template + "\n"),
+            id="qwen38_trailing_newline",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
+        ),
         # SmolLM2 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has
         pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
@@ -1574,6 +1605,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param(
             ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", muse_spark_v2_chat_template),
             id="muse_spark_v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", muse_spark_v3_chat_template),
+            id="muse_spark_v3",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -1745,8 +1787,11 @@ class TestGetTrainingChatTemplate:
             # assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
-        elif tokenizer_name == ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template):
-            # Same, after the `</think>` that DeepSeek-V3.1 renders to open a non-thinking assistant turn
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template),
+        ):
+            # Same, after the `</think>` that DeepSeek-V3.1 and V3.2-Exp render to open a non-thinking assistant turn
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜></think>", "<｜Assistant｜></think>" + reasoning)
         else:
@@ -1768,6 +1813,7 @@ class TestGetTrainingChatTemplate:
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v4_chat_template),
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template),
         ):
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
             # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
@@ -2049,6 +2095,9 @@ class TestDeepseekTrainingChatTemplates:
             pytest.param(
                 ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v5_chat_template), id="deepseekv3-v5"
             ),
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v6_chat_template), id="deepseekv3-v6"
+            ),
         ],
     )
     def test_assistant_masks_exclude_turn_openers(self, tokenizer_name):
@@ -2081,11 +2130,18 @@ class TestDeepseekTrainingChatTemplates:
         assert "<｜Assistant｜>" not in trained
         assert "<｜tool▁outputs▁end｜>" not in trained
 
-    def test_deepseekv3_v5_thinking_trains_reasoning(self):
-        # With `thinking=True`, the DeepSeek-V3.1 generation prompt ends with `<think>`, so the training template must
-        # open the assistant turn the same way and train the reasoning that follows
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(deepseekv3_v5_chat_template, id="deepseekv3-v5"),
+            pytest.param(deepseekv3_v6_chat_template, id="deepseekv3-v6"),
+        ],
+    )
+    def test_deepseekv3_thinking_trains_reasoning(self, chat_template):
+        # With `thinking=True`, the DeepSeek-V3.1 and V3.2-Exp generation prompts end with `<think>`, so the training
+        # template must open the assistant turn the same way and train the reasoning that follows
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
-        tokenizer.chat_template = deepseekv3_v5_chat_template
+        tokenizer.chat_template = chat_template
         chat_template = get_training_chat_template(tokenizer)
         messages = [
             {"role": "user", "content": "What color is the sky?"},
@@ -2259,6 +2315,17 @@ class TestNamedChatTemplateVariants:
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+            id="inkling2_loop",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ],
         ),
