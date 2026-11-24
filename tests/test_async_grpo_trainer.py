@@ -4288,12 +4288,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
-    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
-    "text config",
-    strict=True,
-)
-
 _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.22.0"),
     reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
@@ -4399,9 +4393,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),
         pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, id="idefics3"),
-        pytest.param(
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl", marks=_VLM_TEXT_HEAD_DIM_4
-        ),
+        pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl"),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
