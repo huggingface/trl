@@ -96,6 +96,13 @@ if is_peft_available():
     from peft import LoraConfig, PrefixTuningConfig, get_peft_model
 
 
+# Tree packing refuses gated DeltaNet layers (Qwen3.5) before transformers 5.15 (see #8406)
+_GATED_DELTANET_BEFORE_5_15 = pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.15.0"),
+    reason="Tree packing of gated DeltaNet layers requires transformers>=5.15.0",
+)
+
+
 # The reward functions, tools and environments of the tests are module-level: the rollout worker runs them in a
 # spawned process, which unpickles them by import path.
 def multiply_tool(a: int, b: int) -> int:
@@ -3077,7 +3084,9 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+            ),
         ],
     )
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
@@ -3116,8 +3125,12 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", marks=_GATED_DELTANET_BEFORE_5_15
+            ),
         ],
     )
     def test_train_vlm_text_only_data(self, model_id, make_vllm_server):
@@ -3266,6 +3279,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         trainer.train()
         assert len(trainer._logs["images"]) == 0
 
+    @_GATED_DELTANET_BEFORE_5_15
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
     @require_response_parsing
     def test_train_with_tools_multimodal_response(self, make_vllm_server):
@@ -3317,6 +3331,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @_GATED_DELTANET_BEFORE_5_15
     @pytest.mark.xfail(raises=ValueError, reason="Images are not supported", strict=True)
     @require_response_parsing
     def test_train_with_tools_text_response_multimodal_prompt(self, make_vllm_server):
@@ -3390,8 +3405,16 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen35",
+                marks=_GATED_DELTANET_BEFORE_5_15,
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen36-moe",
+                marks=_GATED_DELTANET_BEFORE_5_15,
+            ),
         ],
     )
     @pytest.mark.usefixtures("stub_weight_transfer")
@@ -3414,8 +3437,16 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
-            pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen35",
+                marks=_GATED_DELTANET_BEFORE_5_15,
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen36-moe",
+                marks=_GATED_DELTANET_BEFORE_5_15,
+            ),
         ],
     )
     @pytest.mark.usefixtures("stub_weight_transfer")
@@ -4278,9 +4309,24 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            {},
+            id="qwen35-gdn",
+            marks=_GATED_DELTANET_BEFORE_5_15,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+            {},
+            id="qwen38-gdn",
+            marks=_GATED_DELTANET_BEFORE_5_15,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            {},
+            id="qwen36-moe-gdn",
+            marks=_GATED_DELTANET_BEFORE_5_15,
+        ),
         pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron-h-mamba2"),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv", marks=_LFM2_CONV_BEFORE_5_22),
         pytest.param(

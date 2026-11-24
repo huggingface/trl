@@ -49,6 +49,10 @@ DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and
 
 DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepseek-ai/DeepSeek-V3.1-Terminus` and `deepseek-ai/DeepSeek-V3.1-Base`). Unlike the earlier DeepSeek templates, it opens each assistant turn with `<｜Assistant｜>` followed by `</think>`, or by `<think>` in the generation prompt when `thinking=True`, and renders tool calls as `name<｜tool▁sep｜>arguments` with no type or JSON fence. It drops the reasoning from assistant content, and renders tool-call arguments only as strings.
 
+### `deepseekv3_v6.jinja`
+
+DeepSeek-V3.2-Exp chat template (as shipped by `deepseek-ai/DeepSeek-V3.2-Exp` and `deepseek-ai/DeepSeek-V3.2-Exp-Base`). Same as `deepseekv3_v5.jinja`, except for the conditions under which it opens an assistant turn and renders the generation prompt (also after a system-only prompt, and the generation prompt also after an assistant message that is not a prefix).
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -249,6 +253,10 @@ Original Phi-4-mini-reasoning chat template (`microsoft/Phi-4-mini-reasoning`). 
 
 Original Qwen2.5 chat template.
 
+### `qwen2_5_v2.jinja`
+
+Qwen2.5 chat template shipped on release day by `Qwen/Qwen2.5-7B-Instruct`, `Qwen/Qwen2.5-Coder-7B-Instruct` and the other Qwen2.5 instruct checkpoints, before [acbd965](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/commit/acbd96531cda22292a3ceaa67e984955d3965282), and still by re-uploads such as `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit`. Same as `qwen2_5.jinja`, except that the tool-calling instructions show the call format as `{{"name": ..., "arguments": ...}}` instead of `{"name": ..., "arguments": ...}`. Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
+
 ### `qwen2_5_base.jinja`
 
 Qwen2.5 chat template shipped by the base checkpoints (`Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-3B`, `Qwen/Qwen2.5-7B`, `Qwen/Qwen2.5-14B`, ...). Same as `qwen2_5.jinja`, except for the default system prompt (`You are a helpful assistant.`). Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
@@ -373,6 +381,10 @@ Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, 
 ### `deepseekv3_v5_training.jinja`
 
 Patched DeepSeek-V3.1 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v5.jinja`: `| tojson` on tool-call arguments, the `'</think>'` split removed, `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜Assistant｜>` and the think tag that open an assistant turn left outside them, and `message.get('content')` for the content check. It also opens the assistant turn with `<think>` whenever `thinking=True`, as the generation prompt does, where the original does so only for a prefix message.
+
+### `deepseekv3_v6_training.jinja`
+
+Patched DeepSeek-V3.2-Exp template. Same diff as `deepseekv3_v5_training.jinja`, applied to `deepseekv3_v6.jinja`.
 
 ### `diffusion_gemma_training.jinja`
 
@@ -521,6 +533,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
+
+### `qwen2_5_v2_training.jinja`
+
+Patched release-day Qwen2.5 template. Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_v2.jinja`.
 
 ### `qwen2_5_base_training.jinja`
 
