@@ -33,6 +33,6 @@ jobs:
         # Dependabot bumps only the SHA, so both are kept in sync by hand
         # Upstream issue: https://github.com/trufflesecurity/trufflehog/issues/4857
         # Remove once: the action defaults `version` to its own release, making this pin redundant
-        version: 3.99.8@sha256:674b2f187620a19df77f44cf9a7d77efcc581a5662accef2f2739cbb46ba4a3a
+        version: 3.99.9@sha256:2ec535840f860aa27f11fee20222fb790326ecd66325c96bd49d02ec6af46eca
         # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
         extra_args: --results=verified,unknown --fail-on-scan-errors
