@@ -30,6 +30,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -3622,6 +3623,60 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="GLM4 tokenizer requires transformers>=5.0.0",
+    )
+    @require_response_parsing
+    def test_train_with_tools_glm4moe(self):
+        # GLM ends a tool call with `<|observation|>`, and its chat template opens the tool result with it too
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "\n<think></think>\n<tool_call>multiply_tool\n<arg_key>a</arg_key>\n<arg_value>3</arg_value>\n"
+                "<arg_key>b</arg_key>\n<arg_value>4</arg_value>\n</tool_call><|observation|>",
+                "I don't know any tool<|user|>",
+            ],
+            after_tool="Done!<|user|>",
+        )
+
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's `<|observation|>`, without repeating it
+                assert trainer.processing_class.decode(input_ids[0]).count("<|observation|>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
         reason="Tool parsing is not supported in transformers versions below 5.0.0",
@@ -3766,6 +3821,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
             num_generations=2,
             shuffle_dataset=False,  # keep the [counter, counter, echo, echo] batch layout deterministic
+            remove_unused_columns=True,  # `environment` must survive column removal
             report_to="none",
         )
 
@@ -4460,6 +4516,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.24.0"),
+                        reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                    ),
+                    pytest.mark.xfail(
+                        raises=AssertionError,
+                        reason="The tiny model's random completions never open an answer, so they all parse to the same "
+                        "empty one, get the same reward and leave nothing to learn",
+                        strict=True,
+                    ),
+                ],
+            ),
             "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -4822,6 +4893,13 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                ),
+            ),
         ],
     )
     @require_vllm
@@ -5070,7 +5148,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_response_parsing
-    def test_train_with_tools_gemma4(self):
+    @pytest.mark.parametrize("eos_token", ["<eos>", "<turn|>"])
+    def test_train_with_tools_gemma4(self, eos_token):
         # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -5082,11 +5161,15 @@ class TestGRPOTrainerVLM(TrlTestCase):
             max_completion_length=512,
             report_to="none",
         )
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        # Gemma 4's eos is `<eos>`, but fine-tuned copies may set it to `<turn|>`, e.g. `SFTConfig(eos_token="<turn|>")`
+        processor.tokenizer.eos_token = eos_token
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
+            processing_class=processor,
             tools=[screenshot_tool],
         )
 
@@ -5101,7 +5184,14 @@ class TestGRPOTrainerVLM(TrlTestCase):
             after_tool="Done!<turn|>",
             tool_response_marker="<tool_response|>",
         )
-        with patch.object(trainer.model, "generate", script.generate):
+
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's only tool call
+                assert processor.tokenizer.decode(input_ids[0]).count("<|tool_call>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
