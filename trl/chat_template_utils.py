@@ -725,6 +725,8 @@ gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding
 
 idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
 
+inkling_chat_template = (_CHAT_TEMPLATES_DIR / "inkling.jinja").read_text(encoding="utf-8")
+
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
@@ -917,7 +919,12 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = None, glm4moe_template
     elif chat_template in [gptoss_chat_template, gptoss_training_chat_template]:
         schema, template = gptoss_schema, gptoss_template
-    elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
+    elif chat_template in [
+        llama3_1_chat_template,
+        llama3_1_training_chat_template,
+        llama3_2_chat_template,
+        llama3_2_training_chat_template,
+    ]:
         schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
@@ -1301,11 +1308,17 @@ gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").
 
 idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinja").read_text(encoding="utf-8")
 
+inkling_training_chat_template = (_CHAT_TEMPLATES_DIR / "inkling_training.jinja").read_text(encoding="utf-8")
+
 lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
 
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
+
+llama3_1_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1_training.jinja").read_text(encoding="utf-8")
+
+llama3_2_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
 
@@ -1584,6 +1597,9 @@ def get_training_chat_template(
     if chat_template == idefics3_chat_template:
         return idefics3_training_chat_template
 
+    if chat_template == inkling_chat_template:
+        return inkling_training_chat_template
+
     if chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
 
@@ -1592,6 +1608,12 @@ def get_training_chat_template(
 
     if chat_template == llama3_chat_template:
         return llama3_training_chat_template
+
+    if chat_template == llama3_1_chat_template:
+        return llama3_1_training_chat_template
+
+    if chat_template == llama3_2_chat_template:
+        return llama3_2_training_chat_template
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
