@@ -1207,6 +1207,13 @@ class TestSupportsToolCalling:
             ),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+            # The Phi-4 templates never read `tool_calls`
+            pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", phi4_chat_template), id="phi4"),
+            pytest.param(("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_chat_template), id="phi4_mini"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_reasoning_chat_template),
+                id="phi4_mini_reasoning",
+            ),
             # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granitemoe"),
@@ -1217,6 +1224,12 @@ class TestSupportsToolCalling:
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            # Same `tool_calls` rendering as DeepSeek-R1-Distill
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template), id="deepseekv3-v3"
+            ),
+            # SmolLM2 never reads `tool_calls`
+            pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2_vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5_vl"),
         ],
