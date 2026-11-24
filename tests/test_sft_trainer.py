@@ -2873,7 +2873,7 @@ class TestSFTTrainer(TrlTestCase):
         [
             ([151645, 151643], [151644, 151645, 151643]),  # a list of ids, as Qwen and Llama ship
             (151645, [151644, 151645]),  # a single id, as Mistral and GPT-2 ship
-            (None, [151644]),  # no id at all
+            (None, [151644, 151645]),  # no id at all: <|im_end|> added (#8564)
             ([151644, 151645], [151644, 151645]),  # a list that already holds the requested token
         ],
     )
@@ -2894,6 +2894,16 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
+
+    def test_end_of_turn_token_added_to_generation_config(self):
+        # The generation config stops only on <eos> (1), not on the template's <end_of_turn> (107) (#8564)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     @pytest.mark.parametrize(
         "trainer_cls, topic",

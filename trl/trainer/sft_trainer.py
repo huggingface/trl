@@ -1028,6 +1028,26 @@ class SFTTrainer(_BaseTrainer):
                 "`{% generation %}...{% endgeneration %}`."
             )
 
+        # Stop generation on the chat template's end-of-turn token (#8564)
+        if is_conversational(dataset_sample):
+            messages = [{"role": "user", "content": "dummy"}, {"role": "assistant", "content": "dummy reply"}]
+            if self._is_vlm:
+                for message in messages:
+                    message["content"] = [{"type": "text", "text": message["content"]}]
+            text = processing_class.apply_chat_template(messages, tokenize=False, chat_template=self.chat_template)
+            index = text.rfind("dummy reply")
+            suffix = text[index + len("dummy reply") :] if index != -1 else ""
+            suffix_ids = self._tokenizer(suffix, add_special_tokens=False)["input_ids"]
+            # The last token after the final assistant turn, e.g. gpt-oss's <|return|>, not its <|end|>
+            end_of_turn_id = next((t for t in reversed(suffix_ids) if self._tokenizer.decode([t]).strip() != ""), None)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id in self._tokenizer.get_added_vocab().values() and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         if args.completion_only_loss is None:
