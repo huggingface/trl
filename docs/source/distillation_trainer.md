@@ -96,6 +96,8 @@ While training and evaluating, we record the following metrics:
 - `rewards/{EnvironmentClass}/mean`: The average value returned by the environment's `get_reward` over the rollouts bound to that environment class. Logged only when an `environment_factory` defines `get_reward`, and never used in the loss.
 - `rewards/{EnvironmentClass}/std`: The standard deviation of the value returned by `get_reward`, over the same rollouts.
 - `entropy`: Average entropy of token predictions across generated completions (in nats).
+- `teacher/<id>/jsd`: The mean per-token divergence against teacher `<id>`, or NaN when no example was routed to it. Logged only when several teachers are passed.
+- `teacher/<id>/token_frac`: The fraction of completion tokens scored by teacher `<id>`. Logged only when several teachers are passed.
 
 ## Customization
 
@@ -177,6 +179,36 @@ trainer.train()
 
 > [!WARNING]
 > The distillation loss reads `lm_head.weight` directly and runs the student backbone without going through `PeftModel.forward()`. Adapters on `lm_head` (via `target_modules`) and prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) are therefore rejected, since they would be silently ignored. To train the head, use `modules_to_save=["lm_head"]` instead.
+
+### Multiple teachers
+
+To distill several frozen domain experts (e.g. a math expert and a code expert) into a single student, as in [MOPD](https://huggingface.co/papers/2606.30406), pass a dictionary mapping teacher IDs to teachers instead of a single teacher. Each example selects its teacher through a `teacher_id` column, and its completion is scored by that teacher only. Every teacher must share the student's vocabulary, and is prepared like a single teacher, so DeepSpeed ZeRO-3 shards (and optionally offloads) each of them. FSDP is not supported with a teacher mapping.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            [{"role": "user", "content": "What is the derivative of x^2?"}],
+            [{"role": "user", "content": "Write a function that reverses a string."}],
+        ],
+        "teacher_id": ["math", "code"],
+    }
+)
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    teacher_model={
+        "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    },
+    args=DistillationConfig(output_dir="mopd-student", teacher_model_init_kwargs={"code": {"dtype": "bfloat16"}}),
+    train_dataset=dataset,
+)
+trainer.train()
+```
 
 ## Agent Training
 
