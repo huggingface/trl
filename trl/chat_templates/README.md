@@ -444,6 +444,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 
 Render `None` content (e.g. an assistant tool-call turn with `content: None`) as empty text, as transformers >= 5.23 does, instead of the text `None`.
 
+### `glm4_7_training.jinja` / `glm5_training.jinja` / `glm5_1_training.jinja` / `glm5_2_training.jinja` / `glm5_3_training.jinja` / `glm5_3_flash_training.jinja`
+
+Patched GLM-4.7, GLM-5, GLM-5.1, GLM-5.2, GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm4moe_training.jinja`, applied to `glm4_7.jinja`, `glm5.jinja`, `glm5_1.jinja`, `glm5_2.jinja`, `glm5_3.jinja` and `glm5_3_flash.jinja`: each assistant turn is closed inside the generation block with the role marker that opens the next turn, and the assistant output is wrapped with `{% generation %}` / `{% endgeneration %}`. The generation prompt of these templates always pre-fills the start of the thinking block (`<think>`, or with thinking disabled `</think>` up to GLM-5.1 and `<think></think>` from GLM-5.2), so that part of a rendered thinking block stays outside the markers. With thinking disabled (GLM-4.7 to GLM-5.2), the whole thinking block stays outside them, like in `glm4moe_training.jinja`, since the generation prompt already ends after `</think>`. The GLM-4.7 to GLM-5.2 training templates also render `None` content as empty text, like `glm4moe_training.jinja` (the GLM-5.3 templates already do).
+
 ### `gptoss_training.jinja`
 
 Patched GPT-OSS template. Diff vs `gptoss.jinja`:
