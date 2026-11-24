@@ -590,7 +590,7 @@ class TestModelParallel:
             "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
         )
         teacher_model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/small-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32", device_map=device_map
         )
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

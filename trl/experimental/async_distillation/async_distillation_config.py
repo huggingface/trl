@@ -107,8 +107,8 @@ class AsyncDistillationConfig(_BaseConfig):
         beta (`float`, *optional*, defaults to `0.0`):
             Interpolation coefficient for the generalized Jensen-Shannon Divergence. `0.0` is forward KL
             (mean-seeking), `1.0` is reverse KL (mode-seeking), and values in between interpolate, following the same
-            generalized-JSD formulation [`~trl.experimental.distillation.DistillationTrainer`] computes internally. The
-            support the divergence is computed over differs by regime, mirroring
+            generalized-JSD formulation [`DistillationTrainer`] computes internally. The support the divergence is
+            computed over differs by regime, mirroring
             [`~trl.experimental.server_distillation.ServerDistillationTrainer`]: at `beta=0.0`, the full
             `teacher_top_k`-wide teacher-reported support (plus tail bucket) is used, since forward KL's weighting is
             exactly what that support provides. At `beta != 0.0`, the support is narrowed to just two candidates — the

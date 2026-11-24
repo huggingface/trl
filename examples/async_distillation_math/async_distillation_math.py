@@ -22,7 +22,7 @@
 """
 Async on-policy distillation: a background rollout worker generates the student's own completions and scores them
 against a teacher served over HTTP, decoupling generation from the gradient-update loop. Unlike
-[`~trl.experimental.distillation.DistillationTrainer`], the teacher is never loaded locally — only a vLLM server URL
+[`DistillationTrainer`], the teacher is never loaded locally — only a vLLM server URL
 is needed, so the teacher can live on entirely different hardware from the student/trainer.
 
 The teacher is a static server that is only ever scored (no weight sync); the student needs its own vLLM server that

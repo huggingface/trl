@@ -208,7 +208,7 @@ def random_reward(outcome):
 )
 def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(tmp_path):
     trainer = openenv_harness.HarnessAsyncGRPOTrainer(
-        model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+        model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         harness_session_factory=SessionFactory,
         args=AsyncGRPOConfig(
             output_dir=str(tmp_path),
