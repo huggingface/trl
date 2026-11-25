@@ -43,6 +43,7 @@ text_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
     "num_attention_heads": 4,
+    "head_dim": 8,  # a multiple of 8, as Flash Attention requires
     "num_key_value_heads": 2,
     "layer_types": None,
     "dtype": None,  # hotfix for upstream text_config.dtype = "bfloat16"
@@ -50,7 +51,7 @@ text_config = {
 vision_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
-    "num_attention_heads": 4,
+    "num_attention_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
 }
 
 config = AutoConfig.from_pretrained(MODEL_ID, text_config=text_config, vision_config=vision_config)

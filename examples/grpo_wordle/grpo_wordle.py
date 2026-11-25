@@ -30,7 +30,8 @@ almost never wins, which leaves GRPO little to learn from. The OpenEnv Wordle tu
 SFT, GRPO and evaluation): https://huggingface.co/docs/openenv/tutorials/wordle-grpo
 
 Each step plays 64 games, one environment session each. Duplicate the `openenv/wordle` Space, set the
-`MAX_CONCURRENT_ENVS=64` variable on your copy and pass its URL with `--env-url`.
+`MAX_CONCURRENT_ENVS=96` variable on your copy (64 games plus the sessions still being closed between games) and
+pass its URL with `--env-url`.
 
 # Option 1: Colocated vLLM (1 GPU required)
 ```sh
@@ -41,7 +42,7 @@ python examples/grpo_wordle/grpo_wordle.py --vllm-mode colocate --env-url https:
 
 # Spin up vLLM server (Terminal 1)
 ```sh
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -124,15 +125,18 @@ def main() -> None:
     args = parse_args()
 
     env_url = args.env_url
-    # A private Space needs your token. A public one ignores it.
     token = get_token()
     headers = {"Authorization": f"Bearer {token}"} if token else None
 
     class WordleEnv:
         def __init__(self):
-            self.client = TextArenaEnv(base_url=env_url, headers=headers)
+            self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
 
         def reset(self, **kwargs) -> str | None:
+            # One connection per game, so the Space's periodic WebSocket drops don't land mid-game, see
+            # https://huggingface.co/docs/trl/openenv#long-runs-against-a-space
+            self.client.close()
+            self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
             result = self.client.reset()
             # The game returns cumulative feedback each turn (new text appended at the end), so
             # we store the previous full response and slice out only the newly appended part.

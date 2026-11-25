@@ -86,6 +86,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test
@@ -147,6 +148,7 @@ jobs:
             "peft @ git+https://github.com/huggingface/peft.git"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test
@@ -203,6 +205,7 @@ jobs:
           uv pip install ".[test]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test
@@ -267,7 +270,7 @@ jobs:
             "math-verify==0.8.0" \
             "numpy==1.26.0" \
             "pandas==2.1.1" \
-            "peft==0.17.0" \
+            "peft==0.18.0" \
             "psutil==5.9.4" \
             "pyarrow==21.0.0" \
             "pyyaml==6.0.1" \
@@ -275,6 +278,7 @@ jobs:
             "transformers==4.56.2"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test
@@ -333,6 +337,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Run distributed tests
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
@@ -410,6 +415,7 @@ jobs:
           PY
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test
@@ -483,6 +489,7 @@ jobs:
           PY
 
       - name: Run distributed tests
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py

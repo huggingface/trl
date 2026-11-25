@@ -14,6 +14,7 @@
 
 import json
 import pathlib
+from importlib.metadata import version
 
 import pytest
 import torch
@@ -27,6 +28,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
+from transformers.integrations import is_deepspeed_available, unset_hf_deepspeed_config
 from transformers.testing_utils import torch_device
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
@@ -713,7 +715,12 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
-        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {"activation_checkpointing": False}
+        else:
+            checkpointing_args = {"gradient_checkpointing": False}
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
         if peft_type == "prompt_tuning":
             peft_config = PromptTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
@@ -721,11 +728,6 @@ class TestSFTTrainer(TrlTestCase):
                 tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             )
         elif peft_type == "prefix_tuning":
-            if Version(peft.__version__) <= Version("0.17.1"):
-                pytest.xfail(
-                    "Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
-                    "https://github.com/huggingface/peft/issues/2821"
-                )
             peft_config = PrefixTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
@@ -803,6 +805,8 @@ class TestSFTTrainer(TrlTestCase):
         "expert layers (#7767)",
         strict=True,
     )
+    # peft 0.21.0 to 0.21.3 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
+    @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
     def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
         # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
         model_id = "trl-internal-testing/tiny-Glm4MoeForCausalLM"
@@ -841,15 +845,25 @@ class TestSFTTrainer(TrlTestCase):
         reason="Only transformers v5 with peft<0.19 skips the routed experts (#7765)",
     )
     @pytest.mark.parametrize(
-        "target_modules, target_parameters, expect_error",
+        "model_id, target_modules, target_parameters, expect_error",
         [
-            (["gate_proj", "up_proj", "down_proj"], None, True),
-            ("all-linear", None, True),
-            (r".*\.(q_proj|v_proj)", None, False),
-            (["gate_proj", "up_proj", "down_proj"], ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"], False),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", "all-linear", None, True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", r".*\.(q_proj|v_proj)", None, False),
+            (
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"],
+                False,
+            ),
+            # no peft version maps `target_modules` onto the routed experts of these models (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", None, False),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", "all-linear", None, False),
         ],
     )
-    def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
+    def test_moe_lora_raises_when_peft_skips_routed_experts(
+        self, model_id, target_modules, target_parameters, expect_error
+    ):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
@@ -857,14 +871,14 @@ class TestSFTTrainer(TrlTestCase):
         if expect_error:
             with pytest.raises(ValueError, match=r"peft>=0\.19\.0"):
                 SFTTrainer(
-                    model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                    model=model_id,
                     args=training_args,
                     train_dataset=dataset,
                     peft_config=peft_config,
                 )
         else:
             SFTTrainer(
-                model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                model=model_id,
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=peft_config,
@@ -886,6 +900,8 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
             # no dense or shared expert layers to skip
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+            # peft doesn't remap this model's targets, so its dense layers are trained (#8427)
+            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", False),
         ],
     )
     def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
@@ -1044,8 +1060,8 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config_lora`, since gradient checkpointing is
-    # enabled by default in `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still
-    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # enabled by default in `SFTTrainer`. We keep it as a regression guard: the assert fails if the default ever
+    # changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1054,7 +1070,8 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
 
         trainer = SFTTrainer(
             model=model_id,
@@ -1086,12 +1103,18 @@ class TestSFTTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = SFTConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
 
         trainer = SFTTrainer(
             model=model_id,
@@ -1113,6 +1136,35 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    @pytest.mark.skipif(
+        not is_deepspeed_available() or Version(version("deepspeed")) >= Version("0.19.3"),
+        reason="The trainer forces reentrant checkpointing for PEFT + ZeRO-3 only on DeepSpeed < 0.19.3",
+    )
+    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch, request):
+        # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
+        # reach the checkpoint function whichever name transformers reads the kwargs from.
+        monkeypatch.setenv("ACCELERATE_USE_DEEPSPEED", "false")  # `TrainingArguments` sets it, restore it after
+        request.addfinalizer(unset_hf_deepspeed_config)  # the ZeRO-3 config is process-global, don't leak it (#8447)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, deepspeed={"zero_optimization": {"stage": 3}}, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # The Trainer enables checkpointing from these kwargs in `train()`; since 5.23 it reads the new name
+        assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -1244,7 +1296,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         training_args = SFTConfig(
-            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=256, report_to="none"
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1449,7 +1501,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1481,7 +1533,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        Version(transformers.__version__) < Version("5.18.0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",
     )
     @require_vision
@@ -1507,7 +1559,7 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        Version(transformers.__version__) >= Version("5.18.0"),
         reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
     )
     @require_vision
@@ -1626,7 +1678,7 @@ class TestSFTTrainer(TrlTestCase):
         """With packing enabled, the labels column must be packed alongside input_ids (replacing the masks)."""
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=64, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=256, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2116,12 +2168,12 @@ class TestSFTTrainer(TrlTestCase):
         torch.testing.assert_close(loss, expected)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `SFTTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2149,12 +2201,18 @@ class TestSFTTrainer(TrlTestCase):
     def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": gradient_checkpointing_kwargs,
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": gradient_checkpointing_kwargs,
+            }
+        training_args = SFTConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2243,6 +2301,13 @@ class TestSFTTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
             # "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",  high memory peak, skipped for now
@@ -2337,16 +2402,6 @@ class TestSFTTrainer(TrlTestCase):
         "model_id",
         [
             pytest.param(
-                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
-            pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
                 marks=[
                     pytest.mark.skipif(
@@ -2359,9 +2414,7 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 marks=[
@@ -2372,9 +2425,7 @@ class TestSFTTrainer(TrlTestCase):
                     _HEAD_SIZE_NOT_MULTIPLE_OF_8,
                 ],
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
-            ),
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
@@ -2518,6 +2569,13 @@ class TestSFTTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
         ],

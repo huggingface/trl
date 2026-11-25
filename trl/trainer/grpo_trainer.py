@@ -104,9 +104,13 @@ from .utils import (
 )
 
 
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
+
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -465,25 +469,16 @@ class GRPOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
-            if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
-            ):
-                raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
-                )
             # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -503,7 +498,10 @@ class GRPOTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
@@ -574,6 +572,10 @@ class GRPOTrainer(_BaseTrainer):
                     "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
         # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
@@ -1356,7 +1358,7 @@ class GRPOTrainer(_BaseTrainer):
         # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
         # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "environment"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1950,7 +1952,7 @@ class GRPOTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
@@ -2053,17 +2055,20 @@ class GRPOTrainer(_BaseTrainer):
                 prefix_ids = prefix_ids.tolist()
                 full_ids = full_ids.tolist()
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        # Some chat templates render whitespace after the token that ends the assistant turn (e.g. Qwen3 renders
+        # "<|im_end|>\n"). The model stops generating at that token, so drop the whitespace to start the suffix right
+        # after it.
+        while not self._tokenizer.decode(prefix_ids[-1:]).strip():
+            prefix_ids = prefix_ids[:-1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+            raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(
         self, prompts, prompt_ids, completion_ids, completions, logprobs, sampling_mask, images, multimodal_fields
@@ -2705,9 +2710,11 @@ class GRPOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
+        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):

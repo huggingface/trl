@@ -45,7 +45,8 @@ from .testing_utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PromptTuningConfig, get_peft_model
+    from peft.utils import TaskType
 
 
 def str_length_reward(completions, **kwargs):
@@ -153,7 +154,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
         )
@@ -748,8 +749,8 @@ class TestRLOOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -850,8 +851,7 @@ class TestRLOOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
-    # default in `RLOOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
-    # PEFT + gradient checkpointing, which has caused issues in the past.
+    # default in `RLOOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -864,9 +864,9 @@ class TestRLOOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,  # enable gradient checkpointing
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = RLOOTrainer(
             model=model,
             reward_funcs=str_length_reward,
@@ -1372,7 +1372,7 @@ class TestRLOOTrainer(TrlTestCase):
             use_vllm=True,
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1390,6 +1390,8 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    # peft warns about this config before TRL raises (#8387)
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -1402,6 +1404,26 @@ class TestRLOOTrainer(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=lora_config,
+            )
+
+    @require_peft
+    @pytest.mark.parametrize("peft_config_name", ["prompt_tuning", "lora_bias"])
+    def test_vllm_and_peft_without_lora_merge_raises(self, peft_config_name):
+        # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which can't express the virtual
+        # tokens of prompt tuning or a LoRA bias
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        peft_config = {
+            "prompt_tuning": PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            "lora_bias": LoraConfig(lora_bias=True),
+        }[peft_config_name]
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=str_length_reward,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=peft_config,
             )
 
     @require_peft
@@ -1437,16 +1459,12 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.skipif(
-        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
-        reason="`ensure_weight_tying` requires PEFT >= 0.18",
-    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
+        # Tied embeddings, which vLLM holds as one tensor
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-0.5B-Instruct", dtype="float32"
-        )  # tiny model is too small for vLLM
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+            "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", dtype="float32"
+        )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -1478,14 +1496,13 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the frozen base model params are unchanged, bit for bit
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n and "original_module" not in n:
-                # We expect the peft params to be different (except for the base layer)
+            if new_param.requires_grad:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
     @require_vllm
     def test_train_vllm_structured_outputs(self):
@@ -1503,7 +1520,7 @@ class TestRLOOTrainer(TrlTestCase):
             vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1575,7 +1592,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
 
         trainer = RLOOTrainer(
-            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
@@ -2245,6 +2262,13 @@ class TestRLOOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                ),
+            ),
             "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -2568,6 +2592,13 @@ class TestRLOOTrainerVLM(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
         ],

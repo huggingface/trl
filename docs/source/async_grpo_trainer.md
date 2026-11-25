@@ -41,12 +41,14 @@ if __name__ == "__main__":  # the rollout worker is a spawned process that re-im
 Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
     --max-model-len 4096
 ```
+
+With score centering enabled and either `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
 
 Then execute the script on GPU 1 using the following command:
 
@@ -65,7 +67,7 @@ Some argument combinations are intentionally restricted in the current [`AsyncGR
 - Sharded training uses FSDP2. DeepSpeed is not supported, and neither are context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`).
 - `use_liger_kernel=True` is not supported.
 - PEFT adapters targeting `lm_head` are not supported.
-- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...), which need `transformers>=5.15.0`.
+- Models with attention sinks are not supported. The only non-attention layers supported are the gated DeltaNet layers of hybrid models (Qwen3.5, Qwen3.6, Qwen3-Next, ...) and the Mamba2 layers of Nemotron-H hybrids (Nemotron 3), which need `transformers>=5.15.0`, and the short convolutions of LFM2, which need `transformers>=5.22.0`.
 - Images are not supported, see [Training Vision Language Models](#training-vision-language-models).
 
 Training loads its attention kernel from the Hub through the [`kernels`](https://github.com/huggingface/kernels) library: [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) on AMD GPUs (ROCm), [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
@@ -256,7 +258,7 @@ Units:
 The trainer generates with a vLLM server, which it reaches at `vllm_server_base_url` (`http://localhost:8000` by default):
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -382,6 +384,8 @@ A few consequences:
 - **Nothing shared is plain packing**: every sample is then its own segment, which is ordinary padding-free packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with grouped-query attention.
 - **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, ...): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state.
+- **Mamba2 hybrids are supported** (Nemotron-H, Nemotron 3): like gated DeltaNet, their convolution reads each token's own predecessors, and their chunked scan starts each segment from its parent's final state.
+- **LFM2 is supported**: its short convolutions read each token's own predecessors.
 
 `token_budget` bounds the tokens of a row, counting a shared token once. By default, it is the server's `max_model_len`, so no sample can exceed it. With nothing shared, tree packing runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8 to 3x at a ratio of 3.4 on Qwen3-0.6B and 1.7B, on H100). The ratio is shared prefix times samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`. `batch/row_fill_frac` matters when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the planner often gets two and the row runs about 77% full), while 1k-token samples tile it almost perfectly.
 
@@ -397,7 +401,7 @@ The batch metrics compose: one step holds `gradient_accumulation_steps × num_pr
 Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -443,10 +447,9 @@ if __name__ == "__main__":
 Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
 
 ```bash
-VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> \
+VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
-    --api-server-count 8 \
     --max-model-len 4096 \
     --enable-lora \
     --max-lora-rank 32 \
@@ -454,6 +457,8 @@ VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve <model_name
 ```
 
 `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Keep `--weight-transfer-config` even with `--enable-lora`: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+
+vLLM doesn't start when `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` is combined with more than one API server, so leave `--api-server-count 8` out of this command. With a single API server, the top log-probabilities requested by score centering halve generation throughput (see [Configuring the vLLM server](#configuring-the-vllm-server)). To avoid that, train with `score_centering=False` or use merged sync, which works with `--api-server-count 8`.
 
 `--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
@@ -487,6 +492,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 > Reward functions run in the rollout worker, a separate process, so everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
 >
 > The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A GPU-backed reward model (e.g. an `AutoModelForSequenceClassification` scorer) loads without error but silently falls back to the CPU. Keep reward functions lightweight (verifiers like `accuracy_reward`, format or length checks). If you need a GPU reward model, serve it behind its own inference engine (vLLM, TGI, ...) on separate GPUs and have a picklable reward function call it over HTTP.
+>
+> The rollout worker is a daemonic process, so reward functions, tools and environments cannot start child processes with `multiprocessing` (a `Pool` or `ProcessPoolExecutor` fails with `daemonic processes are not allowed to have children`). Use threads, `async` functions or `subprocess` instead.
 
 #### Example 1: Reward longer completions
 
@@ -719,6 +726,8 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
+For a larger example, [`async_grpo_s3_aggregation`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_s3_aggregation) trains a multi-agent team: its `generate_one` runs a whole team episode (several agents sampling through `generate_one_turn` and messaging each other) as one rollout, and its `compute_advantages` and `compute_loss` make every team count equally in the loss.
+
 Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`~trainer.async_grpo_trainer.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level and keep the training code under `if __name__ == "__main__":`. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
 ### Resuming from a checkpoint
@@ -797,6 +806,9 @@ trainer = AsyncGRPOTrainer(
 ### Environments
 
 You can also provide tools through `environment_factory`. In this mode, [`AsyncGRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
+
+> [!NOTE]
+> The trainer keeps one environment instance per running rollout, reused between rollouts, so up to `max_concurrent_rollouts` instances exist at once. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
 
 When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 
