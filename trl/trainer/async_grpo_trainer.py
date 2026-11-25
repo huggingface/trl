@@ -100,6 +100,7 @@ if is_aiohttp_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.lora import LoraLayer, ParamWrapper
 
 if is_trackio_available():
     import trackio
@@ -199,7 +200,7 @@ class TreeRow:
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
                   boundaries in `tree_kv_index`.
                 - `tree_segment_parents` (`S`), `tree_segment_depths` (`S`): the segment tree, for the recurrent layers
-                  patched by [`patch_tree_gdn`].
+                  patched by [`patch_tree_recurrent`].
                 - `tree_sizes` (`4 + depth`): longest segment, longest path, `K`, 64-token chunks, then the segments
                   per depth. Every length the kernels launch with, so a rank reads them in one go (see [`unpad_tree`]).
                 - `token_index` (`M`): position whose prediction is each trained token. A shared position serves every
@@ -372,36 +373,63 @@ def register_tree_attention() -> None:
 _PATCHED = set()
 
 
-def patch_tree_gdn(model) -> bool:
+def patch_tree_recurrent(model, layer_type: str) -> bool:
     """
-    Make the model's gated DeltaNet layers follow the tree of a tree-packed forward.
+    Make the model's recurrent layers follow the tree of a tree-packed forward.
 
-    Transformers' hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run these layers through two module-level functions,
-    `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and pass the forward's keyword arguments down to both. Both
-    are wrapped: given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+    Transformers runs these layers through module-level functions shared by name across models, and passes the
+    forward's keyword arguments down to them. `"linear_attention"` layers are gated DeltaNet (Qwen3.5, Qwen3-Next,
+    OLMo-Hybrid, ...), through `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, or Mamba2 (Nemotron-H,
+    Granite-4.0-H, Bamba, ...), through `causal_conv1d_fn`, `mamba2_chunk_scan` and the fused
+    `mamba2_split_conv1d_scan_combined`. LFM2's `"conv"` layers run through `causal_conv1d_fn` alone. The functions of
+    the model's family are wrapped: given the tree of [`~packing.TreeRow.pack`] they run their tree version, otherwise
+    they run unchanged.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to patch.
+        layer_type (`str`):
+            The model's only non-attention layer type, `"linear_attention"` or `"conv"`.
 
     Returns:
-        `bool`: whether the model's modeling module has those functions.
+        `bool`: whether the model's modeling module has all the functions of a family of its layer type.
     """
+    from ..kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
+    from ..kernels.tree_mamba2 import tree_mamba2_chunk_scan, tree_mamba2_split_conv1d_scan_combined
+
+    short_conv = {"causal_conv1d_fn": tree_causal_conv1d}
+    gated_deltanet = {
+        "causal_conv1d_fn": tree_causal_conv1d,
+        "torch_chunk_gated_delta_rule": tree_chunk_gated_delta_rule,
+    }
+    mamba2 = {
+        "causal_conv1d_fn": tree_causal_conv1d,
+        "mamba2_chunk_scan": tree_mamba2_chunk_scan,
+        "mamba2_split_conv1d_scan_combined": tree_mamba2_split_conv1d_scan_combined,
+    }
     modeling = sys.modules[type(model).forward.__module__]
-    conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
-    if conv is None or chunk is None:
+    names = vars(modeling)
+    if layer_type == "conv" and all(name in names for name in short_conv):
+        tree_ops = short_conv
+    elif layer_type == "linear_attention" and all(name in names for name in gated_deltanet):
+        tree_ops = gated_deltanet
+    elif layer_type == "linear_attention" and all(name in names for name in mamba2):
+        tree_ops = mamba2
+    else:
         return False
     if modeling in _PATCHED:
         return True
-    from ..kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
 
-    def causal_conv1d_fn(hidden_states, weight, bias=None, activation=None, **kwargs):
-        if "tree_segment_parents" not in kwargs:
-            return conv(hidden_states, weight, bias, activation=activation, **kwargs)
-        return tree_causal_conv1d(hidden_states, weight, bias, activation, kwargs, conv)
+    def follow_tree(op, tree_op):
+        def wrapper(*args, **kwargs):
+            if "tree_segment_parents" not in kwargs:
+                return op(*args, **kwargs)
+            return tree_op(op, *args, **kwargs)
 
-    def torch_chunk_gated_delta_rule(query, key, value, g, beta, use_qk_l2norm_in_kernel=False, **kwargs):
-        if "tree_segment_parents" not in kwargs:
-            return chunk(query, key, value, g=g, beta=beta, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, **kwargs)
-        return tree_chunk_gated_delta_rule(query, key, value, g, beta, kwargs, use_qk_l2norm_in_kernel), None
+        return wrapper
 
-    modeling.causal_conv1d_fn, modeling.torch_chunk_gated_delta_rule = causal_conv1d_fn, torch_chunk_gated_delta_rule
+    for name, tree_op in tree_ops.items():
+        setattr(modeling, name, follow_tree(names[name], tree_op))
     _PATCHED.add(modeling)
     return True
 
@@ -792,8 +820,11 @@ class AsyncRolloutLoop:
         score_queue_maxsize: int = 16,
         lora_name: str | None = None,
         dataset_start_index: int = 0,
+        max_dropped_groups: int | None = None,
     ):
         self.config = config
+        self._max_dropped_groups = max_dropped_groups
+        self._dropped_in_a_row = 0
         self.model_name = model_name
         self.lora_name = lora_name
         self.dataset = dataset
@@ -968,13 +999,27 @@ class AsyncRolloutLoop:
             self._loop.close()
 
     async def _check_sampling_replay(self) -> None:
-        """With top-k/top-p, make sure the server returns the candidate set of every sampled token.
+        """Check that the server reports the sampling distribution and supports candidate-set replay.
 
-        That takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and `--enable-scale-out`
-        (the endpoint that returns the set). Checked once up front: without them the first rollout would fail on a
-        route that does not exist, after retrying it for minutes. An older vLLM cannot return the set at all, so it
-        keeps the full-vocabulary normalization, with a warning about the bias.
+        With temperature scaling or top-k/top-p filtering, score centering needs processed log-probabilities: raw
+        log-probabilities describe the unmodified policy, so they give the wrong importance ratios and centering
+        weights.
+
+        With top-k/top-p, replay takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and
+        `--enable-scale-out` (the endpoint that returns the set). Checked once up front: without them the first rollout
+        would fail on a route that does not exist, after retrying it for minutes. An older vLLM cannot return the set
+        at all, so it keeps the full-vocabulary normalization, with a warning about the bias.
         """
+        if self.config.score_centering and (self.config.temperature != 1.0 or self.sampling_replay):
+            async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
+                r.raise_for_status()
+                model_config = (await r.json())["vllm_config"]["model_config"]
+            if model_config["logprobs_mode"] != "processed_logprobs":
+                raise RuntimeError(
+                    "Score centering with temperature scaling or top-k/top-p filtering requires sampler "
+                    "log-probabilities after those transformations. Start the vLLM server with "
+                    "`--logprobs-mode processed_logprobs`."
+                )
         if not self.sampling_replay:
             return
         async with self.session.get(f"{self.vllm_server_url}/version") as r:
@@ -1379,6 +1424,15 @@ class AsyncRolloutLoop:
                     num_samples=self.config.num_completions_to_print,
                 )
             self._total_groups_scored += 1
+
+            # No weight update while every group is dropped: raise instead of waiting forever (#8423)
+            self._dropped_in_a_row = 0 if samples else self._dropped_in_a_row + 1
+            if self._max_dropped_groups is not None and self._dropped_in_a_row >= self._max_dropped_groups:
+                raise RuntimeError(
+                    f"The last {self._dropped_in_a_row} generated groups were all dropped, because the rewards of each "
+                    "group were equal, so no batch can reach the trainer. Check that the reward functions return "
+                    "different rewards for different completions."
+                )
 
             for item in samples or [group.group_id]:
                 self._put_in_buffer(item)
@@ -2553,6 +2607,33 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
 
 
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
+
+
 def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch.nn.Parameter]]:
     """Yield `(name, param)` for every parameter the vLLM server receives, under its base-checkpoint name.
 
@@ -2572,7 +2653,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+        # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
@@ -2998,21 +3079,37 @@ class AsyncGRPOTrainer(_BaseTrainer):
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
         text_config = model.config.get_text_config()
-        layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
+        layer_types = set(getattr(text_config, "layer_types", None) or []) - {
+            "full_attention",
+            "sliding_attention",
+            "moe",
+            "mlp",
+        }
         # Check tree attention compat
-        if layer_types:
-            if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
-                raise ValueError(
-                    f"Tree packing of {type(model).__name__}'s gated DeltaNet layers requires transformers>=5.15.0: "
-                    "before it, these layers call the functions they stored at init rather than the module-level "
-                    "ones tree packing patches, so they would scan across samples."
-                )
-            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
-                raise ValueError(
-                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
-                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
-                    "convolutional layer would scan across samples."
-                )
+        if layer_types not in (set(), {"linear_attention"}, {"conv"}):
+            raise ValueError(
+                f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
+                "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
+                "path; any other recurrent or convolutional layer would scan across samples."
+            )
+        if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
+            raise ValueError(
+                f"Tree packing of {type(model).__name__}'s linear attention layers requires transformers>=5.15.0: "
+                "before it, these layers do not call the module-level functions tree packing patches, so they would "
+                "scan across samples."
+            )
+        if layer_types == {"conv"} and Version(transformers.__version__) < Version("5.22.0"):
+            raise ValueError(
+                f"Tree packing of {type(model).__name__}'s short convolution layers requires transformers>=5.22.0: "
+                "before it, these layers do not pass the forward's keyword arguments down to the module-level "
+                "function tree packing patches, so they would scan across samples."
+            )
+        if layer_types and not patch_tree_recurrent(model, *layer_types):
+            raise ValueError(
+                f"{type(model).__name__}'s {sorted(layer_types)} layers don't run through the functions tree packing "
+                "patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan across "
+                "samples."
+            )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
@@ -3163,6 +3260,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
             )
 
+        # None for a streaming dataset or environment-owned data
+        self._num_prompts = len(train_dataset) if isinstance(train_dataset, Dataset) else None
         if train_dataset is None:
             # A dataset is optional when an environment owns the data and returns the prompt from `reset()`; then
             # `max_steps` sets the length. Build a placeholder dataset of empty prompts to feed the rollout worker,
@@ -3299,6 +3398,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if isinstance(lora_sync, Exception):
                 raise lora_sync
             self._lora_sync = lora_sync
+            # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if not lora_sync and any(
+                not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()
+            ):
+                raise ValueError(
+                    "Syncing merged weights to vLLM supports LoRA adapters without `lora_bias` only: vLLM receives the "
+                    "base weights with the LoRA deltas merged in."
+                )
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             if self._lora_sync:
@@ -3334,6 +3442,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 eos_token_ids=self.eos_token_ids,
                 tools=tools,
                 environment_factory=environment_factory,
+                max_dropped_groups=self._num_prompts,
                 **self._rollout_loop_kwargs,
             )
             self.rollout_queue = self.rollout_worker.rollout_buffer
@@ -3469,7 +3578,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 q = sampler_log_probs.exp()
                 p = score_log_probs.exp() * (q > 0)
                 head = torch.where((p >= low * q) & (p <= high * q), p, 0.0)
-                tail_ratio = (1 - p.sum(-1)).clamp(min=1e-6) / (1 - q.sum(-1)).clamp(min=1e-6)
+                # Flooring positive tail masses can move their ratio inside the IS bounds and retain a filtered tail.
+                # Only guard a zero denominator; keep small positive masses intact on both sides of the ratio.
+                tail_ratio = (1 - p.sum(-1)).clamp(min=0.0) / (1 - q.sum(-1)).clamp(min=torch.finfo(q.dtype).tiny)
                 tail = ((tail_ratio >= low) & (tail_ratio <= high)).float()
                 residual = head - tail.unsqueeze(-1) * p
                 weight = torch.where(is_masked, 0.0, coef_1)
@@ -3702,7 +3813,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
-        for name, param in _iter_vllm_named_params(self.accelerator.unwrap_model(self.model)):
+        model = self.accelerator.unwrap_model(self.model)
+        lora_layers = {}
+        if is_peft_model(model):
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in model.modules()
+                if isinstance(module, LoraLayer)
+            }
+        for name, param in _iter_vllm_named_params(model):
+            if param in lora_layers:
+                # A model sharded at load time has DTensor base weights next to plain LoRA weights, so the delta
+                # is treated as replicated. No-op without DTensors.
+                with implicit_replication():
+                    param = _merge_lora(lora_layers[param], param)
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
@@ -3727,7 +3852,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
     def _sync_weight_merged(self, t0: float) -> tuple[float, float, float]:
-        """Fold the adapter, if any, into the base weights and stream every parameter to vLLM over NCCL.
+        """Stream every parameter to vLLM over NCCL, with the adapter, if any, merged into the base weights.
 
         Args:
             t0 (`float`):
@@ -3737,9 +3862,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             `tuple[float, float, float]`:
                 The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
         """
-        # Under DDP `self.model` is the wrapper, which exposes none of the PEFT API used below.
-        model = self.accelerator.unwrap_model(self.model)
-
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
@@ -3753,22 +3875,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
-        # `finally` is not optional: leaving it merged would train merged weights from the next step on.
-        if is_peft_model(model):
-            with implicit_replication():
-                model.merge_adapter()
-        try:
-            if self.accelerator.is_main_process:
-                self.weight_transfer.send_weights(self._streaming_iter())
-            else:
-                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-                for _ in self._streaming_iter():
-                    pass
-        finally:
-            if is_peft_model(model):
-                with implicit_replication():
-                    model.unmerge_adapter()
+        if self.accelerator.is_main_process:
+            self.weight_transfer.send_weights(self._streaming_iter())
+        else:
+            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+            for _ in self._streaming_iter():
+                pass
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()

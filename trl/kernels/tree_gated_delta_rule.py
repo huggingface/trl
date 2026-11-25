@@ -83,38 +83,154 @@ def tree_plan(tree):
     }
 
 
-def tree_chunk_gated_delta_rule(q, k, v, g, beta, tree, use_qk_l2norm_in_kernel):
-    """Gated delta rule over a packed tree: `(1, tokens, heads, dim)` inputs, `(1, tokens, heads)` gates."""
-    return TreeGatedDeltaRule.apply(q, k, v, g, beta, tree_plan(tree), q.shape[-1] ** -0.5, use_qk_l2norm_in_kernel)
-
-
-def tree_causal_conv1d(hidden_states, weight, bias, activation, tree, conv):
+def tree_chunk_gated_delta_rule(chunk, query, key, value, g, beta, use_qk_l2norm_in_kernel=False, **tree):
     """
-    Causal convolution over a packed tree `(1, channels, tokens)`, run by the model's own `conv`.
+    Tree version of transformers' `torch_chunk_gated_delta_rule` (`chunk`, unused): `(1, tokens, heads, dim)` inputs,
+    `(1, tokens, heads)` gates.
+    """
+    scale = query.shape[-1] ** -0.5
+    plan = tree_plan(tree)
+    return TreeGatedDeltaRule.apply(query, key, value, g, beta, plan, scale, use_qk_l2norm_in_kernel), None
 
-    Each segment is preceded by the `kernel_size - 1` tokens before it on its root path, so every window reads the
-    sample's own history; the outputs at those inserted positions are dropped.
+
+def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, **tree):
+    """
+    Tree version of transformers' `causal_conv1d_fn` (`conv`, unused): depthwise causal convolution over a packed tree
+    `(1, channels, tokens)`. The window of a token runs back along its own root path, into its parent segments.
     """
     cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
-    width, n_tokens, n_segments = weight.shape[-1] - 1, hidden_states.shape[-1], parents.numel()
+    n_tokens, width = hidden_states.shape[-1], weight.shape[-1]
     tokens = torch.arange(n_tokens, device=hidden_states.device)
-    segment = torch.arange(n_segments, device=tokens.device).repeat_interleave(
+    segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
         cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
     )
-    token_parents = torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
-    history = [cu_seqlens[parents + 1].long() - 1]
+    previous = torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
+    sources = [tokens]
     for _ in range(width - 1):
-        history.insert(0, torch.where(history[0] >= 0, token_parents[history[0]], -1))
-    history = torch.stack(history, dim=1)
-    starts = cu_seqlens[:-1] + width * torch.arange(n_segments, device=tokens.device)
-    positions = tokens + width * (segment + 1)
-    source = torch.empty(n_tokens + width * n_segments, dtype=torch.long, device=tokens.device)
-    source[(starts[:, None] + torch.arange(width, device=tokens.device)).flatten()] = history.where(
-        history >= 0, n_tokens
-    ).flatten()
-    source[positions] = tokens
-    x = F.pad(hidden_states.transpose(1, 2), (0, 0, 0, 1))[:, source].transpose(1, 2)
-    return conv(x, weight, bias, activation=activation).transpose(1, 2)[:, positions].transpose(1, 2)
+        sources.append(torch.where(sources[-1] >= 0, previous[sources[-1].clamp(min=0)], -1))
+    sources = torch.stack(sources, dim=1).int()
+    return TreeConv1d.apply(hidden_states, weight, bias, sources, cu_seqlens, activation in ("silu", "swish"))
+
+
+class TreeConv1d(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, weight, bias, sources, cu_seqlens, silu):
+        x = x.transpose(1, 2)
+        x = x if x.stride(-1) == 1 else x.contiguous()
+        tokens, channels = x.shape[1], x.shape[2]
+        out = x.new_empty(1, tokens, channels)
+        grid = (triton.cdiv(tokens, 64), triton.cdiv(channels, 64))
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+        tree_conv_fwd_kernel[grid](
+            x, weight, bias, sources, out, tokens, x.stride(1), C=channels, W=weight.shape[-1], BT=64, BC=64,
+            HAS_BIAS=bias is not None, SILU=silu, enable_fp_fusion=False,
+        )  # fmt: skip
+        ctx.save_for_backward(x, weight, bias, sources, cu_seqlens)
+        ctx.silu = silu
+        return out.transpose(1, 2)
+
+    @staticmethod
+    def backward(ctx, dout):
+        x, weight, bias, sources, cu_seqlens = ctx.saved_tensors
+        tokens, channels, width = x.shape[1], x.shape[2], weight.shape[-1]
+        dout = dout.transpose(1, 2).contiguous()
+        grid = (triton.cdiv(tokens, 64), triton.cdiv(channels, 64))
+        dpre = torch.empty_like(dout)
+        dw = x.new_empty(grid[0], channels, width, dtype=torch.float32)
+        db = x.new_empty(grid[0], channels, dtype=torch.float32)
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+        tree_conv_bwd_kernel[grid](
+            x, weight, bias, sources, dout, dpre, dw, db, tokens, x.stride(1), C=channels, W=width, BT=64, BC=64,
+            HAS_BIAS=bias is not None, SILU=ctx.silu, enable_fp_fusion=False,
+        )  # fmt: skip
+        dx = torch.empty_like(dout)
+        # Disable FP fusion, as Triton 3.10 does by default (see #8136)
+        tree_conv_bwd_dx_kernel[grid](
+            dpre, weight, sources, dx, tokens, C=channels, W=width, BT=64, BC=64, enable_fp_fusion=False
+        )
+        rows = (cu_seqlens[:-1, None] + torch.arange(width - 1, device=dx.device)).flatten().long()
+        valid = rows < cu_seqlens[1:].repeat_interleave(width - 1)
+        rows = rows.clamp(max=tokens - 1)
+        for k in range(1, width):
+            target = sources[rows, k].long()
+            cross = valid & (target >= 0) & (target != rows - k)
+            contribution = dpre[0, rows] * weight[:, width - 1 - k] * cross[:, None]
+            dx[0].index_add_(0, target.clamp(min=0), contribution.to(dx.dtype))
+        d_bias = db.sum(0).to(bias.dtype) if bias is not None else None
+        return dx.transpose(1, 2), dw.sum(0).to(weight.dtype), d_bias, None, None, None
+
+
+@triton.jit(do_not_specialize=["T"])
+def tree_conv_fwd_kernel(
+    x, w, b, src, o, T, stride_x, C: tl.constexpr, W: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+    HAS_BIAS: tl.constexpr, SILU: tl.constexpr,
+):  # fmt: skip
+    i_t, i_c = tl.program_id(0), tl.program_id(1)
+    o_t = i_t * BT + tl.arange(0, BT)
+    o_c = i_c * BC + tl.arange(0, BC)
+    m_t, m_c = o_t < T, o_c < C
+    acc = tl.zeros([BT, BC], dtype=tl.float32)
+    if HAS_BIAS:
+        acc += tl.load(b + o_c, mask=m_c, other=0.0).to(tl.float32)[None, :]
+    for j in tl.static_range(W):
+        s = tl.load(src + o_t.to(tl.int64) * W + (W - 1 - j), mask=m_t, other=-1)
+        m = (s >= 0)[:, None] & m_c[None, :]
+        b_x = tl.load(x + s.to(tl.int64)[:, None] * stride_x + o_c[None, :], mask=m, other=0.0).to(tl.float32)
+        acc += b_x * tl.load(w + o_c * W + j, mask=m_c, other=0.0).to(tl.float32)[None, :]
+    if SILU:
+        acc = acc * tl.sigmoid(acc)
+    m = m_t[:, None] & m_c[None, :]
+    tl.store(o + o_t.to(tl.int64)[:, None] * C + o_c[None, :], acc.to(o.dtype.element_ty), mask=m)
+
+
+@triton.jit(do_not_specialize=["T"])
+def tree_conv_bwd_kernel(
+    x, w, b, src, do, dpre, dw, db, T, stride_x, C: tl.constexpr, W: tl.constexpr, BT: tl.constexpr,
+    BC: tl.constexpr, HAS_BIAS: tl.constexpr, SILU: tl.constexpr,
+):  # fmt: skip
+    i_t, i_c = tl.program_id(0), tl.program_id(1)
+    o_t = i_t * BT + tl.arange(0, BT)
+    o_c = i_c * BC + tl.arange(0, BC)
+    m_t, m_c = o_t < T, o_c < C
+    m = m_t[:, None] & m_c[None, :]
+    p = o_t.to(tl.int64)[:, None] * C + o_c[None, :]
+    b_dpre = tl.load(do + p, mask=m, other=0.0).to(tl.float32)
+    if SILU:
+        acc = tl.zeros([BT, BC], dtype=tl.float32)
+        if HAS_BIAS:
+            acc += tl.load(b + o_c, mask=m_c, other=0.0).to(tl.float32)[None, :]
+        for j in tl.static_range(W):
+            s = tl.load(src + o_t.to(tl.int64) * W + (W - 1 - j), mask=m_t, other=-1)
+            m_s = (s >= 0)[:, None] & m_c[None, :]
+            b_x = tl.load(x + s.to(tl.int64)[:, None] * stride_x + o_c[None, :], mask=m_s, other=0.0).to(tl.float32)
+            acc += b_x * tl.load(w + o_c * W + j, mask=m_c, other=0.0).to(tl.float32)[None, :]
+        b_s = tl.sigmoid(acc)
+        b_dpre = b_dpre * b_s * (1 + acc * (1 - b_s))
+    b_dpre = tl.where(m, b_dpre, 0.0)
+    tl.store(dpre + p, b_dpre.to(dpre.dtype.element_ty), mask=m)
+    tl.store(db + i_t.to(tl.int64) * C + o_c, tl.sum(b_dpre, axis=0), mask=m_c)
+    for j in tl.static_range(W):
+        s = tl.load(src + o_t.to(tl.int64) * W + (W - 1 - j), mask=m_t, other=-1)
+        m_s = (s >= 0)[:, None] & m_c[None, :]
+        b_x = tl.load(x + s.to(tl.int64)[:, None] * stride_x + o_c[None, :], mask=m_s, other=0.0).to(tl.float32)
+        tl.store(dw + (i_t.to(tl.int64) * C + o_c) * W + j, tl.sum(b_dpre * b_x, axis=0), mask=m_c)
+
+
+@triton.jit(do_not_specialize=["T"])
+def tree_conv_bwd_dx_kernel(dpre, w, src, dx, T, C: tl.constexpr, W: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr):
+    i_t, i_c = tl.program_id(0), tl.program_id(1)
+    o_t = i_t * BT + tl.arange(0, BT)
+    o_c = i_c * BC + tl.arange(0, BC)
+    m_t, m_c = o_t < T, o_c < C
+    acc = tl.zeros([BT, BC], dtype=tl.float32)
+    for k in tl.static_range(W):
+        t = o_t + k
+        reads = tl.load(src + t.to(tl.int64) * W + k, mask=t < T, other=-1) == o_t
+        m = reads[:, None] & m_c[None, :]
+        b_d = tl.load(dpre + t.to(tl.int64)[:, None] * C + o_c[None, :], mask=m, other=0.0).to(tl.float32)
+        acc += b_d * tl.load(w + o_c * W + (W - 1 - k), mask=m_c, other=0.0).to(tl.float32)[None, :]
+    m = m_t[:, None] & m_c[None, :]
+    tl.store(dx + o_t.to(tl.int64)[:, None] * C + o_c[None, :], acc.to(dx.dtype.element_ty), mask=m)
 
 
 # --- Device/compiler checks and FP32 exponential ---
@@ -150,7 +266,7 @@ def forward_states(k, w, u, g, tree):
     value_heads, value_dim = u.shape[2:]
     h = k.new_empty(1, len(tree["tree_chunk_indices"]), value_heads, key_dim, value_dim)
     final = k.new_empty(len(tree["tree_segment_parents"]), value_heads, key_dim, value_dim, dtype=torch.float32)
-    v_new = torch.empty_like(u)
+    v_new = torch.empty_like(u) if w is not None else None
     for segments in tree["tree_levels"]:
         # Disable FP fusion, as Triton 3.10 does by default (see #8136)
         chunk_gated_delta_rule_fwd_kernel_h_blockdim64[
@@ -174,6 +290,7 @@ def forward_states(k, w, u, g, tree):
             K=key_dim,
             V=value_dim,
             BT=64,
+            USE_W=w is not None,
             enable_fp_fusion=False,
         )
     return h, v_new
@@ -212,6 +329,7 @@ def backward_states(q, k, w, g, do, dv, tree, scale):
             K=key_dim,
             V=value_dim,
             BT=64,
+            USE_W=w is not None,
             enable_fp_fusion=False,
         )
     return dh, du
@@ -308,6 +426,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     V: tl.constexpr,
     BT: tl.constexpr,
     BV: tl.constexpr,
+    USE_W: tl.constexpr,
 ):
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = tl.load(segments + i_nh // HV), i_nh % HV
@@ -320,13 +439,18 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     b_h1 = tl.zeros([64, BV], dtype=tl.float32)
     if K > 64:
         b_h2 = tl.zeros([64, BV], dtype=tl.float32)
+    if K > 128:
+        b_h3 = tl.zeros([64, BV], dtype=tl.float32)
+    if K > 192:
+        b_h4 = tl.zeros([64, BV], dtype=tl.float32)
 
     # calculate offset
     h += (boh * HV + i_h).to(tl.int64) * K * V
     v += (bos * HV + i_h).to(tl.int64) * V
     k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
-    w += (bos * HV + i_h).to(tl.int64) * K
-    v_new += (bos * HV + i_h).to(tl.int64) * V
+    if USE_W:
+        w += (bos * HV + i_h).to(tl.int64) * K
+        v_new += (bos * HV + i_h).to(tl.int64) * V
 
     parent = tl.load(parents + i_n)
     h0 = h0 + (parent * HV + i_h) * K * V
@@ -339,6 +463,10 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     m_k1 = o_k1 < K
     o_k2 = 64 + o_k1
     m_k2 = o_k2 < K
+    o_k3 = 128 + o_k1
+    m_k3 = o_k3 < K
+    o_k4 = 192 + o_k1
+    m_k4 = o_k4 < K
     if parent >= 0:
         p_h0_1 = h0 + o_k1[:, None] * V + o_v[None, :]
         m_h0_1 = m_k1[:, None] & m_v[None, :]
@@ -347,6 +475,14 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
             p_h0_2 = h0 + o_k2[:, None] * V + o_v[None, :]
             m_h0_2 = m_k2[:, None] & m_v[None, :]
             b_h2 += tl.load(p_h0_2, mask=m_h0_2, other=0.0).to(tl.float32)
+        if K > 128:
+            p_h0_3 = h0 + o_k3[:, None] * V + o_v[None, :]
+            m_h0_3 = m_k3[:, None] & m_v[None, :]
+            b_h3 += tl.load(p_h0_3, mask=m_h0_3, other=0.0).to(tl.float32)
+        if K > 192:
+            p_h0_4 = h0 + o_k4[:, None] * V + o_v[None, :]
+            m_h0_4 = m_k4[:, None] & m_v[None, :]
+            b_h4 += tl.load(p_h0_4, mask=m_h0_4, other=0.0).to(tl.float32)
 
     # main recurrence
     for i_t in range(NT):
@@ -360,19 +496,39 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
             p_h2 = h + i_t_int64 * HV * K * V + o_k2[:, None] * V + o_v[None, :]
             m_h2 = m_k2[:, None] & m_v[None, :]
             tl.store(p_h2, b_h2.to(p_h2.dtype.element_ty), mask=m_h2)
+        if K > 128:
+            p_h3 = h + i_t_int64 * HV * K * V + o_k3[:, None] * V + o_v[None, :]
+            m_h3 = m_k3[:, None] & m_v[None, :]
+            tl.store(p_h3, b_h3.to(p_h3.dtype.element_ty), mask=m_h3)
+        if K > 192:
+            p_h4 = h + i_t_int64 * HV * K * V + o_k4[:, None] * V + o_v[None, :]
+            m_h4 = m_k4[:, None] & m_v[None, :]
+            tl.store(p_h4, b_h4.to(p_h4.dtype.element_ty), mask=m_h4)
 
-        p_w = w + o_t[:, None] * (HV * K) + o_k1[None, :]
-        b_w = tl.load(p_w, mask=m_t[:, None] & m_k1[None, :], other=0.0)
-        b_v = tl.dot(b_w, b_h1.to(b_w.dtype))
-        if K > 64:
-            p_w = w + o_t[:, None] * (HV * K) + o_k2[None, :]
-            b_w = tl.load(p_w, mask=m_t[:, None] & m_k2[None, :], other=0.0)
-            b_v += tl.dot(b_w, b_h2.to(b_w.dtype))
-        p_v = v + o_t[:, None] * (HV * V) + o_v[None, :]
-        b_v = tl.load(p_v, mask=m_t[:, None] & m_v[None, :], other=0.0) - b_v
+        if USE_W:
+            p_w = w + o_t[:, None] * (HV * K) + o_k1[None, :]
+            b_w = tl.load(p_w, mask=m_t[:, None] & m_k1[None, :], other=0.0)
+            b_v = tl.dot(b_w, b_h1.to(b_w.dtype))
+            if K > 64:
+                p_w = w + o_t[:, None] * (HV * K) + o_k2[None, :]
+                b_w = tl.load(p_w, mask=m_t[:, None] & m_k2[None, :], other=0.0)
+                b_v += tl.dot(b_w, b_h2.to(b_w.dtype))
+            if K > 128:
+                p_w = w + o_t[:, None] * (HV * K) + o_k3[None, :]
+                b_w = tl.load(p_w, mask=m_t[:, None] & m_k3[None, :], other=0.0)
+                b_v += tl.dot(b_w, b_h3.to(b_w.dtype))
+            if K > 192:
+                p_w = w + o_t[:, None] * (HV * K) + o_k4[None, :]
+                b_w = tl.load(p_w, mask=m_t[:, None] & m_k4[None, :], other=0.0)
+                b_v += tl.dot(b_w, b_h4.to(b_w.dtype))
+            p_v = v + o_t[:, None] * (HV * V) + o_v[None, :]
+            b_v = tl.load(p_v, mask=m_t[:, None] & m_v[None, :], other=0.0) - b_v
 
-        p_v = v_new + o_t[:, None] * (HV * V) + o_v[None, :]
-        tl.store(p_v, b_v.to(p_v.dtype.element_ty), mask=m_t[:, None] & m_v[None, :])
+            p_v = v_new + o_t[:, None] * (HV * V) + o_v[None, :]
+            tl.store(p_v, b_v.to(p_v.dtype.element_ty), mask=m_t[:, None] & m_v[None, :])
+        else:
+            p_v = v + o_t[:, None] * (HV * V) + o_v[None, :]
+            b_v = tl.load(p_v, mask=m_t[:, None] & m_v[None, :], other=0.0)
 
         last_idx = min((i_t + 1) * BT, T) - 1
         b_g_last = tl.load(g + (bos * HV + last_idx * HV + i_h).to(tl.int64)).to(tl.float32)
@@ -383,6 +539,10 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
         b_h1 *= b_g_last
         if K > 64:
             b_h2 *= b_g_last
+        if K > 128:
+            b_h3 *= b_g_last
+        if K > 192:
+            b_h4 *= b_g_last
 
         b_v = b_v.to(k.dtype.element_ty)
 
@@ -393,6 +553,14 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
             p_k = k + o_k2[:, None] + o_t[None, :] * (H * K)
             b_k = tl.load(p_k, mask=m_k2[:, None] & m_t[None, :], other=0.0)
             b_h2 += tl.dot(b_k, b_v)
+        if K > 128:
+            p_k = k + o_k3[:, None] + o_t[None, :] * (H * K)
+            b_k = tl.load(p_k, mask=m_k3[:, None] & m_t[None, :], other=0.0)
+            b_h3 += tl.dot(b_k, b_v)
+        if K > 192:
+            p_k = k + o_k4[:, None] + o_t[None, :] * (H * K)
+            b_k = tl.load(p_k, mask=m_k4[:, None] & m_t[None, :], other=0.0)
+            b_h4 += tl.dot(b_k, b_v)
 
     p_ht = ht + o_k1[:, None] * V + o_v[None, :]
     m_ht = m_k1[:, None] & m_v[None, :]
@@ -401,6 +569,14 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
         p_ht = ht + o_k2[:, None] * V + o_v[None, :]
         m_ht = m_k2[:, None] & m_v[None, :]
         tl.store(p_ht, b_h2.to(p_ht.dtype.element_ty), mask=m_ht)
+    if K > 128:
+        p_ht = ht + o_k3[:, None] * V + o_v[None, :]
+        m_ht = m_k3[:, None] & m_v[None, :]
+        tl.store(p_ht, b_h3.to(p_ht.dtype.element_ty), mask=m_ht)
+    if K > 192:
+        p_ht = ht + o_k4[:, None] * V + o_v[None, :]
+        m_ht = m_k4[:, None] & m_v[None, :]
+        tl.store(p_ht, b_h4.to(p_ht.dtype.element_ty), mask=m_ht)
 
 
 @triton.autotune(
@@ -437,6 +613,7 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
     V: tl.constexpr,
     BT: tl.constexpr,
     BV: tl.constexpr,
+    USE_W: tl.constexpr,
 ):
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = tl.load(segments + i_nh // HV), i_nh % HV
@@ -449,11 +626,16 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
     b_dh1 = tl.zeros([64, BV], dtype=tl.float32)
     if K > 64:
         b_dh2 = tl.zeros([64, BV], dtype=tl.float32)
+    if K > 128:
+        b_dh3 = tl.zeros([64, BV], dtype=tl.float32)
+    if K > 192:
+        b_dh4 = tl.zeros([64, BV], dtype=tl.float32)
 
     # calculate offset
     q += (bos * H + i_h // (HV // H)).to(tl.int64) * K
     k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
-    w += (bos * HV + i_h).to(tl.int64) * K
+    if USE_W:
+        w += (bos * HV + i_h).to(tl.int64) * K
     do += (bos * HV + i_h).to(tl.int64) * V
     dv += (bos * HV + i_h).to(tl.int64) * V
     dv2 += (bos * HV + i_h).to(tl.int64) * V
@@ -468,6 +650,10 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
     m_k1 = o_k1 < K
     o_k2 = 64 + o_k1
     m_k2 = o_k2 < K
+    o_k3 = 128 + o_k1
+    m_k3 = o_k3 < K
+    o_k4 = 192 + o_k1
+    m_k4 = o_k4 < K
     # Tree boundary: sum child input-state gradients before scanning this segment backward.
     first = tl.load(child_offsets + i_n)
     last = tl.load(child_offsets + i_n + 1)
@@ -481,6 +667,14 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             p_dht2 = dht + o_k2[:, None] * V + o_v[None, :]
             m_dht2 = m_k2[:, None] & m_v[None, :]
             b_dh2 += tl.load(p_dht2, mask=m_dht2, other=0.0)
+        if K > 128:
+            p_dht3 = dht + o_k3[:, None] * V + o_v[None, :]
+            m_dht3 = m_k3[:, None] & m_v[None, :]
+            b_dh3 += tl.load(p_dht3, mask=m_dht3, other=0.0)
+        if K > 192:
+            p_dht4 = dht + o_k4[:, None] * V + o_v[None, :]
+            m_dht4 = m_k4[:, None] & m_v[None, :]
+            b_dh4 += tl.load(p_dht4, mask=m_dht4, other=0.0)
 
     for i_t in range(NT - 1, -1, -1):
         i_t_int64 = i_t.to(tl.int64)
@@ -493,6 +687,14 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             p_dh2 = dh + i_t_int64 * HV * K * V + o_k2[:, None] * V + o_v[None, :]
             m_dh2 = m_k2[:, None] & m_v[None, :]
             tl.store(p_dh2, b_dh2.to(p_dh2.dtype.element_ty), mask=m_dh2)
+        if K > 128:
+            p_dh3 = dh + i_t_int64 * HV * K * V + o_k3[:, None] * V + o_v[None, :]
+            m_dh3 = m_k3[:, None] & m_v[None, :]
+            tl.store(p_dh3, b_dh3.to(p_dh3.dtype.element_ty), mask=m_dh3)
+        if K > 192:
+            p_dh4 = dh + i_t_int64 * HV * K * V + o_k4[:, None] * V + o_v[None, :]
+            m_dh4 = m_k4[:, None] & m_v[None, :]
+            tl.store(p_dh4, b_dh4.to(p_dh4.dtype.element_ty), mask=m_dh4)
 
         last_idx = min((i_t + 1) * BT, T) - 1
         bg_last = tl.load(g + (bos + last_idx) * HV + i_h).to(tl.float32)
@@ -515,27 +717,67 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             p_k = k + o_t[:, None] * (H * K) + o_k2[None, :]
             b_k = tl.load(p_k, mask=m_t[:, None] & m_k2[None, :], other=0.0)
             b_dv += tl.dot(b_k, b_dh2.to(b_k.dtype))
+        if K > 128:
+            p_k = k + o_t[:, None] * (H * K) + o_k3[None, :]
+            b_k = tl.load(p_k, mask=m_t[:, None] & m_k3[None, :], other=0.0)
+            b_dv += tl.dot(b_k, b_dh3.to(b_k.dtype))
+        if K > 192:
+            p_k = k + o_t[:, None] * (H * K) + o_k4[None, :]
+            b_k = tl.load(p_k, mask=m_t[:, None] & m_k4[None, :], other=0.0)
+            b_dv += tl.dot(b_k, b_dh4.to(b_k.dtype))
 
         b_dv *= tl.where(m_t, exp2(bg_last - b_g), 0)[:, None]
         b_dv += tl.load(p_dv, mask=m_t[:, None] & m_v[None, :], other=0.0)
 
         tl.store(p_dv2, b_dv.to(p_dv.dtype.element_ty), mask=m_t[:, None] & m_v[None, :])
         # Update dh
-        p_w = w + o_k1[:, None] + o_t[None, :] * (HV * K)
+        if USE_W:
+            p_w = w + o_k1[:, None] + o_t[None, :] * (HV * K)
+            b_w = tl.load(p_w, mask=m_k1[:, None] & m_t[None, :], other=0.0)
         p_q = q + o_k1[:, None] + o_t[None, :] * (H * K)
-        b_w = tl.load(p_w, mask=m_k1[:, None] & m_t[None, :], other=0.0)
         b_q = tl.load(p_q, mask=m_k1[:, None] & m_t[None, :], other=0.0)
         b_dh1 *= bg_last_exp
         b_q = b_q * b_g_exp[None, :]
-        b_dh1 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+        if USE_W:
+            b_dh1 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+        else:
+            b_dh1 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale
         if K > 64:
             p_q = q + o_k2[:, None] + o_t[None, :] * (H * K)
-            p_w = w + o_k2[:, None] + o_t[None, :] * (HV * K)
             b_q = tl.load(p_q, mask=m_k2[:, None] & m_t[None, :], other=0.0)
-            b_w = tl.load(p_w, mask=m_k2[:, None] & m_t[None, :], other=0.0)
+            if USE_W:
+                p_w = w + o_k2[:, None] + o_t[None, :] * (HV * K)
+                b_w = tl.load(p_w, mask=m_k2[:, None] & m_t[None, :], other=0.0)
             b_dh2 *= bg_last_exp
             b_q = b_q * b_g_exp[None, :]
-            b_dh2 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+            if USE_W:
+                b_dh2 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+            else:
+                b_dh2 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale
+        if K > 128:
+            p_q = q + o_k3[:, None] + o_t[None, :] * (H * K)
+            b_q = tl.load(p_q, mask=m_k3[:, None] & m_t[None, :], other=0.0)
+            if USE_W:
+                p_w = w + o_k3[:, None] + o_t[None, :] * (HV * K)
+                b_w = tl.load(p_w, mask=m_k3[:, None] & m_t[None, :], other=0.0)
+            b_dh3 *= bg_last_exp
+            b_q = b_q * b_g_exp[None, :]
+            if USE_W:
+                b_dh3 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+            else:
+                b_dh3 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale
+        if K > 192:
+            p_q = q + o_k4[:, None] + o_t[None, :] * (H * K)
+            b_q = tl.load(p_q, mask=m_k4[:, None] & m_t[None, :], other=0.0)
+            if USE_W:
+                p_w = w + o_k4[:, None] + o_t[None, :] * (HV * K)
+                b_w = tl.load(p_w, mask=m_k4[:, None] & m_t[None, :], other=0.0)
+            b_dh4 *= bg_last_exp
+            b_q = b_q * b_g_exp[None, :]
+            if USE_W:
+                b_dh4 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
+            else:
+                b_dh4 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale
 
     p_dh0 = dh0 + o_k1[:, None] * V + o_v[None, :]
     m_dh0 = m_k1[:, None] & m_v[None, :]
@@ -544,6 +786,14 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
         p_dh1 = dh0 + o_k2[:, None] * V + o_v[None, :]
         m_dh1 = m_k2[:, None] & m_v[None, :]
         tl.store(p_dh1, b_dh2.to(p_dh1.dtype.element_ty), mask=m_dh1)
+    if K > 128:
+        p_dh1 = dh0 + o_k3[:, None] * V + o_v[None, :]
+        m_dh1 = m_k3[:, None] & m_v[None, :]
+        tl.store(p_dh1, b_dh3.to(p_dh1.dtype.element_ty), mask=m_dh1)
+    if K > 192:
+        p_dh1 = dh0 + o_k4[:, None] * V + o_v[None, :]
+        m_dh1 = m_k4[:, None] & m_v[None, :]
+        tl.store(p_dh1, b_dh4.to(p_dh1.dtype.element_ty), mask=m_dh1)
 
 
 # --- Fused 64-token Gram matrix and triangular solve ---
@@ -1255,6 +1505,7 @@ def chunk_bwd_kernel_dqkwg(
     BT: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
+    USE_W: tl.constexpr,
 ):
     i_k, i_t, i_bh = tl.program_id(0), tl.program_id(1).to(tl.int64), tl.program_id(2).to(tl.int64)
     i_h = i_bh % HV
@@ -1275,9 +1526,9 @@ def chunk_bwd_kernel_dqkwg(
     dq += (bos * HV + i_h) * K
     dk += (bos * HV + i_h) * K
 
-    # for delta rule only
-    dw += (bos * HV + i_h) * K
-    dv += (bos * HV + i_h) * V
+    if USE_W:
+        dw += (bos * HV + i_h) * K
+        dv += (bos * HV + i_h) * V
 
     dg += i_k * all * HV
     b_dg_last = tl.zeros([1], dtype=tl.float32)
@@ -1313,12 +1564,14 @@ def chunk_bwd_kernel_dqkwg(
         b_dq += tl.dot(b_do, b_h.to(b_do.dtype))
         # [BT, BV] @ [BV, BK] -> [BT, BK]
         b_dk += tl.dot(b_v, b_dh.to(b_v.dtype))
-        p_dv = dv + o_t[:, None] * (HV * V) + o_v[None, :]
-        b_dv = tl.load(p_dv, mask=m_hv, other=0.0)
-        b_dw += tl.dot(b_dv.to(b_v.dtype), b_h.to(b_v.dtype))
+        if USE_W:
+            p_dv = dv + o_t[:, None] * (HV * V) + o_v[None, :]
+            b_dv = tl.load(p_dv, mask=m_hv, other=0.0)
+            b_dw += tl.dot(b_dv.to(b_v.dtype), b_h.to(b_v.dtype))
 
-    p_dw = dw + o_t[:, None] * (HV * K) + o_k[None, :]
-    tl.store(p_dw, -b_dw.to(p_dw.dtype.element_ty), mask=m_qk)
+    if USE_W:
+        p_dw = dw + o_t[:, None] * (HV * K) + o_k[None, :]
+        tl.store(p_dw, -b_dw.to(p_dw.dtype.element_ty), mask=m_qk)
 
     tl.debug_barrier()
     p_q = q + o_t[:, None] * (H * K) + o_k[None, :]
@@ -1550,7 +1803,7 @@ def chunk_bwd_dqkwg(
     dq = q.new_empty(B, T, HV, K)
     dk = k.new_empty(B, T, HV, K)
     dg = torch.empty(NK, *g.shape, dtype=torch.float32, device=g.device)
-    dw = torch.empty_like(w)
+    dw = torch.empty_like(w) if w is not None else None
 
     grid = (NK, NT, B * HV)
     # Disable FP fusion, as Triton 3.10 does by default (see #8136)
@@ -1579,6 +1832,7 @@ def chunk_bwd_dqkwg(
         BT=BT,
         BK=BK,
         BV=BV,
+        USE_W=w is not None,
         enable_fp_fusion=False,
     )
 

@@ -14,7 +14,9 @@
 
 
 import torch
+import transformers
 from datasets import Dataset, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.utils import (
@@ -218,7 +220,12 @@ class TestPreparePeftModel(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             quantization_config=BitsAndBytesConfig(load_in_4bit=True),
         )
-        args = TrainingArguments(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to=[])
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {"activation_checkpointing": True}
+        else:
+            checkpointing_args = {"gradient_checkpointing": True}
+        args = TrainingArguments(output_dir=self.tmp_dir, **checkpointing_args, report_to=[])
         peft_config = LoraConfig(r=8, target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM")
         model = prepare_peft_model(model, peft_config, args)
         model.train()

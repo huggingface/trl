@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -28,6 +30,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -35,7 +38,7 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE, deepseekv3_v5_chat_template
 from trl.generation.vllm_client import VLLMClient
 from trl.import_utils import is_vllm_available
 
@@ -89,6 +92,254 @@ async def async_multiply_tool(a: int, b: int) -> int:
 def str_length_reward(completions, **kwargs):
     """Reward function that rewards longer completions, whatever their format."""
     return [float(len(str(completion))) for completion in completions]
+
+
+def lookup_tool(query: str) -> list:
+    """
+    Looks up the items matching a query.
+
+    Args:
+        query: What to look up.
+
+    Returns:
+        The matching items, as text content blocks.
+    """
+    return [{"type": "text", "text": "crate"}]
+
+
+def screenshot_tool() -> str:
+    """Simple text-returning tool."""
+    return "The image shows a red square."
+
+
+def screenshot_image_tool() -> list:
+    """
+    Takes a screenshot and returns it.
+
+    Returns:
+        A list of content blocks with the screenshot image.
+    """
+    from PIL import Image as PILImage
+
+    img = PILImage.new("RGB", (64, 64), color="red")
+    return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
+
+
+def record(key: str, value):
+    """Append `value` under `key` to the file `TRL_TEST_RECORD` names.
+
+    Tools and environments run in the rollout worker's process, so they report what they see through a file rather than
+    through the test's variables.
+    """
+    with open(os.environ["TRL_TEST_RECORD"], "a") as f:
+        f.write(json.dumps([key, value]) + "\n")
+
+
+def recorded(path: str) -> dict[str, list]:
+    """Read back what [`record`] wrote to `path`, as `{key: [value, ...]}`."""
+    records = defaultdict(list)
+    with open(path) as f:
+        for line in f:
+            key, value = json.loads(line)
+            records[key].append(value)
+    return records
+
+
+class ScriptedTurns:
+    """Answers each prompt with a completion written as text, in place of the model's generation.
+
+    The k-th first turn of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets
+    `after_tool`. Call it with a prompt's token ids, or patch [`~ScriptedTurns.generate`] in for the model's
+    `generate`.
+
+    Args:
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer of the model.
+        first_turns (`list[str]` or `Callable[[str], list[str]]`):
+            Completions of the first turn, or a function of the prompt's text returning them.
+        after_tool (`str`, *optional*, defaults to `"Done!<|im_end|>"`):
+            Completion of a turn after a tool result.
+        tool_response_marker (`str`, *optional*, defaults to `"<tool_response>"`):
+            Text the chat template renders a tool result with, which tells the turns apart.
+
+    Attributes:
+        turns_after_tool (`int`):
+            Number of turns answered after a tool result.
+    """
+
+    def __init__(self, tokenizer, first_turns, after_tool="Done!<|im_end|>", tool_response_marker="<tool_response>"):
+        self.tokenizer = tokenizer
+        self.first_turns = first_turns
+        self.after_tool = after_tool
+        self.tool_response_marker = tool_response_marker
+        self.seen = defaultdict(int)
+        self.turns_after_tool = 0
+
+    def __call__(self, prompt_ids: list[int]) -> list[int]:
+        prompt = self.tokenizer.decode(prompt_ids)
+        if self.tool_response_marker in prompt:
+            self.turns_after_tool += 1
+            text = self.after_tool
+        else:
+            first_turns = self.first_turns(prompt) if callable(self.first_turns) else self.first_turns
+            text = first_turns[self.seen[prompt] % len(first_turns)]
+            self.seen[prompt] += 1
+        return self.tokenizer(text, add_special_tokens=False).input_ids
+
+    def generate(self, input_ids, attention_mask, **kwargs):
+        """Answer a batch of left-padded prompts as `generate` does: each prompt followed by its completion,
+        right-padded."""
+        completions = [self(ids[mask.bool()].tolist()) for ids, mask in zip(input_ids, attention_mask, strict=True)]
+        width = max(len(ids) for ids in completions)
+        completion_ids = [ids + [self.tokenizer.pad_token_id] * (width - len(ids)) for ids in completions]
+        return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+
+class CounterEnvironment:
+    def reset(self, **kwargs):
+        record("reset_counter", kwargs)
+        return "Count."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        record("increment", step)
+        return step
+
+
+class EchoEnvironment:
+    def reset(self, **kwargs):
+        record("reset_echo", kwargs)
+        return "Echo."
+
+    def shout(self, text: str) -> str:
+        """
+        Shout the given text.
+
+        Args:
+            text: Text to shout.
+
+        Returns:
+            The text in upper case.
+        """
+        record("shout", text)
+        return text.upper()
+
+
+class ZipEnvironment:
+    def reset(self, **kwargs):
+        return "Give the zip code."
+
+    def submit(self, answer: str) -> str:
+        """
+        Submit the zip code.
+
+        Args:
+            answer: The zip code.
+
+        Returns:
+            A confirmation.
+        """
+        record("zip", answer)
+        return "ok"
+
+
+class CountEnvironment:
+    def reset(self, **kwargs):
+        return "Count."
+
+    def submit(self, answer: int) -> str:
+        """
+        Submit the count.
+
+        Args:
+            answer: The count.
+
+        Returns:
+            A confirmation.
+        """
+        record("count", answer)
+        return "ok"
+
+
+class IncrementEnvironment:
+    def reset(self, **kwargs):
+        self._counter = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._counter += step
+        return self._counter
+
+
+class IncrementRewardEnvironment(IncrementEnvironment):
+    def get_reward(self) -> float:
+        return float(self._counter)
+
+
+class PropertyEnvironment:
+    def __init__(self):
+        self.is_reset = False
+
+    def reset(self, **kwargs):
+        self.is_reset = True
+
+    @property
+    def reward(self) -> float:
+        if self.is_reset:
+            raise RuntimeError("`reward` must not be evaluated while discovering tools")
+        return 0.0
+
+    def echo(self, text: str) -> str:
+        """
+        Echo the text back.
+
+        Args:
+            text: Text to echo.
+
+        Returns:
+            The text, unchanged.
+        """
+        return text
+
+
+class ScoredEnvironment:  # owns its reward
+    def reset(self, **kwargs): ...
+
+    def act(self, x: int) -> int:
+        """
+        Act.
+
+        Args:
+            x: A value.
+
+        Returns:
+            The value.
+        """
+        return x
+
+    def get_reward(self) -> float:
+        return 1.0
+
+
+class GuessTheWordEnvironment:
+    def reset(self, **kwargs):
+        return "Guess the 5-letter word."  # the env owns the data and returns the prompt
 
 
 class TestGetHighEntropyMask(TrlTestCase):
@@ -1012,8 +1263,8 @@ class TestGRPOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -1038,8 +1289,8 @@ class TestGRPOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         peft_config = LoraConfig(
             target_modules=["q_proj", "v_proj"],
             modules_to_save=["lm_head"],
@@ -1194,8 +1445,7 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_peft_config`, since gradient checkpointing is enabled by
-    # default in `GRPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test
-    # PEFT + gradient checkpointing, which has caused issues in the past.
+    # default in `GRPOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     @require_peft
     def test_train_peft_with_gradient_checkpointing(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -1208,9 +1458,9 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            gradient_checkpointing=True,  # enable gradient checkpointing
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = GRPOTrainer(
             model=model,
             reward_funcs=str_length_reward,
@@ -2481,6 +2731,8 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.train()
 
     @require_peft
+    # peft warns about this config before TRL raises (#8387)
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
     def test_vllm_and_peft_copies_of_tied_embeddings_raises(self):
         # PEFT trains separate copies of tied embeddings in `modules_to_save`, which vLLM cannot hold
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -2496,18 +2748,33 @@ class TestGRPOTrainer(TrlTestCase):
             )
 
     @require_peft
+    @pytest.mark.parametrize("peft_config_name", ["prompt_tuning", "lora_bias"])
+    def test_vllm_and_peft_without_lora_merge_raises(self, peft_config_name):
+        # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which can't express the virtual
+        # tokens of prompt tuning or a LoRA bias
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        peft_config = {
+            "prompt_tuning": PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            "lora_bias": LoraConfig(lora_bias=True),
+        }[peft_config_name]
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=str_length_reward,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+            )
+
+    @require_peft
     @require_vllm
-    @pytest.mark.skipif(
-        not is_peft_available() or Version(peft.__version__) < Version("0.18.0"),
-        reason="`ensure_weight_tying` requires PEFT >= 0.18",
-    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         # Tied embeddings, which vLLM holds as one tensor
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", dtype="float32"
         )
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -2539,14 +2806,13 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed and the frozen base model params are unchanged, bit for bit
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n and "original_module" not in n:
-                # We expect the peft params to be different (except for the base layer)
+            if new_param.requires_grad:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            else:
+                assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
     @pytest.mark.skipif(
         not is_vllm_available(min_version="0.28.0"),
@@ -3352,49 +3618,16 @@ class TestGRPOTrainer(TrlTestCase):
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         tool_name = tools[0].__name__
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 3:  # first call
-                # fmt: off
-                if tool_name == "multiply_tool":
-                    completion_ids = torch.tensor(
-                        [
-                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
-                            # an invalid tool call with wrong argument name
-                            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
-                            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
-                            # "I don't know any tool<|im_end|>"
-                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                        ],
-                        device=input_ids.device,
-                    )
-                elif tool_name == "async_multiply_tool":
-                    completion_ids = torch.tensor(
-                        [
-                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
-                            # an invalid tool call with wrong argument name
-                            # '<tool_call>\n{"name": "async_multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
-                            [151657, 198, 4913, 606, 788, 330, 7692, 93054, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
-                            # "I don't know any tool<|im_end|>"
-                            [40, 1513, 944, 1414, 894, 5392, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                        ],
-                        device=input_ids.device,
-                    )
-                # fmt: on
-            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
-                completion_ids = torch.tensor(
-                    [
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                f'<tool_call>\n{{"name": "{tool_name}", "arguments": {{"a": 3, "b": 4}}}}\n</tool_call><|im_end|>',
+                # an invalid tool call with wrong argument name
+                f'<tool_call>\n{{"name": "{tool_name}", "arguments": {{"a": 3, "c": 4}}}}\n</tool_call><|im_end|>',
+                "I don't know any tool<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -3404,6 +3637,60 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="GLM4 tokenizer requires transformers>=5.0.0",
+    )
+    @require_response_parsing
+    def test_train_with_tools_glm4moe(self):
+        # GLM ends a tool call with `<|observation|>`, and its chat template opens the tool result with it too
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "\n<think></think>\n<tool_call>multiply_tool\n<arg_key>a</arg_key>\n<arg_value>3</arg_value>\n"
+                "<arg_key>b</arg_key>\n<arg_value>4</arg_value>\n</tool_call><|observation|>",
+                "I don't know any tool<|user|>",
+            ],
+            after_tool="Done!<|user|>",
+        )
+
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's `<|observation|>`, without repeating it
+                assert trainer.processing_class.decode(input_ids[0]).count("<|observation|>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -3418,18 +3705,6 @@ class TestGRPOTrainer(TrlTestCase):
         # The logged completions mix types within a field: the tool returns content blocks while assistant content is
         # a string, and `query` is a string in one call and a list in the other. The completions table must still be
         # written (#7674).
-        def lookup_tool(query: str) -> list:
-            """
-            Looks up the items matching a query.
-
-            Args:
-                query: What to look up.
-
-            Returns:
-                The matching items, as text content blocks.
-            """
-            return [{"type": "text", "text": "crate"}]
-
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -3449,29 +3724,63 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             tools=[lookup_tool],
         )
-        tokenizer = trainer.processing_class
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 3:  # first call: two tool calls, then a text answer
-                texts = [
-                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
-                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
-                    "No tool needed.<|im_end|>",
-                ]
-            else:  # second call, for the two examples with a tool call
-                texts = ["Done!<|im_end|>"] * input_ids.shape[0]
-            rows = [tokenizer(text, add_special_tokens=False).input_ids for text in texts]
-            width = max(len(row) for row in rows)
-            completion_ids = [row + [tokenizer.pad_token_id] * (width - len(row)) for row in rows]
-            return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[  # two tool calls, then a text answer
+                '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
+                "No tool needed.<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
         assert completions.num_rows == 3
         tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
         assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_max_tool_calling_iterations_skips_last_turn_tool_calls(self):
+        # The model calls the tool on every turn. With max_tool_calling_iterations=1, the first turn's call runs, and
+        # the call in the turn generated after its result is kept in the completion but never executed.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_tool_calling_iterations=1,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        tool_call = '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+        script = ScriptedTurns(trainer.processing_class, first_turns=[tool_call], after_tool=tool_call)
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[0]["tools/call_frequency"] == pytest.approx(1.0)  # one executed call each
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        for completion in completions["completion"]:
+            assert [message["role"] for message in completion] == ["assistant", "tool", "assistant"]
+            assert completion[-1]["tool_calls"]  # the last turn's tool call was not executed
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -3502,26 +3811,21 @@ class TestGRPOTrainer(TrlTestCase):
             tools=[multiply_tool],
         )
 
-        # fmt: off
-        first_turn_ids = [
-            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
-            # an invalid tool call with wrong argument name, so that the two tool histories differ
-            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
-            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
-            # "I don't know any tool<|im_end|>"
-            [40, 1513, 944, 1414, 894, 5392, 151645],
-        ]
-        # fmt: on
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>',
+                # an invalid tool call with wrong argument name, so that the two tool histories differ
+                '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>',
+                "I don't know any tool<|im_end|>",
+            ],
+        )
 
         def fake_server_generate(prompts, images, num_generations, profiler):
             # Mimic the server: only every `num_generations`-th prompt is sent, and it is sampled `num_generations` times
             used_prompts = [prompt for prompt in prompts[::num_generations] for _ in range(num_generations)]
             assert used_prompts == prompts, "A sample was continued from another sample's history"
-            if len(prompts) == 3:  # first call
-                completion_ids = first_turn_ids
-            else:  # second call only has the two examples with a tool call
-                completion_ids = [[17453, 0, 151645]] * len(prompts)  # 'Done!<|im_end|>'
+            completion_ids = [script(prompt) for prompt in prompts]
             logprobs = [[[-0.1]] * len(ids) for ids in completion_ids]
             return prompts, completion_ids, logprobs, None, None
 
@@ -3534,7 +3838,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        Version(transformers.__version__) < Version("5.13.0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
     )
     def test_tools_without_jmespath(self):
@@ -3560,52 +3864,15 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
-    def test_train_with_multiple_environments(self):
+    def test_train_with_multiple_environments(self, monkeypatch):
         # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
         # only that environment's tools are exposed. Here we build a mixed batch with both environments and check that
         # a tool call from a "counter" example dispatches to the CounterEnvironment's `increment`, while a tool call
         # from an "echo" example dispatches to the EchoEnvironment's `shout`. With `shuffle_dataset=False` and
         # `num_generations=2`, every generation batch is [counter, counter, echo, echo].
         dataset = Dataset.from_dict({"environment": ["counter", "echo"] * 8})
-
-        reset_kwargs_seen = {"counter": [], "echo": []}
-        tool_calls_made = {"increment": [], "shout": []}
-
-        class CounterEnvironment:
-            def reset(self, **kwargs):
-                reset_kwargs_seen["counter"].append(kwargs)
-                return "Count."
-
-            def increment(self, step: int) -> int:
-                """
-                Increment the internal counter.
-
-                Args:
-                    step: Value to add to the counter.
-
-                Returns:
-                    The updated counter value.
-                """
-                tool_calls_made["increment"].append(step)
-                return step
-
-        class EchoEnvironment:
-            def reset(self, **kwargs):
-                reset_kwargs_seen["echo"].append(kwargs)
-                return "Echo."
-
-            def shout(self, text: str) -> str:
-                """
-                Shout the given text.
-
-                Args:
-                    text: Text to shout.
-
-                Returns:
-                    The text in upper case.
-                """
-                tool_calls_made["shout"].append(text)
-                return text.upper()
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -3613,6 +3880,7 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
             num_generations=2,
             shuffle_dataset=False,  # keep the [counter, counter, echo, echo] batch layout deterministic
+            remove_unused_columns=True,  # `environment` must survive column removal
             report_to="none",
         )
 
@@ -3624,60 +3892,45 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
         )
 
-        # Each environment exposes only its own tool.
-        assert [tool.__name__ for tool in trainer._env_tools["counter"]] == ["increment"]
-        assert [tool.__name__ for tool in trainer._env_tools["echo"]] == ["shout"]
-        # The probe instances seed the reuse pool, so they are not wasted.
-        assert len(trainer._environment_pool["counter"]) == 1
-        assert len(trainer._environment_pool["echo"]) == 1
-
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 4:  # first generation: batch is [counter, counter, echo, echo]
-                # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
-                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>' + pad
-                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
-                        # counter example: no tool call (gives reward variance within the group so gradients are non-zero)
-                        # "I won't<|im_end|>" + pad
-                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                        # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
-                        # '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 927, 411, 497, 330, 16370, 788, 5212, 1318, 788, 330, 6023, 95642, 151658, 151645],
-                        # echo example: no tool call
-                        # "Done!<|im_end|>" + pad
-                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    ],
-                    device=input_ids.device,
-                )
-                # fmt: on
-            else:  # regeneration after tool execution: only the two examples that issued a (valid) tool call
-                completion_ids = torch.tensor(
-                    [
-                        [17453, 0, 151645],  # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                    '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                    # counter example: no tool call (gives reward variance within the group)
+                    "I won't<|im_end|>",
+                ]
+                if "Count." in prompt
+                else [
+                    # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                    '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>',
+                    # echo example: no tool call
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         # The tool call from the counter example ran `increment` (defined only on CounterEnvironment) and the one from
         # the echo example ran `shout` (defined only on EchoEnvironment): each rollout dispatched to its own tools.
-        assert tool_calls_made["increment"]
-        assert tool_calls_made["shout"]
-        # 2 of the 4 rollouts issued a tool call, and both calls succeeded.
+        records = recorded(record_path)
+        assert records["increment"]
+        assert records["shout"]
+        # Half of the rollouts issued a tool call, and every call succeeded.
         assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 4)
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
         # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
-        assert reset_kwargs_seen["counter"] and reset_kwargs_seen["echo"]
-        assert all("environment" not in kwargs for kwargs in reset_kwargs_seen["counter"] + reset_kwargs_seen["echo"])
+        assert records["reset_counter"] and records["reset_echo"]
+        assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
+        # Each rollout is shown only the tool of its own environment
+        prompts = list(script.seen)
+        assert all(("increment" in prompt) == ("Count." in prompt) for prompt in prompts)
+        assert all(("shout" in prompt) == ("Echo." in prompt) for prompt in prompts)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -3691,47 +3944,13 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
-    def test_train_with_multiple_environments_same_tool_name(self):
+    def test_train_with_multiple_environments_same_tool_name(self, monkeypatch):
         # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
         # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
         # With `shuffle_dataset=False` and `num_generations=2`, every generation batch is [zip, zip, count, count].
         dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
-
-        submitted = {"zip": [], "count": []}
-
-        class ZipEnvironment:
-            def reset(self, **kwargs):
-                return "Give the zip code."
-
-            def submit(self, answer: str) -> str:
-                """
-                Submit the zip code.
-
-                Args:
-                    answer: The zip code.
-
-                Returns:
-                    A confirmation.
-                """
-                submitted["zip"].append(answer)
-                return "ok"
-
-        class CountEnvironment:
-            def reset(self, **kwargs):
-                return "Count."
-
-            def submit(self, answer: int) -> str:
-                """
-                Submit the count.
-
-                Args:
-                    answer: The count.
-
-                Returns:
-                    A confirmation.
-                """
-                submitted["count"].append(answer)
-                return "ok"
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -3749,38 +3968,26 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
         )
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 4:  # first generation: batch is [zip, zip, count, count]
-                # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 330, 19, 17, 95642, 151658, 151645],
-                        # "I won't<|im_end|>" + pad
-                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 220, 19, 17, 11248, 151658, 151645],
-                        # "Done!<|im_end|>" + pad
-                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    ],
-                    device=input_ids.device,
-                )
-                # fmt: on
-            else:  # regeneration after tool execution: only the two examples that issued a tool call
-                completion_ids = torch.tensor(
-                    [
-                        [17453, 0, 151645],  # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>',
+                    "I won't<|im_end|>",
+                ]
+                if "zip code" in prompt
+                else [
+                    '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>',
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
-        assert submitted["zip"] and all(answer == "42" for answer in submitted["zip"])
-        assert submitted["count"] and all(answer == 42 for answer in submitted["count"])
+        records = recorded(record_path)
+        assert records["zip"] and all(answer == "42" for answer in records["zip"])
+        assert records["count"] and all(answer == 42 for answer in records["count"])
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -3794,21 +4001,6 @@ class TestGRPOTrainer(TrlTestCase):
         # environment should fail with a clear error rather than a bare KeyError mid-rollout.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         dataset = dataset.map(lambda example: {"environment": "unknown"})
-
-        class CounterEnvironment:
-            def reset(self, **kwargs): ...
-
-            def increment(self, step: int) -> int:
-                """
-                Increment the internal counter.
-
-                Args:
-                    step: Value to add to the counter.
-
-                Returns:
-                    The updated counter value.
-                """
-                return step
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -3838,24 +4030,7 @@ class TestGRPOTrainer(TrlTestCase):
     def test_train_with_environment_factory(self):
         # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
         # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
-        # succeed and the other will fail (because of a wrong tool name).
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                self._counter = 0
-
-            def increment(self, step: int) -> int:
-                """
-                Increment the internal counter.
-
-                Args:
-                    step: Value to add to the counter.
-
-                Returns:
-                    The updated counter value.
-                """
-                self._counter += step
-                return self._counter
-
+        # succeed and the other will fail (because `reset` is not exposed as a tool).
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -3869,40 +4044,21 @@ class TestGRPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
-            environment_factory=DummyEnvironment,
+            environment_factory=IncrementEnvironment,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 3:  # first call
-                # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
-                        # an invalid tool call with wrong tool name
-                        # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
-                        # "I won't increment<|im_end|>"
-                        [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    ],
-                    device=input_ids.device,
-                )
-                # fmt: on
-            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
-                completion_ids = torch.tensor(
-                    [
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # a call to `reset`, which is not exposed as a tool
+                '<tool_call>\n{"name": "reset", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -3911,10 +4067,10 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
-        # Check the states of the environment
-        assert trainer.environments[0]._counter == 1  # should have been incremented once
-        assert trainer.environments[1]._counter == 0  # shouldn't have been incremented because the tool call failed
-        assert trainer.environments[2]._counter == 0  # shouldn't have been incremented because no tool call was made
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -3934,31 +4090,6 @@ class TestGRPOTrainer(TrlTestCase):
         # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
         # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
         # instances, so a second batch that listed the instance would raise before generating anything.
-        class PropertyEnvironment:
-            def __init__(self):
-                self.is_reset = False
-
-            def reset(self, **kwargs):
-                self.is_reset = True
-
-            @property
-            def reward(self) -> float:
-                if self.is_reset:
-                    raise RuntimeError("`reward` must not be evaluated while discovering tools")
-                return 0.0
-
-            def echo(self, text: str) -> str:
-                """
-                Echo the text back.
-
-                Args:
-                    text: Text to echo.
-
-                Returns:
-                    The text, unchanged.
-                """
-                return text
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -3975,19 +4106,15 @@ class TestGRPOTrainer(TrlTestCase):
             environment_factory=PropertyEnvironment,
         )
 
-        def fake_generate(input_ids, **kwargs):
-            # "I won't increment<|im_end|>" — no tool call, so one generation round per step.
-            completion_ids = torch.tensor(
-                [[40, 2765, 944, 16252, 151645]] * input_ids.shape[0], device=input_ids.device
-            )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        # No tool call, so one generation round per rollout. Distinct-length completions within the group give reward
+        # variance, so advantages are non-zero.
+        script = ScriptedTurns(
+            trainer.processing_class, first_turns=["I won't increment<|im_end|>", "I won't increment it<|im_end|>"]
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-        # The regression is only exercised if the instances the last batch listed had really been reset before it.
-        assert all(environment.is_reset for environment in trainer.environments)
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -4000,27 +4127,6 @@ class TestGRPOTrainer(TrlTestCase):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
         # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
         # (counters 1, 0, 0) get rewards 1.0, 0.0, 0.0.
-
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                self._counter = 0
-
-            def increment(self, step: int) -> int:
-                """
-                Increment the internal counter.
-
-                Args:
-                    step: Value to add to the counter.
-
-                Returns:
-                    The updated counter value.
-                """
-                self._counter += step
-                return self._counter
-
-            def get_reward(self) -> float:
-                return float(self._counter)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4034,54 +4140,34 @@ class TestGRPOTrainer(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
-            environment_factory=DummyEnvironment,
+            environment_factory=IncrementRewardEnvironment,
         )
-
-        # The env-owned reward is registered as the sole reward source (logged under the env class name) with weight 1,
-        # and `get_reward` is not exposed as a tool.
-        assert trainer.reward_func_names == ["DummyEnvironment"]
-        assert trainer.reward_weights.tolist() == [1.0]
-        tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "increment" in tool_names
-        assert "get_reward" not in tool_names
-        assert "reset" not in tool_names
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 3:  # first call
-                # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 35744, 497, 330, 16370, 788, 5212, 9520, 788, 220, 16, 11248, 151658, 151645, 151643],
-                        # an invalid tool call with wrong tool name
-                        # '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
-                        [151657, 198, 4913, 606, 788, 330, 450, 13477, 497, 330, 16370, 788, 5212, 9520, 788, 220, 17, 11248, 151658, 151645],
-                        # "I won't increment<|im_end|>"
-                        [40, 2765, 944, 16252, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
-                    ],
-                    device=input_ids.device,
-                )
-                # fmt: on
-            else:  # second call will only have two inputs in the batch, because two examples have a tool call.
-                completion_ids = torch.tensor(
-                    [
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                        # 'Done!<|im_end|>'
-                        [17453, 0, 151645],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # a call to `get_reward`, which is not exposed as a tool
+                '<tool_call>\n{"name": "get_reward", "arguments": {}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
-        # -> rewards 1.0, 0.0, 0.0.
-        assert trainer.state.log_history[-1]["rewards/DummyEnvironment/mean"] == pytest.approx(1 / 3)
+        # -> rewards 1.0, 0.0, 0.0. It is the sole reward source, with weight 1.
+        assert trainer.state.log_history[-1]["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+        assert trainer.state.log_history[-1]["reward"] == pytest.approx(1 / 3)
+        # `increment` is a tool, and `get_reward` is not: of the two calls, only the second one fails
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset` or `get_reward`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4098,25 +4184,6 @@ class TestGRPOTrainer(TrlTestCase):
     def test_environment_owned_reward_coexists_with_reward_funcs(self):
         # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
         # extra reward source (weight 1) after the trainer-owned reward functions.
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                self._solved = False
-
-            def guess(self, word: str) -> str:
-                """
-                Submit a guess.
-
-                Args:
-                    word: The guessed word.
-
-                Returns:
-                    Feedback about the guess.
-                """
-                return "nope"
-
-            def get_reward(self) -> float:
-                return 1.0 if self._solved else 0.0
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -4129,18 +4196,32 @@ class TestGRPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             reward_funcs=str_length_reward,
             args=training_args,
-            environment_factory=DummyEnvironment,
+            environment_factory=IncrementRewardEnvironment,
         )
 
-        # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
-        # a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "DummyEnvironment"]
-        assert trainer.reward_weights.tolist() == [0.5, 1.0]
-        assert len(trainer.reward_funcs) == 2
-        # `get_reward` is not exposed as a tool; `guess` is.
-        tool_names = [tool.__name__ for tool in trainer.tools]
-        assert "guess" in tool_names
-        assert "get_reward" not in tool_names
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        # The env-owned reward is logged under the env class name next to the trainer-owned reward func, with a fixed
+        # weight of 1. Counters are 1, 0, 0 -> env rewards 1.0, 0.0, 0.0
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/IncrementRewardEnvironment/mean"}
+        assert logged["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+        assert logged["reward"] == pytest.approx(0.5 * logged["rewards/str_length_reward/mean"] + 1 / 3)
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset` or `get_reward`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+        assert '"name": "get_reward"' not in prompts[0]
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -4155,45 +4236,17 @@ class TestGRPOTrainer(TrlTestCase):
         # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
         # deduplicated by class: two names mapping to the same `get_reward` class share a single column (no
         # double-counting).
-        class ScoredEnvironment:  # owns its reward
-            def reset(self, **kwargs): ...
-
-            def act(self, x: int) -> int:
-                """
-                Act.
-
-                Args:
-                    x: A value.
-
-                Returns:
-                    The value.
-                """
-                return x
-
-            def get_reward(self) -> float:
-                return 1.0
-
-        class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
-            def reset(self, **kwargs): ...
-
-            def play(self, x: int) -> int:
-                """
-                Play.
-
-                Args:
-                    x: A value.
-
-                Returns:
-                    The value.
-                """
-                return x
-
         # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
-        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [[{"role": "user", "content": "Play."}]] * 3,
+                "environment": ["scored", "scored2", "plain"],
+            }
+        )
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_train_batch_size=9,  # one generation batch holds the 3 environments
             num_generations=3,  # reduce the number of generations to reduce memory usage
             report_to="none",
         )
@@ -4203,19 +4256,29 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
-            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
+            environment_factory={
+                "scored": ScoredEnvironment,
+                "scored2": ScoredEnvironment,
+                "plain": IncrementEnvironment,
+            },
         )
 
-        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
-        # column is appended after the trainer-owned reward func, with a fixed weight of 1.
-        assert trainer.reward_func_names == ["str_length_reward", "ScoredEnvironment"]
-        assert trainer.reward_weights.tolist() == [1.0, 1.0]
+        # No tool call. Distinct-length completions within the group give reward variance, so advantages are non-zero.
+        script = ScriptedTurns(
+            trainer.processing_class, first_turns=["I won't increment<|im_end|>", "I won't increment it<|im_end|>"]
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
 
-        # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
-        # `None` (turned into NaN and ignored) instead of raising `AttributeError`.
-        env_reward_func = trainer.reward_funcs[-1]
-        rewards = env_reward_func(environments=[ScoredEnvironment(), PlainEnvironment()])
-        assert rewards == [1.0, None]
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is logged after the trainer-owned reward func. It scores only the rollouts bound to
+        # `ScoredEnvironment`: an `IncrementEnvironment` rollout is left out instead of raising.
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/str_length_reward/mean", "rewards/ScoredEnvironment/mean"}
+        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+        # 6 of the 9 rollouts are bound to `ScoredEnvironment`, so the env reward adds 1.0 to two thirds of them
+        assert logged["reward"] == pytest.approx(logged["rewards/str_length_reward/mean"] + 2 / 3)
 
     def test_no_reward_source_raises(self):
         # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
@@ -4250,17 +4313,13 @@ class TestGRPOTrainer(TrlTestCase):
     def test_environment_owned_data_requires_max_steps(self):
         # When the environment owns the data and no external `train_dataset` is provided, `max_steps` must set the
         # training length.
-        class DummyEnvironment:
-            def reset(self, **kwargs):
-                return "Guess the 5-letter word."
-
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")  # max_steps unset
         with pytest.raises(ValueError, match="max_steps"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 reward_funcs=str_length_reward,
                 args=training_args,
-                environment_factory=DummyEnvironment,
+                environment_factory=GuessTheWordEnvironment,
             )
 
     @pytest.mark.xfail(
@@ -4298,20 +4357,6 @@ class TestGRPOTrainer(TrlTestCase):
     def test_train_with_environment_owned_data(self):
         # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
         # `max_steps` drives the training loop. A placeholder dataset is built internally.
-        class GuessTheWordEnvironment:
-            def reset(self, **kwargs):
-                return "Guess the 5-letter word."  # the env owns the data and returns the prompt
-
-        # Distinct-length completions within the group give reward variance, so advantages are non-zero.
-        def fake_generate(input_ids, **kwargs):
-            rows = [
-                [17453, 0, 151645, 151643, 151643, 151643],  # 'Done!' + eos + pad
-                [17453, 17453, 0, 151645, 151643, 151643],  # 'DoneDone!' + eos + pad
-                [17453, 17453, 17453, 0, 151645, 151643],  # 'DoneDoneDone!' + eos + pad
-            ]
-            completion_ids = torch.tensor([rows[i % 3] for i in range(input_ids.shape[0])], device=input_ids.device)
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -4331,7 +4376,11 @@ class TestGRPOTrainer(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        # Distinct-length completions within the group give reward variance, so advantages are non-zero.
+        script = ScriptedTurns(
+            trainer.processing_class, first_turns=["DoneDone!<|im_end|>", "DoneDoneDone!<|im_end|>"]
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -4368,27 +4417,19 @@ class TestGRPOTrainer(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            # If input_ids.shape[0] < 3, it means that it's a second call, which should not happen here
-            assert input_ids.shape[0] == 3
-            # fmt: off
-            completion_ids = torch.tensor(
-                [
-                    # '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
-                    [151657, 198, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643],
-                    # '<toolcall>\n{"arguments": {"a": 3, "b": 4}}\n</toolcall><|im_end|>'
-                    [27, 14172, 6659, 397, 4913, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 522, 14172, 6659, 29, 151645],
-                    # '<tool_call>\n{"arguments": {a: 3, b: 4}}\n</tool_call><|im_end|>'
-                    [151657, 198, 4913, 16370, 788, 314, 64, 25, 220, 18, 11, 293, 25, 220, 19, 11248, 151658, 151645, 151643, 151643, 151643, 151643, 151643, 151643],
-                ],
-                device=input_ids.device,
-            )
-            # fmt: on
-            return torch.cat([input_ids, completion_ids], dim=-1)
-
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>',
+                '<toolcall>\n{"arguments": {"a": 3, "b": 4}}\n</toolcall><|im_end|>',
+                '<tool_call>\n{"arguments": {a: 3, b: 4}}\n</tool_call><|im_end|>',
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
             trainer.train()
 
+        # No malformed call is run as a tool, so no rollout has a second turn
+        assert script.turns_after_tool == 0
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
@@ -4520,6 +4561,19 @@ class TestGRPOTrainer(TrlTestCase):
         assert pad_token_id is not None
         assert reward_model.config.get_text_config().pad_token_id == pad_token_id
 
+    def test_init_reward_model_with_model_revision(self):
+        # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "8913f5819566"}
+        )
+        GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
 
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
@@ -4533,6 +4587,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.24.0"),
+                        reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                    ),
+                    pytest.mark.xfail(
+                        raises=AssertionError,
+                        reason="The tiny model's random completions never open an answer, so they all parse to the same "
+                        "empty one, get the same reward and leave nothing to learn",
+                        strict=True,
+                    ),
+                ],
             ),
             "trl-internal-testing/tiny-InternVLForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
@@ -4896,6 +4965,13 @@ class TestGRPOTrainerVLM(TrlTestCase):
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                ),
+            ),
         ],
     )
     @require_vllm
@@ -5038,18 +5114,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     def test_train_with_tools_multimodal_response(self):
         # Test that tools returning images (multimodal responses) work correctly with a VLM.
         # The tool returns a list of content blocks including an image.
-        from PIL import Image as PILImage
-
-        def screenshot_tool() -> list:
-            """
-            Takes a screenshot and returns it.
-
-            Returns:
-                A list of content blocks with the screenshot image.
-            """
-            img = PILImage.new("RGB", (64, 64), color="red")
-            return [{"type": "image", "image": img}, {"type": "text", "text": "Here is the screenshot"}]
-
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -5066,39 +5130,26 @@ class TestGRPOTrainerVLM(TrlTestCase):
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
-            tools=[screenshot_tool],
+            tools=[screenshot_image_tool],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 2:  # first call: num_generations=2 completions for 1 prompt
-                # fmt: off
-                completion_ids = torch.tensor(
-                    [
-                        # '<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>'
-                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
-                        # "I don't know any tool<|im_end|>" + padding
-                        [40, 1459, 914, 1366, 866, 5224, 248046, 248044, 248044, 248044, 248044, 248044, 248044, 248044, 248044],
-                    ],
-                    device=input_ids.device,
-                )
-                # fmt: on
-            else:  # second call: 1 tool call succeeded
-                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
-                assert kwargs["image_grid_thw"].shape[0] == 2, (
-                    f"Expected 2 images (1 original + 1 tool-returned), got {kwargs['image_grid_thw'].shape[0]}"
-                )
-                completion_ids = torch.tensor(
-                    [
-                        # 'Done!<|im_end|>'
-                        [16936, 0, 248046],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
+        script = ScriptedTurns(
+            trainer.processing_class.tokenizer,
+            first_turns=[
+                "<tool_call>\n<function=screenshot_image_tool>\n</function>\n</tool_call><|im_end|>",
+                "I don't know any tool<|im_end|>",
+            ],
+        )
 
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The prompt's image and the one the tool returned
+                assert kwargs["image_grid_thw"].shape[0] == 2
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -5119,10 +5170,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @require_response_parsing
     def test_train_with_tools_text_response_multimodal_prompt(self):
         # Test that tools returning text (non-multimodal response) work correctly with a VLM prompt having images.
-        def screenshot_tool() -> str:
-            """Simple text-returning tool."""
-            return "The image shows a red square."
-
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -5143,45 +5190,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 2:  # first call
-                completion_ids = torch.tensor(
-                    [
-                        [248058, 198, 27, 1628, 13744, 30091, 22076, 29, 198, 510, 1628, 29, 198, 248059, 248046],
-                        [
-                            40,
-                            1459,
-                            914,
-                            1366,
-                            866,
-                            5224,
-                            248046,
-                            248044,
-                            248044,
-                            248044,
-                            248044,
-                            248044,
-                            248044,
-                            248044,
-                            248044,
-                        ],
-                    ],
-                    device=input_ids.device,
-                )
-            else:  # second call after text tool response: original image grid thw should still be present
-                assert "image_grid_thw" in kwargs, "image_grid_thw must be passed to generate"
-                assert kwargs["image_grid_thw"].shape[0] == 1, (
-                    f"Expected 1 original image, got {kwargs['image_grid_thw'].shape[0]}"
-                )
-                completion_ids = torch.tensor(
-                    [
-                        [16936, 0, 248046],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
+        script = ScriptedTurns(
+            trainer.processing_class.tokenizer,
+            first_turns=[
+                "<tool_call>\n<function=screenshot_tool>\n</function>\n</tool_call><|im_end|>",
+                "I don't know any tool<|im_end|>",
+            ],
+        )
 
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The prompt's image only: the tool returned text
+                assert kwargs["image_grid_thw"].shape[0] == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -5197,12 +5220,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
         reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
     @require_response_parsing
-    def test_train_with_tools_gemma4(self):
+    @pytest.mark.parametrize("eos_token", ["<eos>", "<turn|>"])
+    def test_train_with_tools_gemma4(self, eos_token):
         # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
-        def screenshot_tool() -> str:
-            """Simple text-returning tool."""
-            return "The image shows a red square."
-
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -5213,38 +5233,37 @@ class TestGRPOTrainerVLM(TrlTestCase):
             max_completion_length=512,
             report_to="none",
         )
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        # Gemma 4's eos is `<eos>`, but fine-tuned copies may set it to `<turn|>`, e.g. `SFTConfig(eos_token="<turn|>")`
+        processor.tokenizer.eos_token = eos_token
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
             reward_funcs=str_length_reward,
             args=training_args,
             train_dataset=dataset,
+            processing_class=processor,
             tools=[screenshot_tool],
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        def fake_generate(input_ids, **kwargs):
-            if input_ids.shape[0] == 2:  # first call
-                completion_ids = torch.tensor(
-                    [
-                        # '<|tool_call>call:screenshot_tool{}<tool_call|><|tool_response>'
-                        [48, 6639, 236787, 76794, 236779, 13205, 16454, 49, 50],
-                        # "I don't know any tool<turn|>" + padding
-                        [236777, 1537, 236789, 236745, 1281, 1027, 5904, 106, 0],
-                    ],
-                    device=input_ids.device,
-                )
-            else:  # second call: 1 tool call succeeded
-                completion_ids = torch.tensor(
-                    [
-                        # 'Done!<turn|>'
-                        [34496, 236888, 106],
-                    ],
-                    device=input_ids.device,
-                )
-            return torch.cat([input_ids, completion_ids], dim=-1)
+        script = ScriptedTurns(
+            trainer.processing_class.tokenizer,
+            first_turns=[
+                "<|tool_call>call:screenshot_tool{}<tool_call|><|tool_response>",
+                "I don't know any tool<turn|>",
+            ],
+            after_tool="Done!<turn|>",
+            tool_response_marker="<tool_response|>",
+        )
 
-        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+        def generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 1:  # the turn after the tool call
+                # The tool result follows the model's only tool call
+                assert processor.tokenizer.decode(input_ids[0]).count("<|tool_call>") == 1
+            return script.generate(input_ids, **kwargs)
+
+        with patch.object(trainer.model, "generate", generate):
             trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -5284,15 +5303,130 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n"
+                '{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>',
+                "</think>\n\nI don't know any tool<｜end▁of▁sentence｜>",
+            ],
+            after_tool="Done!<｜end▁of▁sentence｜>",
+            tool_response_marker="<｜tool▁output▁begin｜>",
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3_0528(self):
+        # DeepSeek-R1-0528's template only renders string tool-call arguments, so the trainer must swap in the training
+        # one, and its generation prompt doesn't pre-fill `<think>`, so the model opens it itself
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
         def fake_generate(input_ids, **kwargs):
             if input_ids.shape[0] == 2:  # first call
                 # fmt: off
                 completion_ids = torch.tensor(
                     [
-                        # '</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
-                        [128799, 271, 128806, 128808, 8701, 128814, 16640, 29717, 3682, 1458, 201, 9854, 14479, 201, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 1778, 9854, 128809, 128807, 1],
-                        # "</think>\n\nI don't know any tool<｜end▁of▁sentence｜>" + padding
-                        [128799, 271, 43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                        # '<think>\n\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
+                        [128798, 271, 128799, 271, 128806, 128808, 8701, 128814, 16640, 29717, 3682, 1458, 201, 9854, 14479, 201, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 1778, 9854, 128809, 128807, 1],
+                        # "<think>\n\n</think>\n\nI don't know any tool<｜end▁of▁sentence｜>" + padding
+                        [128798, 271, 128799, 271, 43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<｜end▁of▁sentence｜>'
+                        [68520, 3, 1],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3.1 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3_v5(self):
+        # DeepSeek-V3.1's template only renders string tool-call arguments, so the trainer must swap in the training one
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        tokenizer.chat_template = deepseekv3_v5_chat_template  # DeepSeek-V3.1 has no tiny model of its own
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>multiply_tool<｜tool▁sep｜>{"a": 3, "b": 4}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
+                        [128806, 128808, 16640, 29717, 3682, 1458, 128814, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 95, 128809, 128807, 1],
+                        # "I don't know any tool<｜end▁of▁sentence｜>" + padding
+                        [43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                     ],
                     device=input_ids.device,
                 )

@@ -36,9 +36,8 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GPTNeoXConfig(
     vocab_size=50304,
-    hidden_size=8,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
-    num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
     eos_token_id=0,

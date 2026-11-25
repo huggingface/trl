@@ -966,8 +966,8 @@ class TestKTOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_kto_trainer_without_providing_ref_model_with_lora`, since gradient
-    # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: if the default ever
-    # changes, we still explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # checkpointing is enabled by default in `KTOTrainer`. We keep it as a regression guard: the assert fails if the
+    # default ever changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -979,9 +979,9 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
 
         trainer = KTOTrainer(
             model=model_id,
@@ -1013,8 +1013,8 @@ class TestKTOTrainer(TrlTestCase):
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
-        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
-        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed in PEFT 0.20.0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.20.0")
         lora_config = LoraConfig(
             target_modules=["q_proj", "v_proj", "lm_head"],
             **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
@@ -1387,17 +1387,16 @@ class TestKTOTrainer(TrlTestCase):
             assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
     # In practice, this test is the same as `test_kto_trainer`, since gradient checkpointing is enabled by default in
-    # `KTOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `KTOTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
 
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            gradient_checkpointing=True,
             report_to="none",
         )
+        assert training_args.gradient_checkpointing
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1570,6 +1569,13 @@ class TestKTOTrainerVLM(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
             pytest.param(
@@ -1766,6 +1772,26 @@ class TestKTOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_train_vlm_pad_to_multiple_of(self):
+        # Regression test for #8551: padding to a multiple raised for VLMs, and it is the default on Neuron
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,
+            pad_to_multiple_of=128,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        assert batch["input_ids"].shape[1] % 128 == 0
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 

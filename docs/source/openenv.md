@@ -269,9 +269,12 @@ FEEDBACK = re.compile(r"Feedback:\n([A-Z ]+)\n([GYX ]+)")
 
 class WordleEnv:
     def __init__(self):
-        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space")
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
 
     def reset(self, **kwargs) -> str | None:
+        # One connection per game, see "Long runs against a Space" above
+        self.client.close()
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
         result = self.client.reset()
         self._last_full_feedback = result.observation.messages[0].content
         self.done = False
@@ -365,7 +368,7 @@ A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays
 
 ### Running the example
 
-Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=64` variable on your copy.
+Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=96` variable on your copy (64 games, plus the sessions still being closed between games).
 
 <hfoptions id="wordle_vllm_mode">
 
@@ -387,7 +390,7 @@ This runs vLLM in the same process as training, requiring only a single GPU. In 
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --gpu-memory-utilization 0.9 --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -450,7 +453,7 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL).sync()
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
@@ -461,7 +464,7 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            self._catch_client = OpenSpielEnv(base_url=CATCH_URL).sync()
             result = self._catch_client.reset()
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
@@ -616,29 +619,34 @@ To create your own environment, check out the guide on [Building Your Own Enviro
 
 ## Server concurrency
 
-When using `environment_factory`, the trainer creates N environment instances (one per generation), each opening a WebSocket connection to the server. By default, OpenEnv servers allow only 1 concurrent session, which will cause failures during training.
+When using `environment_factory`, the trainer creates one environment instance per rollout in the generation batch, and each instance typically opens its own WebSocket session on the server. Instances are pooled and reused (via `reset()`) for the whole run, so these sessions stay open between steps. With [`GRPOTrainer`], the server must therefore accept `generation_batch_size` concurrent sessions: each process holds `per_device_train_batch_size × steps_per_generation` instances (more if `per_device_eval_batch_size` is larger), and `generation_batch_size` (default `per_device_train_batch_size × num_processes × gradient_accumulation_steps`) is the sum over processes. With [`AsyncGRPOTrainer`], up to `max_concurrent_rollouts` rollouts, and so environment instances, can run at once.
 
-To support parallel training, configure the server for concurrency:
+By default, OpenEnv servers allow only 1 concurrent session. When the trainer opens more sessions than the server allows, the extra ones are refused with a `CAPACITY_REACHED` error.
 
-1. In your environment file, declare concurrent session support:
+To accept more sessions, both of these must hold on the server:
+
+1. The environment supports concurrent sessions. It declares it with:
 
 ```python
 SUPPORTS_CONCURRENT_SESSIONS: bool = True
 ```
 
-2. In your server app, set the concurrency limit:
+2. The server app sets the session limit. Most environments in the OpenEnv repository read it from the `MAX_CONCURRENT_ENVS` environment variable, so you can set it when you start the server (for example `MAX_CONCURRENT_ENVS=64`) or as a variable of the Hugging Face Space. In your own server app:
 
 ```python
 app = create_app(
     create_my_environment,
     MyAction,
     MyObservation,
-    max_concurrent_envs=64,  # match or exceed generation_batch_size
+    max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "64")),  # >= generation_batch_size
 )
 ```
 
+> [!WARNING]
+> Only declare `SUPPORTS_CONCURRENT_SESSIONS = True` for an environment whose sessions are isolated from each other. All sessions run in the same server process, so module-level globals, shared files or temporary directories, a shared interpreter or subprocess, or environment variables let one episode, or code written by the model, affect another. If an environment does not support concurrent sessions, run several server instances instead (for example one per rollout) and spread the environment instances across them.
+
 > [!TIP]
-> `max_concurrent_envs` should be ≥ `generation_batch_size` (which defaults to `per_device_train_batch_size × gradient_accumulation_steps`). For example, with `gradient_accumulation_steps=64` and batch size 1, you need at least 64 concurrent sessions.
+> For example, with `per_device_train_batch_size=1`, `gradient_accumulation_steps=64` and a single process, the server needs at least 64 concurrent sessions.
 
 ## `environment_factory` vs `rollout_func`
 
@@ -755,7 +763,7 @@ MAX_CONCURRENT_ENVS=9 openenv harbor serve --dataset <hf-dataset> --port 8200 --
 The vLLM server must expose tool calling and real token ids, and enable NCCL weight sync so the agent always hits the current policy. Rollouts and weight updates must use the same vLLM server:
 
 ```bash
-vllm serve <model> \
+vllm serve <model> --gpu-memory-utilization 0.9 \
     --enable-auto-tool-choice --tool-call-parser <parser> \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \

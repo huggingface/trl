@@ -15,6 +15,7 @@
 import gc
 import logging
 import os
+import sys
 import traceback
 from functools import wraps
 
@@ -22,9 +23,9 @@ import pytest
 import torch
 from transformers.utils import is_peft_available, is_torch_xpu_available
 
-# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
-import trl  # noqa: F401
 from trl.import_utils import is_vllm_available
+
+from .testing_utils import MODEL_REVISIONS
 
 
 # ============================================================================
@@ -75,32 +76,37 @@ def pytest_runtest_makereport(item, call):
 
 
 # ============================================================================
-# Model Revision Override
+# Peak host memory per test
 # ============================================================================
-# To test a tiny model PR before merging to main:
-# 1. Add the full model_id and PR revision to this dict
-# 2. Commit and push to trigger CI
-# 3. Once CI is green, merge the tiny model PR on HF Hub
-# 4. Remove the entry from this dict and commit
-#
-# Example:
-#   MODEL_REVISIONS = {
-#       "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5": "refs/pr/3",
-#       "trl-internal-testing/tiny-LlavaForConditionalGeneration": "refs/pr/5",
-#   }
-# ============================================================================
+# Print the tests that raise their process's peak RSS by 2 GB or more, to catch memory regressions (#8429)
+# Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
+if sys.platform == "linux":
+    import resource
 
-MODEL_REVISIONS = {
-    # Add model_id: revision mappings here to test PRs
-}
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        yield
+        increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+        item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
+
+    def pytest_runtest_logreport(report):
+        # Written as each test ends, so it reaches the log even when the job is killed before the summary (#8429)
+        if report.when == "call":
+            increase = dict(report.user_properties)["peak_rss_increase_gb"]
+            if increase >= 2:
+                print(f"\n{report.nodeid} raised its process's peak host memory by {increase:.2f} GB", flush=True)  # noqa: T201
+
+
+def check_pinned(model_id, revision):
+    # A tiny model loaded without a revision must be pinned, otherwise the tests load whatever is on the Hub `main`
+    if str(model_id).startswith("trl-internal-testing/") and model_id not in MODEL_REVISIONS and revision is None:
+        raise ValueError(f"{model_id} is not pinned: add it to `MODEL_REVISIONS` in tests/testing_utils.py")
 
 
 @pytest.fixture(autouse=True)
 def apply_model_revisions(monkeypatch):
     """Auto-inject revision parameter for models defined in MODEL_REVISIONS."""
-    if not MODEL_REVISIONS:
-        return
-
     from transformers import (
         AutoConfig,
         AutoModelForCausalLM,
@@ -119,6 +125,7 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
+            check_pinned(pretrained_model_name_or_path, kwargs.get("revision"))
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
                 if kwargs.get("revision") is None:
@@ -137,6 +144,7 @@ def apply_model_revisions(monkeypatch):
     def create_method_wrapper(original_method):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
+            check_pinned(model_id, kwargs.get("revision"))
             if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
@@ -164,6 +172,7 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
+            check_pinned(model_id, kwargs.get("revision"))
             if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)

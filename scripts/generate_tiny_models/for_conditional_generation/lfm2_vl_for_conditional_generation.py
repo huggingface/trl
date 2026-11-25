@@ -43,6 +43,7 @@ text_config = {
     "hidden_size": 8,
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
+    "head_dim": 8,  # a multiple of 8, as Flash Attention requires
     "intermediate_size": 32,
     # LFM2 interleaves short convolution layers with full attention layers. The reference spells the pattern out with
     # `layer_types` rather than `full_attn_idxs`; keep one of each so both layer types are exercised.
@@ -51,7 +52,7 @@ text_config = {
 vision_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
-    "num_attention_heads": 4,
+    "num_attention_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "intermediate_size": 32,
 }
 

@@ -35,7 +35,14 @@ from .testing_utils import (
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import (
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 class TestDataCollatorForPreference(TrlTestCase):
@@ -544,8 +551,8 @@ class TestRewardTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     # In practice, this test is the same as `test_train_dense_with_peft_config`, since gradient checkpointing is
-    # enabled by default in `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still
-    # explicitly test PEFT + gradient checkpointing, which has caused issues in the past.
+    # enabled by default in `RewardTrainer`. We keep it as a regression guard: the assert fails if the default ever
+    # changes.
     @require_peft
     def test_train_with_peft_config_and_gradient_checkpointing(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -554,7 +561,8 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
 
         trainer = RewardTrainer(
             model=model_id,
@@ -586,12 +594,18 @@ class TestRewardTrainer(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = RewardConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
 
         trainer = RewardTrainer(
             model=model_id,
@@ -612,6 +626,56 @@ class TestRewardTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "peft_type",
+        [
+            "prompt_tuning",
+            "prefix_tuning",
+            "prompt_encoder",
+        ],
+    )
+    @require_peft
+    def test_train_with_peft_config_prompt_tuning(self, peft_type):
+        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer, p-tuning doesn't support gradient checkpointing
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {"activation_checkpointing": False}
+        else:
+            checkpointing_args = {"gradient_checkpointing": False}
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
+        if peft_type == "prompt_tuning":
+            peft_config = PromptTuningConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        elif peft_type == "prefix_tuning":
+            peft_config = PrefixTuningConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        elif peft_type == "prompt_encoder":
+            peft_config = PromptEncoderConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        trainer = RewardTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "original_module" not in n:  # We expect the peft params to be different (except the frozen head)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
@@ -1001,12 +1065,12 @@ class TestRewardTrainer(TrlTestCase):
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
-    # `RewardTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
-    # checkpointing, which has caused issues in the past.
+    # `RewardTrainer`. We keep it as a regression guard: the assert fails if the default ever changes.
     def test_train_with_gradient_checkpointing(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        assert training_args.gradient_checkpointing
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
@@ -1028,12 +1092,18 @@ class TestRewardTrainer(TrlTestCase):
     def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
 
-        training_args = RewardConfig(
-            output_dir=self.tmp_dir,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-            report_to="none",
-        )
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {
+                "activation_checkpointing": True,
+                "activation_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        else:
+            checkpointing_args = {
+                "gradient_checkpointing": True,
+                "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+            }
+        training_args = RewardConfig(output_dir=self.tmp_dir, **checkpointing_args, report_to="none")
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
