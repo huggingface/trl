@@ -2088,7 +2088,14 @@ class TestGRPOTrainer(TrlTestCase):
 
         def record_metrics(inputs):
             outputs = original_score(inputs)
-            for key in ["sampling/sampling_logp_difference/mean", "sampling/sampling_logp_difference/max"]:
+            for key in [
+                "sampling/sampling_logp_difference/mean",
+                "sampling/sampling_logp_difference/max",
+                "sampling/raw_importance_sampling_ratio/min",
+                "sampling/raw_importance_sampling_ratio/mean",
+                "sampling/raw_importance_sampling_ratio/max",
+                "sampling/frac_modified_importance_sampling_ratio",
+            ]:
                 recorded_metrics.extend((key, value) for value in trainer._metrics["train"][key])
             return outputs
 
