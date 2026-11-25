@@ -73,6 +73,8 @@ Tests default to what most users run. They train on a conversational dataset rat
 
 There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
 
+A test parametrized over models or chat templates gives each case an id, and a model keeps the same id in every test: `pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5")`. The id is the model's name in lowercase, hyphen-separated, with the version attached (`qwen2.5-vl`, `llama3.2`, `deepseek-v3-0528`); reuse the one other tests already give that model. A case that sets a chat template on a model is named after the template (`qwen3.8-v2`), since one model can carry several.
+
 ### Issues and assignment
 
 Before working on an issue, check its assignees. If it is assigned to someone other than the user you are working for, do not open a PR that fixes it: tell the user, and suggest asking the assignee in the issue first.

@@ -307,12 +307,18 @@ class TestModelAcceptsImages(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id, architecture, expected",
         [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
-            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False, id="qwen2.5"),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                AutoModelForImageTextToText,
+                True,
+                id="gemma3",
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 AutoModelForImageTextToText,
                 True,
+                id="qwen3.5-nothink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -323,6 +329,7 @@ class TestModelAcceptsImages(TrlTestCase):
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
                 AutoModelForCausalLM,
                 False,
+                id="qwen3.5-nothink-causal-lm",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1440,29 +1447,32 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
 _FUSED_LM_HEAD_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-BeamForCausalLM",
+        id="beam",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.20.1"),
             reason="Beam was introduced in transformers-5.20.1",
         ),
     ),
-    "trl-internal-testing/tiny-CohereForCausalLM",
-    "trl-internal-testing/tiny-Cohere2ForCausalLM",
-    "trl-internal-testing/tiny-Gemma2ForCausalLM",
-    "trl-internal-testing/tiny-GemmaForCausalLM",
-    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-    "trl-internal-testing/tiny-GPT2LMHeadModel",
+    pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+    pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+    pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+    pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+    pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4-moe"),
+    pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
     pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        id="gpt-oss",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.23.0"),
             reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
         ),
     ),
-    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+    pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
+    pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        id="lfm2.5",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
@@ -1470,18 +1480,20 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        id="lfm2.5-moe",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+    pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
+    pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
     pytest.param(
         "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        id="nemotron3-nano",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.3.0"),
             reason="Nemotron 3 was introduced in transformers>=5.3.0",
@@ -1489,17 +1501,18 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        id="olmo3",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("4.57.0"),
             reason="Olmo 3 was introduced in transformers>=4.57.0",
         ),
     ),
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-    "trl-internal-testing/tiny-PhimoeForCausalLM",
-    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-    "trl-internal-testing/tiny-Qwen3ForCausalLM",
-    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+    pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+    pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+    pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
+    pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+    pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
+    pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3-instruct-2507"),
 ]
 
 
@@ -1624,10 +1637,11 @@ class TestAddFusedLMHead:
     @pytest.mark.parametrize(
         "model_type, config_kwargs",
         [
-            ("granite", {"logits_scaling": 8.0}),
+            pytest.param("granite", {"logits_scaling": 8.0}, id="granite"),
             pytest.param(
                 "minicpm3",
                 {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                id="minicpm3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.13.0"),
                     reason="MiniCPM3 was introduced in transformers>=5.13.0",
@@ -1636,12 +1650,17 @@ class TestAddFusedLMHead:
             pytest.param(
                 "hyperclovax",
                 {"logits_scaling": 4.0},
+                id="hyperclovax",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.9.0"),
                     reason="HyperCLOVA X was introduced in transformers>=5.9.0",
                 ),
             ),
-            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+            pytest.param(
+                "falcon_h1",
+                {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16},
+                id="falcon-h1",
+            ),
         ],
     )
     def test_logits_scaling(self, model_type, config_kwargs):
@@ -1684,16 +1703,17 @@ class TestAddFusedLMHead:
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
+                id="gpt-oss",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.23.0"),
                     reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
                 ),
             ),
-            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-            "trl-internal-testing/tiny-PhimoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+            pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
         ],
     )
     def test_aux_loss(self, model_id):
@@ -1734,6 +1754,7 @@ class TestAddFusedLMHead:
             *_FUSED_LM_HEAD_MODEL_IDS,
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                id="deepseek-v3",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
@@ -1744,6 +1765,7 @@ class TestAddFusedLMHead:
             ),
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+                id="deepseek-v3-0528",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
@@ -1787,6 +1809,7 @@ class TestAddFusedLMHead:
             *_FUSED_LM_HEAD_MODEL_IDS,
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                id="deepseek-v3",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
@@ -1799,6 +1822,7 @@ class TestAddFusedLMHead:
             ),
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+                id="deepseek-v3-0528",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
@@ -1849,14 +1873,16 @@ class TestAddFusedLMHead:
 _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-BeamForCausalLM",
+        id="beam",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.20.1"),
             reason="Beam was introduced in transformers-5.20.1",
         ),
     ),
-    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        id="deepseek-v3",
         marks=[
             pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
@@ -1869,6 +1895,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        id="deepseek-v3-0528",
         marks=[
             pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
@@ -1879,21 +1906,23 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
             ),
         ],
     ),
-    "trl-internal-testing/tiny-Gemma2ForCausalLM",
-    "trl-internal-testing/tiny-GemmaForCausalLM",
-    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+    pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+    pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4-moe"),
     pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        id="gpt-oss",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.23.0"),
             reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
         ),
     ),
-    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+    pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
+    pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        id="lfm2.5",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
@@ -1901,36 +1930,39 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        id="lfm2.5-moe",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+    pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+    pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
+    pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
     pytest.param(
         "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        id="nemotron3-nano",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.3.0"),
             reason="Nemotron 3 was introduced in transformers>=5.3.0",
         ),
     ),
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-    "trl-internal-testing/tiny-PhimoeForCausalLM",
-    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-    "trl-internal-testing/tiny-Qwen3ForCausalLM",
-    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+    pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+    pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+    pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
+    pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+    pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
+    pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
 ]
 
 
 _FUSED_LM_HEAD_VLM_MODEL_IDS = [
-    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
     pytest.param(
         "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        id="gemma4",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.5.0"),
             reason="Gemma4 models were introduced in transformers-5.5.0",
@@ -1938,6 +1970,7 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+        id="inkling2-loop",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.24.0"),
             reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
@@ -1945,24 +1978,27 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+        id="lfm2.5-vl",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5-VL requires transformers>=5.0.0",
         ),
     ),
-    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+    pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava-next"),
     pytest.param(
         "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+        id="muse-glimmer",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.15.0"),
             reason="Muse Glimmer was introduced in transformers-5.15.0",
         ),
     ),
-    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
+    pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
     pytest.param(
         "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        id="qwen3-vl",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("4.57.0"),
             reason="Qwen3-VL series were introduced in transformers-4.57.0",
@@ -1970,6 +2006,7 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+        id="qwen3.5-nothink",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1977,6 +2014,7 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        id="qwen3.6-moe",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1984,6 +2022,7 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
     ),
     pytest.param(
         "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+        id="muse-spark",
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.20.0"),
             reason="Muse Spark Open was introduced in transformers-5.20.0",
@@ -2037,9 +2076,10 @@ class TestAddFusedLMHeadLoss:
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
+                id="gpt-oss",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.23.0"),
                     reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
@@ -2107,6 +2147,7 @@ class TestAddFusedLMHeadLoss:
             # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
             pytest.param(
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
+                id="mistral-large4",
                 marks=[
                     require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
                     pytest.mark.skipif(
@@ -2131,6 +2172,7 @@ class TestAddFusedLMHeadLoss:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2344,9 +2386,13 @@ class TestComputeFlopsPerToken(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma2ForCausalLM",  # sliding-window attention layers
+                id="gemma2",
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",  # linear attention, shared experts
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
