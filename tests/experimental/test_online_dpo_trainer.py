@@ -14,7 +14,9 @@
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, features, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
@@ -169,6 +171,54 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.parametrize("model_as_str", [True, False])
+    def test_train_without_processing_class(self, model_as_str):
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = OnlineDPOTrainer(
+            model=self.model_id if model_as_str else self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer.processing_class.name_or_path == self.model_id
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
+    @require_peft
+    @require_vllm
+    @pytest.mark.parametrize("peft_config_name", ["prompt_tuning", "lora_bias"])
+    def test_vllm_and_peft_without_lora_merge_raises(self, peft_config_name):
+        # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which can't express the virtual
+        # tokens of prompt tuning or a LoRA bias
+        from peft import PromptTuningConfig, TaskType
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        peft_config = {
+            "prompt_tuning": PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            "lora_bias": LoraConfig(lora_bias=True),
+        }[peft_config_name]
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            OnlineDPOTrainer(
+                model=self.model_id,
+                reward_funcs=self.reward_model,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=peft_config,
+            )
+
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -291,6 +341,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_with_vllm_server(self, config_name):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""
@@ -504,6 +555,20 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_init_reward_model_with_model_revision(self):
+        # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "8913f5819566"}
+        )
+        OnlineDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
@@ -512,6 +577,15 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
+            ),
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
@@ -556,3 +630,50 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_generation_suppresses_image_token(self):
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=AutoModelForImageTextToText.from_pretrained(model_id),
+            reward_funcs=reward_model,
+            args=training_args,
+            processing_class=AutoProcessor.from_pretrained(model_id),
+            train_dataset=dataset,
+            reward_processing_classes=reward_tokenizer,
+        )
+
+        assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
+
+    def test_generation_suppresses_vision_start_token(self):
+        # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+        model_id = "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=AutoModelForImageTextToText.from_pretrained(model_id),
+            reward_funcs=reward_model,
+            args=training_args,
+            processing_class=AutoProcessor.from_pretrained(model_id),
+            train_dataset=dataset,
+            reward_processing_classes=reward_tokenizer,
+        )
+
+        expected = [trainer.model.config.image_token_id]
+        if Version(transformers.__version__) < Version("5.3.0"):
+            expected.append(trainer.model.config.vision_start_token_id)
+        assert trainer.generation_config.suppress_tokens == expected

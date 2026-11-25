@@ -37,8 +37,8 @@ class GRPOConfig(_BaseConfig):
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
-            processing classes.
+            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -59,8 +59,9 @@ class GRPOConfig(_BaseConfig):
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
-            requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
+            Whether to only keep the columns `"prompt"` and `"environment"` in the dataset. If you use a custom reward
+            function that requires any column other than `"prompts"` and `"completions"`, you should keep this to
+            `False`.
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
@@ -68,7 +69,9 @@ class GRPOConfig(_BaseConfig):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the generated completion.
+            Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the whole
+            multi-turn completion after the prompt (all model turns plus tool results), unlike [`AsyncGRPOConfig`],
+            where it caps each turn.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -185,7 +188,7 @@ class GRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
-            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+            paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`.
         sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
             Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
             is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
@@ -317,19 +320,29 @@ class GRPOConfig(_BaseConfig):
             (and account for the token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length reaches
-            `max_model_length`.
+            stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
+            results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
+            length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
+            otherwise). When the limit is reached, the tool calls of the last generated turn are not executed and the
+            completion ends with that turn, so a final tool call (for example one that submits an answer) is never
+            executed.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
-            and constrained.
+            and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
+            the candidate set each token was sampled from, which requires vLLM 0.28 or later and, in server mode, a
+            server started with `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30); otherwise, the IS
+            ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured
+            outputs, which restrict it to the tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`).
+            Structured outputs, which would otherwise stall training, also require that candidate set. vLLM also
+            applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires
+            `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
-                [C_min, C_max].
+                - `"token_truncate"`: Token-level truncated IS. Per-token ratios are clipped to [C_min, C_max].
                 - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
                 - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
                 [C_min, C_max] and applied to all tokens in the sequence.
@@ -431,7 +444,7 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string. The `revision` value is also used when loading "
-            "processing classes."
+            "the processing class."
         },
     )
     trust_remote_code: bool = field(
@@ -473,8 +486,9 @@ class GRPOConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
-            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
+            "help": "Whether to only keep the columns 'prompt' and 'environment' in the dataset. If you use a custom "
+            "reward function that requires any column other than 'prompts' and 'completions', you should keep this to "
+            "`False`."
         },
     )
     num_generations: int | None = field(
@@ -493,7 +507,11 @@ class GRPOConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={
+            "help": "Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the "
+            "whole multi-turn completion after the prompt (all model turns plus tool results), unlike "
+            "`AsyncGRPOConfig`, where it caps each turn."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
@@ -708,7 +726,7 @@ class GRPOConfig(_BaseConfig):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
             "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the "
-            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`."
         },
     )
     sapo_temperature_neg: float = field(
@@ -918,8 +936,12 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls or when the total "
-            "response length reaches `max_model_length`."
+            "generation stops when the model generates a response turn with no tool calls, when the completion "
+            "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
+            "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
+            "`max_position_embeddings` otherwise). When the limit is reached, the tool calls of the last generated "
+            "turn are not executed and the completion ends with that turn, so a final tool call (for example one "
+            "that submits an answer) is never executed."
         },
     )
     vllm_importance_sampling_correction: bool = field(
@@ -928,7 +950,16 @@ class GRPOConfig(_BaseConfig):
             "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
             "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
-            "IS ratios are computed and constrained."
+            "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
+            "logprobs are normalized over the candidate set each token was sampled from, which requires "
+            "vLLM 0.28 or later and, in server mode, a server started with `--return-sampling-mask` (and "
+            "`--enable-scale-out` from vLLM 0.30); otherwise, the IS "
+            "ratios are biased. vLLM bounds that "
+            "candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured outputs, which restrict it to the "
+            "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`). Structured outputs, which would "
+            "otherwise stall training, also require that candidate set. vLLM also applies "
+            "`repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
+            "`vllm_importance_sampling_correction=False`."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1075,6 +1106,28 @@ class GRPOConfig(_BaseConfig):
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )
 
+        structured_outputs = self.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+            self.generation_kwargs or {}
+        )
+        if (
+            self.use_vllm
+            and self.vllm_importance_sampling_correction
+            and self.top_k == 0
+            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0 or structured_outputs)
+        ):
+            raise ValueError(
+                "`top_p < 1.0`, `min_p > 0.0` or structured outputs need `top_k > 0`: vLLM bounds the candidate set "
+                "it returns for each sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
+                "`vllm_importance_sampling_correction=False`."
+            )
+
+        if self.use_vllm and self.vllm_importance_sampling_correction and self.repetition_penalty != 1.0:
+            raise ValueError(
+                "`repetition_penalty != 1.0` needs `vllm_importance_sampling_correction=False`: vLLM applies the "
+                "penalty to the log-probs it returns and the trainer does not, so the importance sampling ratios are "
+                "biased."
+            )
+
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
         if self.log_completions_hub_repo is not None and not self.log_completions:
@@ -1139,6 +1192,11 @@ class GRPOConfig(_BaseConfig):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        # CISPO bounds the importance weight itself, not its distance to 1, so falling back to `epsilon` would clip every
+        # weight
+        if self.loss_type == "cispo" and self.epsilon_high is None:
+            self.epsilon_high = 5.0
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(

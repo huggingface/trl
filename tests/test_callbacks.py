@@ -16,6 +16,7 @@ import json
 import os
 from unittest.mock import call, patch
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
@@ -68,7 +69,7 @@ class TestLogCompletionsCallback(TrlTestCase):
         # Get the current run
         completions_path = wandb.run.summary.completions["path"]
         json_path = os.path.join(wandb.run.dir, completions_path)
-        with open(json_path) as f:
+        with open(json_path, encoding="utf-8") as f:
             completions = json.load(f)
 
         # Check that the columns are correct
@@ -238,3 +239,22 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    def test_frozen_parameters(self):
+        """Test that BEMACallback works when some parameters are frozen."""
+        self.model.model.embed_tokens.weight.requires_grad_(False)
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+        # Check that the frozen parameters are left unchanged in the BEMA model
+        bema_model = AutoModelForCausalLM.from_pretrained(os.path.join(self.tmp_dir, "bema"))
+        frozen_weight = self.model.model.embed_tokens.weight.to(bema_model.device, bema_model.dtype)
+        assert torch.equal(bema_model.model.embed_tokens.weight, frozen_weight)

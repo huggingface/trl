@@ -21,7 +21,11 @@ from functools import wraps
 
 import pytest
 import torch
-from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
+from transformers.utils import is_peft_available, is_torch_xpu_available
+
+from trl.import_utils import is_vllm_available
+
+from .testing_utils import MODEL_REVISIONS
 
 
 # ============================================================================
@@ -72,32 +76,37 @@ def pytest_runtest_makereport(item, call):
 
 
 # ============================================================================
-# Model Revision Override
+# Peak host memory per test
 # ============================================================================
-# To test a tiny model PR before merging to main:
-# 1. Add the full model_id and PR revision to this dict
-# 2. Commit and push to trigger CI
-# 3. Once CI is green, merge the tiny model PR on HF Hub
-# 4. Remove the entry from this dict and commit
-#
-# Example:
-#   MODEL_REVISIONS = {
-#       "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5": "refs/pr/3",
-#       "trl-internal-testing/tiny-LlavaForConditionalGeneration": "refs/pr/5",
-#   }
-# ============================================================================
+# Print the tests that raise their process's peak RSS by 2 GB or more, to catch memory regressions (#8429)
+# Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
+if sys.platform == "linux":
+    import resource
 
-MODEL_REVISIONS = {
-    # Add model_id: revision mappings here to test PRs
-}
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        yield
+        increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+        item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
+
+    def pytest_runtest_logreport(report):
+        # Written as each test ends, so it reaches the log even when the job is killed before the summary (#8429)
+        if report.when == "call":
+            increase = dict(report.user_properties)["peak_rss_increase_gb"]
+            if increase >= 2:
+                print(f"\n{report.nodeid} raised its process's peak host memory by {increase:.2f} GB", flush=True)  # noqa: T201
+
+
+def check_pinned(model_id, revision):
+    # A tiny model loaded without a revision must be pinned, otherwise the tests load whatever is on the Hub `main`
+    if str(model_id).startswith("trl-internal-testing/") and model_id not in MODEL_REVISIONS and revision is None:
+        raise ValueError(f"{model_id} is not pinned: add it to `MODEL_REVISIONS` in tests/testing_utils.py")
 
 
 @pytest.fixture(autouse=True)
 def apply_model_revisions(monkeypatch):
     """Auto-inject revision parameter for models defined in MODEL_REVISIONS."""
-    if not MODEL_REVISIONS:
-        return
-
     from transformers import (
         AutoConfig,
         AutoModelForCausalLM,
@@ -116,9 +125,10 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
+            check_pinned(pretrained_model_name_or_path, kwargs.get("revision"))
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                if "revision" not in kwargs:
+                if kwargs.get("revision") is None:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -134,7 +144,8 @@ def apply_model_revisions(monkeypatch):
     def create_method_wrapper(original_method):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+            check_pinned(model_id, kwargs.get("revision"))
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
 
@@ -161,7 +172,8 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+            check_pinned(model_id, kwargs.get("revision"))
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)
 
@@ -267,7 +279,7 @@ def cleanup_vllm_dist_env():
         name: os.environ.get(name) for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT")
     }
     yield
-    if torch.distributed.is_initialized():
+    if torch.distributed.is_initialized() and is_vllm_available():
         from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
         cleanup_dist_env_and_memory()
@@ -276,45 +288,3 @@ def cleanup_vllm_dist_env():
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
-
-
-@pytest.fixture(autouse=True)
-def undo_liger_kernel_patching(monkeypatch):
-    """
-    Restore the transformers modeling modules that Liger Kernel patches process-wide.
-
-    `use_liger_kernel=True` makes transformers call `liger_kernel.transformers._apply_liger_kernel_to_instance`, which
-    patches the model instance but also rebinds module-level names in `transformers.models.<arch>.modeling_<arch>`
-    (`Qwen3RMSNorm` -> `LigerRMSNorm`, `Qwen3MLP` -> `LigerSwiGLUMLP`, `apply_rotary_pos_emb` ->
-    `liger_rotary_pos_emb`, ...). Liger never restores them, so every model of that architecture instantiated later in
-    the same process silently gets Triton kernels and fails on CPU tensors with `ValueError: Pointer argument cannot be
-    accessed from Triton (cpu tensor?)`. Which test trips over it depends on how pytest-xdist spreads tests across
-    workers, so the failure surfaces in an unrelated test (e.g. `TestUseAdapter`, whose PEFT model has a Qwen3 base)
-    and only in some runs. Snapshot the modeling modules when Liger patches, and restore them once the test is over.
-
-    Only the trigger is transformers-version dependent, not the leak itself: transformers < 5.3 applies the kernels in
-    `Trainer.__init__`, so a test that merely builds a trainer leaks, while transformers >= 5.3 applies them in
-    `Trainer.train()`. Either way they are never reverted, which is why only the minimum-versions CI job fails: the
-    Liger tests that use a Qwen3 model build a trainer but never train.
-    """
-    if not is_liger_kernel_available():
-        yield
-        return
-
-    import liger_kernel.transformers as liger_transformers
-
-    apply_to_instance = liger_transformers._apply_liger_kernel_to_instance
-    snapshots = {}
-
-    def apply_to_instance_and_snapshot(*args, **kwargs):
-        # Liger imports the modeling modules it patches inside the patch function, but a module can only be patched
-        # if the model being patched already uses it, so it is imported by now.
-        for name, module in list(sys.modules.items()):
-            if name.startswith("transformers.models.") and ".modeling_" in name:
-                snapshots.setdefault(name, (module, vars(module).copy()))
-        return apply_to_instance(*args, **kwargs)
-
-    monkeypatch.setattr(liger_transformers, "_apply_liger_kernel_to_instance", apply_to_instance_and_snapshot)
-    yield
-    for module, snapshot in snapshots.values():
-        vars(module).update(snapshot)

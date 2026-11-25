@@ -112,6 +112,8 @@ We're always looking for improvements to the documentation that make it more cle
 
 Before writing code, we strongly advise you to search through the existing PRs or issues to make sure that nobody is already working on the same thing. If you are unsure, it is always a good idea to open an issue to get some feedback.
 
+An issue assigned to someone is being worked on by them, for first-time contributors and maintainers alike. To work on it, ask the assignee in the issue first, and only open a PR that fixes it once they agree. If the assignee does not answer within a week, a maintainer may reassign the issue.
+
 You will need basic `git` proficiency to be able to contribute to TRL. `git` is not the easiest tool to use but it has the greatest manual. Type `git --help` in a shell and enjoy. If you prefer books, [Pro Git](https://git-scm.com/book/en/v2) is a very good reference.
 
 Follow these steps to start contributing:
@@ -398,6 +400,16 @@ Some dependencies have their own agreed window. `vLLM` is still unstable, moves 
 Declaring a first floor for a dependency that has none is not covered by the above: it drops support for nothing, it only records what we already test.
 
 When TRL needs an API newer than the floor, the default is a version guard, not a bump. Put a floor change in its own PR and say in the description which version guards, compatibility shims or warning filters it retires.
+
+The minimum-versions CI job pins every dependency exactly at its floor, so a floor change also updates its pin.
+
+### Python versions
+
+TRL follows the [CPython release cycle](https://devguide.python.org/versions/): a new Python version comes out every October and is supported for 5 years.
+
+* **Adding a new version**: once PyTorch and the core dependencies publish wheels for it and the test suite passes, add it to the classifiers in `pyproject.toml` and to the nightly matrix in `.github/workflows/tests_python_versions.yml`.
+* **Dropping a version**: drop it once it reaches end of life. The schedule only gives the month, and the actual end of life is the date of the final release, which can fall anywhere in that month, so drop it after that release is out, and move the minimum-versions CI job to the new oldest version. A version that old is always past the 2-year mark of [Dependency version floors](#dependency-version-floors).
+* **Default version**: PR CI, the documentation build, the release workflow and the Docker images run on a single Python version, and the nightly matrix covers the other supported ones. The exception is the minimum-versions job, which runs on the oldest supported Python so that every floor installs and it can pin each one exactly. The default is the version most TRL users run, as shown by the download stats on [pypistats](https://pypistats.org/packages/trl). Review it every October, after the new CPython release, and switch when another version has overtaken it. A newer version that few users run would leave the version most of them use tested only nightly.
 
 ### Working with warnings
 

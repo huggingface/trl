@@ -21,11 +21,14 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import torch
+import transformers
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from packaging.version import Version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_npu_available,
@@ -38,6 +41,11 @@ from ..import_utils import is_vllm_available
 from ..trainer.utils import ensure_master_addr_port
 from .vllm_client import VLLMClient
 
+
+if is_peft_available():
+    from peft import LoraConfig
+    from peft.tuners.lora import LoraLayer, ParamWrapper
+    from peft.utils import ModulesToSaveWrapper
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
@@ -97,6 +105,33 @@ def extract_logprobs(all_outputs: list["RequestOutput"]):
             all_logprobs.append(seq_logprobs)
             all_token_ids.append(seq_token_ids)
     return all_logprobs, all_token_ids
+
+
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
 
 
 if TYPE_CHECKING:
@@ -210,6 +245,10 @@ class VLLMGeneration:
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
+        return_sampling_mask (`bool`, *optional*, defaults to `False`):
+            Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k, top-p
+            and min-p filtering. Requires vLLM >= 0.28 and `top_k > 0`, and in server mode a server started with
+            `--return-sampling-mask` (and `--enable-scale-out` from vLLM 0.30).
 
     """
 
@@ -244,6 +283,7 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        return_sampling_mask: bool = False,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -278,11 +318,48 @@ class VLLMGeneration:
         self.min_p = min_p
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
-        self.generation_kwargs = generation_kwargs or {}
+        self.generation_kwargs = {}
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
+            self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
+            # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+            if Version(transformers.__version__) < Version("5.3.0") and model.config.model_type in (
+                "qwen2_vl",
+                "qwen2_5_vl",
+                "qwen3_vl",
+                "qwen3_vl_moe",
+                "qwen3_5",
+                "qwen3_5_moe",
+                "paddleocr_vl",
+            ):
+                self.generation_kwargs["logit_bias"][model.config.vision_start_token_id] = -100
+        self.generation_kwargs.update(generation_kwargs or {})
+        self.return_sampling_mask = return_sampling_mask
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
         # it requires gathering the parameters, and constant afterwards.
         self._weight_metadata = None
+
+        if is_peft_model(model):
+            # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if any(not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()):
+                raise ValueError(
+                    "vLLM generation with a PEFT model supports LoRA adapters without `lora_bias` only: the weight "
+                    "sync sends vLLM the base weights with the LoRA deltas merged in."
+                )
+            # vLLM holds tied word embeddings as one tensor, so PEFT must not train separate copies of them: #7955
+            base_model = model.get_base_model()
+            embeddings = [base_model.get_input_embeddings(), base_model.get_output_embeddings()]
+            originals = [m.original_module if isinstance(m, ModulesToSaveWrapper) else m for m in embeddings]
+            if originals[0].weight is originals[1].weight and embeddings[0].weight is not embeddings[1].weight:
+                names = {module: name.rsplit(".", 1)[-1] for name, module in base_model.named_modules()}
+                copies = " and ".join(f"`{names[m]}`" for m in embeddings if isinstance(m, ModulesToSaveWrapper))
+                raise ValueError(
+                    "The model ties its input embeddings and output layer, but PEFT's `modules_to_save` trains them "
+                    "as separate copies, which vLLM cannot hold. Set `ensure_weight_tying=True` in the PEFT config "
+                    f"(PEFT >= 0.18) to train a single copy, or remove {copies} from `modules_to_save`."
+                )
 
         self._init_vllm()
 
@@ -334,13 +411,9 @@ class VLLMGeneration:
             # Ensure distributed rendezvous variables are set without colliding across concurrent runs
             ensure_master_addr_port()
 
-            quantization = None
             if is_bitsandbytes_available():
                 for _, module in model.named_modules():
-                    if isinstance(module, bnb.nn.Linear4bit):
-                        quantization = "bitsandbytes"
-                        break
-                    elif isinstance(module, bnb.nn.Linear8bitLt):
+                    if isinstance(module, bnb.nn.Linear8bitLt):
                         raise ValueError("vLLM does not support in-flight 8-bit quantization.")
 
             # Build LLM initialization kwargs
@@ -359,8 +432,12 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
-                quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
+                # Not passed otherwise: vLLM < 0.28 doesn't accept it
+                **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
+                # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
+                # while asleep, so the colocated trainer could not use the memory that sleep frees.
+                **({"enable_extensible_kv_cache": False} if is_vllm_available(min_version="0.34.0") else {}),
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -405,32 +482,35 @@ class VLLMGeneration:
 
                     yield full_name, param.data
 
-    def _iter_fsdp2_params(self, module: nn.Module):
+    def _iter_fsdp2_params(self, module: nn.Module, lora_layers: dict):
         """FSDP2-specific parameter iteration."""
         # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
         for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-            # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+            # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
-            if "original_module" in name:
+            # and the other adapters' copies (e.g. a "ref" adapter)
+            if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
+            if param in lora_layers:
+                param = _merge_lora(lora_layers[param], param)
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
             param = param.full_tensor()
 
             yield name, param
 
-    def _iter_fsdp_params(self, model: nn.Module):
+    def _iter_fsdp_params(self, model: nn.Module, lora_layers: dict):
         """Dispatch FSDP parameter iteration to the version-appropriate method."""
         if self._dist.fsdp_version == 1:
             yield from self._iter_fsdp1_params(model)
         elif self._dist.fsdp_version == 2:
-            yield from self._iter_fsdp2_params(model)
+            yield from self._iter_fsdp2_params(model, lora_layers)
 
     def _iter_named_params(self):
         """Iterate over the model parameters, materialized one at a time under the name vLLM expects.
@@ -441,37 +521,47 @@ class VLLMGeneration:
         model = self.model
 
         if is_peft_model(model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in model.modules()
+                if isinstance(module, LoraLayer)
+            }
+            # With DeepSpeed ZeRO Stage 3, the full model is gathered at once, so that the adapters of each LoRA layer
+            # are gathered along with the weight they adapt.
             with self._dist.gather_params(list(model.parameters())):
-                model.merge_adapter()
-
                 # Read the vLLM weights while parameters are gathered
                 if self._dist.is_fsdp:  # note if using FSDP, gather_params is a no-op
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    yield from self._iter_fsdp_params(model)
+                    yield from self._iter_fsdp_params(model, lora_layers)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+                        # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
                         if model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        # and the other adapters' copies (e.g. a "ref" adapter)
+                        if "original_module" in name or (
+                            "modules_to_save." in name and "modules_to_save.default." not in name
+                        ):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
-                        yield name, param.data
-                # Unmerge adapters while parameters are still gathered
-                model.unmerge_adapter()
+                        weight = param.data
+                        # vLLM holds the model unquantized, so bitsandbytes 4-bit weights are sent dequantized
+                        if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
+                            weight = bnb.functional.dequantize_4bit(param.data, param.quant_state)
+                        if param in lora_layers:
+                            weight = _merge_lora(lora_layers[param], weight)
+                        yield name, weight
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and read each parameter individually.
             if self._dist.is_fsdp:
-                yield from self._iter_fsdp_params(model)
+                yield from self._iter_fsdp_params(model, {})
             else:
                 for name, param in model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
@@ -526,7 +616,7 @@ class VLLMGeneration:
         if features is None:
             return None
 
-        image_token_id = self.processing_class.image_token_id
+        image_token_id = self.model.config.image_token_id
         placeholders = []
         offset = 0
         while offset < len(prompt_ids):
@@ -564,12 +654,14 @@ class VLLMGeneration:
             profiler: Optional profiler for performance tracking.
 
         Returns:
-            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids).
+            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, sampling_mask).
 
             - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
             - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
             - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
             - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `sampling_mask`: `list[list[list[int]]]` of shape `(batch_size, completion_len, set_size)`, the tokens
+              each completion token was sampled from, or `None` unless `return_sampling_mask=True`.
 
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
@@ -625,6 +717,7 @@ class VLLMGeneration:
                     "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
                     "generation_kwargs": self.generation_kwargs,
+                    "return_sampling_mask": self.return_sampling_mask,
                 }
                 with profiler:
                     output = self.vllm_client.generate(
@@ -635,6 +728,7 @@ class VLLMGeneration:
                         output["completion_ids"],
                         output["logprobs"],
                         output.get("logprob_token_ids"),
+                        output.get("sampling_mask"),
                     )
             else:
                 payload = None
@@ -642,7 +736,7 @@ class VLLMGeneration:
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
             obj_list = [payload]
             broadcast_object_list(obj_list, from_process=0)
-            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids = obj_list[0]
+            all_prompt_ids, all_completion_ids, all_logprobs, all_logprob_token_ids, all_sampling_mask = obj_list[0]
 
             # vllm_client.generate(n=num_generations) returns num_generations completions per prompt.
             # Duplicate prompt_ids to align with per-completion entries.
@@ -656,6 +750,7 @@ class VLLMGeneration:
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
             logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
+            sampling_mask = all_sampling_mask[process_slice] if all_sampling_mask is not None else None
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
@@ -731,6 +826,11 @@ class VLLMGeneration:
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             all_logprobs, all_logprob_token_ids = extract_logprobs(all_outputs)
+            all_sampling_mask = None
+            if self.return_sampling_mask:
+                all_sampling_mask = [
+                    output.sampling_mask.token_ids for outputs in all_outputs for output in outputs.outputs
+                ]
 
             if self.tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
@@ -741,14 +841,16 @@ class VLLMGeneration:
                 completion_ids = all_completion_ids[tp_slice]
                 logprobs = all_logprobs[tp_slice] if all_logprobs is not None else None
                 logprob_token_ids = all_logprob_token_ids[tp_slice] if all_logprob_token_ids is not None else None
+                sampling_mask = all_sampling_mask[tp_slice] if all_sampling_mask is not None else None
             else:
                 prompt_ids = all_prompt_ids
                 completion_ids = all_completion_ids
                 logprobs = all_logprobs
                 logprob_token_ids = all_logprob_token_ids
+                sampling_mask = all_sampling_mask
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
                 self._llm_weights_sleeping = True
 
-        return prompt_ids, completion_ids, logprobs, logprob_token_ids
+        return prompt_ids, completion_ids, logprobs, logprob_token_ids, sampling_mask

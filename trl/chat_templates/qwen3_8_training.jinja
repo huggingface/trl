@@ -6,6 +6,9 @@
       preserve_thinking=False.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the part of the thinking block that the generation prompt pre-fills before {% generation %},
+      so that assistant-only loss doesn't train it. With empty reasoning, the next '\n' goes with it too, since the
+      tokenizer merges '\n\n' into one token.
 -#}
 {%- set image_count = namespace(value=0) %}
 {%- set video_count = namespace(value=0) %}
@@ -123,8 +126,18 @@
         {%- endif %}
         {%- set reasoning_content = reasoning_content|trim %}
         {{- '<|im_start|>' + message.role + '\n' }}
+        {%- if enable_thinking is defined and enable_thinking is false %}
+            {{- '<think>\n' + reasoning_content + '\n</think>\n\n' }}
+            {%- set think_completion = '' %}
+        {%- elif reasoning_content %}
+            {{- '<think>\n' }}
+            {%- set think_completion = reasoning_content + '\n</think>\n\n' %}
+        {%- else %}
+            {{- '<think>\n\n' }}
+            {%- set think_completion = '</think>\n\n' %}
+        {%- endif %}
         {%- generation %}
-        {{- '<think>\n' + reasoning_content + '\n</think>\n\n' + content }}
+        {{- think_completion + content }}
         {%- if message.tool_calls and message.tool_calls is iterable and message.tool_calls is not mapping %}
             {%- for tool_call in message.tool_calls %}
                 {%- if tool_call.function is defined %}

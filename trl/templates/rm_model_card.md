@@ -24,7 +24,9 @@ print(output["score"])
 {% if trackio_url %}[<img src="https://raw.githubusercontent.com/gradio-app/trackio/refs/heads/main/trackio/assets/badge.png" alt="Visualize in Trackio" title="Visualize in Trackio" width="150" height="24"/>]({{ trackio_url }}){% endif %}
 {% if comet_url %}[<img src="https://raw.githubusercontent.com/comet-ml/comet-examples/master/logo/comet_badge.png" alt="Visualize in Comet" width="150" height="24"/>]({{ comet_url }}){% endif %}
 
-This model was trained with {{ trainer_name }}{% if paper_id %}, a method introduced in [{{ paper_title }}](https://huggingface.co/papers/{{ paper_id }}){% endif %}.
+This model was trained with {{ trainer_name }}{% if paper_id %}, a method introduced in [{{ paper_title }}](https://huggingface.co/papers/{{ paper_id }}){% endif %}.{% if hf_jobs_flavor %}
+
+Trained with Hugging Face Jobs on `{{ hf_jobs_flavor }}` hardware.{% endif %}
 
 ### Framework versions
 
@@ -47,7 +49,7 @@ Cite TRL as:
 ```bibtex
 {% raw %}@software{vonwerra2020trl,
   title   = {{TRL: Transformers Reinforcement Learning}},
-  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin},
+  author  = {von Werra, Leandro and Belkada, Younes and Tunstall, Lewis and Beeching, Edward and Thrush, Tristan and Lambert, Nathan and Huang, Shengyi and Rasul, Kashif and Gallouédec, Quentin and Dirhoussi, Amine and Villanova del Moral, Albert and Paniego Blanco, Sergio},
   license = {Apache-2.0},
   url     = {https://github.com/huggingface/trl},
   year    = {2020}

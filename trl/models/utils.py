@@ -19,11 +19,11 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
+from accelerate.utils.fsdp_utils import get_parameters_from_modules
 from packaging.version import Version
 from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
@@ -35,9 +35,6 @@ from ..import_utils import suppress_experimental_warning
 with suppress_experimental_warning():
     from ..experimental.utils import create_reference_model as _create_reference_model
 
-
-if Version(accelerate.__version__) >= Version("1.11.0"):
-    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
@@ -129,9 +126,17 @@ def _unwrap_model_for_generation(
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        is_gradient_checkpointing = unwrapped_model.is_activation_checkpointing
+        disable_checkpointing = unwrapped_model.activation_checkpointing_disable
+        enable_checkpointing = unwrapped_model.activation_checkpointing_enable
+    else:
+        is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+        disable_checkpointing = unwrapped_model.gradient_checkpointing_disable
+        enable_checkpointing = unwrapped_model.gradient_checkpointing_enable
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_disable()
+        disable_checkpointing()
     from ..distributed import DistributedBackend
 
     if DistributedBackend(accelerator).is_zero3:
@@ -147,7 +152,7 @@ def _unwrap_model_for_generation(
     else:
         yield unwrapped_model
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+        enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 @contextmanager
@@ -309,21 +314,15 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
         elif fsdp_plugin.fsdp_version == 2:
             from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-            mesh = getattr(accelerator, "torch_device_mesh", None)
-            if Version(accelerate.__version__) >= Version("1.11.0"):
-                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
-            else:
-                warnings.warn(
-                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
-                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
-                )
-                ignored_params = None
+            ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             fsdp2_kwargs = {
                 "reshard_after_forward": fsdp_plugin.reshard_after_forward,
                 "offload_policy": fsdp_plugin.cpu_offload,
                 # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
                 "mp_policy": fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                "mesh": mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                "mesh": accelerator.torch_device_mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)]
+                if accelerator.torch_device_mesh is not None
+                else None,
             }
             # `ignored_params` is only supported in torch >= 2.7.0
             if Version(torch.__version__) >= Version("2.7.0"):
@@ -397,14 +396,22 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
         gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
-    was_enabled = model.is_gradient_checkpointing
+    # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8135)
+    if Version(transformers.__version__) >= Version("5.23.0"):
+        was_enabled = model.is_activation_checkpointing
+        disable_checkpointing = model.activation_checkpointing_disable
+        enable_checkpointing = model.activation_checkpointing_enable
+    else:
+        was_enabled = model.is_gradient_checkpointing
+        disable_checkpointing = model.gradient_checkpointing_disable
+        enable_checkpointing = model.gradient_checkpointing_enable
     if was_enabled:
-        model.gradient_checkpointing_disable()
+        disable_checkpointing()
     try:
         yield
     finally:
         if was_enabled:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+            enable_checkpointing(gradient_checkpointing_kwargs)
 
 
 def create_reference_model(

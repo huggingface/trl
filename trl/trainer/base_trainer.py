@@ -32,10 +32,12 @@ if is_wandb_available():
 
 
 # Trainer class names that may appear in telemetry topics. Any class outside this set — internal helpers,
-# in-flight subclasses not yet shipped, user-defined subclasses — is reported as "other" so unreleased or
-# private names never leak. Adding a new trainer requires an explicit entry here.
+# in-flight subclasses not yet shipped, user-defined subclasses — is reported under the `_name` it carries (see
+# `_TELEMETRY_TRAINER_NAMES`) or as "other", so unreleased or private names never leak. Adding a new trainer requires
+# an explicit entry here and in `_TELEMETRY_TRAINER_NAMES`.
 _TELEMETRY_TRAINERS = {
     # Stable
+    "AsyncGRPOTrainer",
     "DistillationTrainer",
     "DPOTrainer",
     "GRPOTrainer",
@@ -46,7 +48,6 @@ _TELEMETRY_TRAINERS = {
     # Experimental
     "A2POTrainer",
     "AsyncDistillationTrainer",
-    "AsyncGRPOTrainer",
     "CPOTrainer",
     "GKDTrainer",
     "GMPOTrainer",
@@ -57,7 +58,32 @@ _TELEMETRY_TRAINERS = {
     "SDFTTrainer",
     "SDPOTrainer",
     "ServerDistillationTrainer",
-    "TPOTrainer",
+}
+
+# The same trainers, by their `_name`. A subclass inherits its trainer's `_name`, and so does a copy of the trainer's
+# code, such as Unsloth's `UnslothSFTTrainer`. `GMPOTrainer` inherits GRPO's `_name`, so it has no entry of its own.
+_TELEMETRY_TRAINER_NAMES = {
+    # Stable
+    "AsyncGRPO": "AsyncGRPOTrainer",
+    "Distillation": "DistillationTrainer",
+    "DPO": "DPOTrainer",
+    "GRPO": "GRPOTrainer",
+    "KTO": "KTOTrainer",
+    "Reward": "RewardTrainer",
+    "RLOO": "RLOOTrainer",
+    "SFT": "SFTTrainer",
+    # Experimental
+    "A2PO": "A2POTrainer",
+    "AsyncDistillation": "AsyncDistillationTrainer",
+    "CPO": "CPOTrainer",
+    "GKD": "GKDTrainer",
+    "GOLD": "GOLDTrainer",
+    "IW-OPD": "IWOPDTrainer",
+    "Online DPO": "OnlineDPOTrainer",
+    "ORPO": "ORPOTrainer",
+    "SDFT": "SDFTTrainer",
+    "SDPO": "SDPOTrainer",
+    "Server Distillation": "ServerDistillationTrainer",
 }
 
 
@@ -112,9 +138,10 @@ class _BaseTrainer(Trainer):
         # transformers `CONFIG_MAPPING`); anything else is reported as "other" so we never leak the names of internal,
         # custom trainer subclasses or private model architectures.
         cls = type(self)
-        trainer = (
-            cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
-        )
+        if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl."):
+            trainer = cls.__name__
+        else:
+            trainer = _TELEMETRY_TRAINER_NAMES.get(self._name, "other")
         # How the data was loaded, never what it is. Hub downloads cache under `<cache>/<namespace>___<name>/`, while
         # file-based builders land in `<cache>/<builder>/default-<hash>/`. A Hub repo of raw json/csv files also goes
         # through a file-based builder, hence "files" rather than "local".
@@ -178,8 +205,10 @@ class _BaseTrainer(Trainer):
             tags = set(tags)
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
-        if "JOB_ID" in os.environ:
+        hf_jobs_flavor = None
+        if "HF_JOB_ID" in os.environ:
             tags.add("hf_jobs")
+            hf_jobs_flavor = os.environ.get("HF_JOB_FLAVOR")
         tags.update(self._tag_names)
 
         trackio_url = get_trackio_space_url()
@@ -206,5 +235,6 @@ class _BaseTrainer(Trainer):
             template_file=self._template_file,
             paper_title=self._paper.get("title"),
             paper_id=self._paper.get("id"),
+            hf_jobs_flavor=hf_jobs_flavor,
         )
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

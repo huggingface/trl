@@ -47,7 +47,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_distillation.py
+torchrun --nproc_per_node 8 train_distillation.py
 ```
 
 ## Looking deeper into the distillation method
@@ -72,7 +72,7 @@ In practice, the projection to vocabulary logits and the divergence are computed
 
 ### Expected dataset type
 
-The dataset should be formatted as a [conversational](dataset_formats#conversational) [prompt-only](dataset_formats#prompt-only) dataset. The student generates its own completions on-policy, so only the prompt is needed:
+The dataset should be a [prompt-only](dataset_formats#prompt-only) dataset, in either [standard](dataset_formats#standard) or [conversational](dataset_formats#conversational) format. The student generates its own completions on-policy, so only the prompt is needed:
 
 ```python
 {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
@@ -94,6 +94,8 @@ While training and evaluating, we record the following metrics:
 - `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
 - `entropy`: Average entropy of token predictions across generated completions (in nats).
+- `teacher/<id>/jsd`: The mean per-token divergence against teacher `<id>`, or NaN when no example was routed to it. Logged only when several teachers are passed.
+- `teacher/<id>/token_frac`: The fraction of completion tokens scored by teacher `<id>`. Logged only when several teachers are passed.
 
 ## Customization
 
@@ -127,7 +129,7 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> --gpu-memory-utilization 0.9 \
        --weight-transfer-config '{"backend": "nccl"}' \
        --logprobs-mode processed_logprobs \
        --max-logprobs -1
@@ -176,6 +178,36 @@ trainer.train()
 > [!WARNING]
 > The distillation loss reads `lm_head.weight` directly and runs the student backbone without going through `PeftModel.forward()`. Adapters on `lm_head` (via `target_modules`) and prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) are therefore rejected, since they would be silently ignored. To train the head, use `modules_to_save=["lm_head"]` instead.
 
+### Multiple teachers
+
+To distill several frozen domain experts (e.g. a math expert and a code expert) into a single student, as in [MOPD](https://huggingface.co/papers/2606.30406), pass a dictionary mapping teacher IDs to teachers instead of a single teacher. Each example selects its teacher through a `teacher_id` column, and its completion is scored by that teacher only. Every teacher must share the student's vocabulary, and is prepared like a single teacher, so DeepSpeed ZeRO-3 shards (and optionally offloads) each of them. FSDP is not supported with a teacher mapping.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            [{"role": "user", "content": "What is the derivative of x^2?"}],
+            [{"role": "user", "content": "Write a function that reverses a string."}],
+        ],
+        "teacher_id": ["math", "code"],
+    }
+)
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    teacher_model={
+        "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    },
+    args=DistillationConfig(output_dir="mopd-student", teacher_model_init_kwargs={"code": {"dtype": "bfloat16"}}),
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
 ## Agent Training
 
 [`DistillationTrainer`] supports **agent training**: the student calls tools during generation and is distilled on the resulting trajectory. Tool-result tokens are masked out of the loss, so the student is only trained on the tokens it generated itself.
@@ -199,7 +231,7 @@ For more details, see the [Passing tools guide](https://huggingface.co/docs/tran
 > [!TIP]
 > The tool call loop requires the chat template to be *prefix-preserving* (appending a tool message must not change how earlier messages are rendered). For known model families (e.g. Qwen3, DeepSeek-V3), TRL automatically swaps in a patched training template when tools are enabled. See [Chat Templates](chat_templates#training-templates) for the full list.
 
-Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls.
+Use `max_tool_calling_iterations` in the [`DistillationConfig`] to cap the number of tool-calling turns. By default there is no limit, and generation stops when the student produces a response turn with no tool calls, when the completion (all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings` otherwise).
 
 Example:
 

@@ -19,8 +19,13 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from huggingface_hub import snapshot_download
 
-from .testing_utils import TrlTestCase
+from .testing_utils import MODEL_REVISIONS, TrlTestCase
+
+
+# The `trl <command>` tests run the scripts in a child process, out of reach of the conftest revision fixture
+QWEN2_REVISION = MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"]
 
 
 @pytest.mark.parametrize("command", ["distillation", "dpo", "grpo", "kto", "reward", "rloo", "sft"])
@@ -104,21 +109,21 @@ class TestCLI(TrlTestCase):
     def test_distillation(self):
         from trl.cli import main
 
-        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none"
+        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_dpo(self):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_dpo_multiple_loss_types(self):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -134,37 +139,81 @@ class TestCLI(TrlTestCase):
     def test_grpo(self):
         from trl.cli import main
 
-        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none"
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
+        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --reward_model_name_or_path {reward_model_path} --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_kto(self):
         from trl.cli import main
 
-        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
+        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_reward(self):
         from trl.cli import main
 
-        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
+        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_rloo(self):
         from trl.cli import main
 
-        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
+        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --reward_model_name_or_path {reward_model_path} --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_sft(self):
         from trl.cli import main
 
-        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --model_revision {QWEN2_REVISION} --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
+
+    def test_sft_torchrun(self):
+        # Arguments the script does not know, `--nproc_per_node` here, go to torchrun.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none --nproc_per_node 2"
+        with patch("torch.distributed.run.run") as mock_run, patch("sys.argv", command.split(" ")):
+            main()
+
+        torchrun_args = mock_run.call_args.args[0]
+        assert torchrun_args.nproc_per_node == "2"
+        assert torchrun_args.training_script.endswith("sft.py")
+        assert "--nproc_per_node" not in torchrun_args.training_script_args
+        assert "--report_to" in torchrun_args.training_script_args
+
+    @pytest.mark.parametrize(
+        "launch_args, expected_launch_args",
+        [
+            (["--num_processes", "2"], ["--num_processes", "2"]),
+            (["--accelerate_config", "zero2"], ["--config_file"]),
+        ],
+    )
+    def test_sft_accelerate_launch_deprecated(self, launch_args, expected_launch_args):
+        # Arguments only `accelerate launch` knows still go to it, with a deprecation warning, until v2.0.0.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        with (
+            patch("trl.cli.accelerate_launcher.launch_training_script") as mock_launch,
+            patch("sys.argv", command.split(" ") + launch_args),
+            pytest.warns(FutureWarning, match="removed in v2.0.0"),
+        ):
+            main()
+
+        kwargs = mock_launch.call_args.kwargs
+        assert kwargs["script_name"] == "sft.py"
+        assert kwargs["launch_args"][: len(expected_launch_args)] == expected_launch_args
+        assert "--report_to" in kwargs["training_script_args"]
 
     def test_sft_config_file(self):
         from trl.cli import main
@@ -175,13 +224,14 @@ class TestCLI(TrlTestCase):
         config_path = os.path.join(self.tmp_dir, "config.yaml")
         config_content = {
             "model_name_or_path": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "model_revision": QWEN2_REVISION,
             "dataset_name": "trl-internal-testing/zen",
             "dataset_config": "standard_language_modeling",
             "report_to": "none",
             "output_dir": output_dir,
             "lr_scheduler_type": "cosine_with_restarts",
         }
-        with open(config_path, "w") as config_file:
+        with open(config_path, "w", encoding="utf-8") as config_file:
             yaml.dump(config_content, config_file)
 
         # Test the CLI with config file
@@ -200,7 +250,7 @@ class TestCLI(TrlTestCase):
         from trl.cli import main
 
         config_path = os.path.join(self.tmp_dir, "config.yaml")
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
 
         # Patch the actual function that `VllmServeCommand.run` imports as `vllm_serve_main`
