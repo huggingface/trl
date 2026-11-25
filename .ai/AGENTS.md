@@ -73,6 +73,10 @@ Tests default to what most users run. They train on a conversational dataset rat
 
 There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
 
+### Issues and assignment
+
+Before working on an issue, check its assignees. If it is assigned to someone other than the user you are working for, do not open a PR that fixes it: tell the user, and suggest asking the assignee in the issue first.
+
 ## Documentation
 
 ### Docstrings
