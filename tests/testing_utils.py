@@ -91,7 +91,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Lfm2ForCausalLM": "a8b729ddf80657a21272c71d36a7edc2be1bf6b4",
     "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5": "1e9ac722a12cea565443504973060b960a328c37",
     "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5": "af6b0e20385279de1530104e215a3a2f5155d182",
-    "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5": "754269127308ed7bdaa584630abc702e368337ad",
+    "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5": "8fc8355b6992a35fdfdfde474e12023469624292",
     "trl-internal-testing/tiny-LlamaForCausalLM-3": "fed7bca1617c3a3835860260e81aa387e7afe07d",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1": "c234f265b635252535f848a9609c50852614ac84",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2": "ca56c655e3da5ec96243a4b470faf767a3085783",
