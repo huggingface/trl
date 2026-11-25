@@ -23,7 +23,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -1254,11 +1253,9 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
-        # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in
-        # accelerate 1.12.0.
+        # `position_ids` in every batch to preserve each token's global position.
         if (
-            Version(accelerate.__version__) >= Version("1.12.0")
-            and self.accelerator.parallelism_config is not None
+            self.accelerator.parallelism_config is not None
             and self.accelerator.parallelism_config.sp_enabled
             and isinstance(self.data_collator, DataCollatorForLanguageModeling)
         ):
@@ -1267,8 +1264,7 @@ class SFTTrainer(_BaseTrainer):
         # Under DeepSpeed sequence parallelism (Ulysses/ALST), `Trainer` reduces the model's own loss across ranks,
         # which is the fused LM head's negative log-likelihood
         if (
-            Version(accelerate.__version__) >= Version("1.12.0")
-            and self.accelerator.parallelism_config is not None
+            self.accelerator.parallelism_config is not None
             and self.accelerator.parallelism_config.sp_backend == "deepspeed"
             and self.accelerator.parallelism_config.sp_enabled
             and (args.loss_type == "dft" or self.compute_loss_func is not None or args.label_smoothing_factor > 0)
@@ -1660,9 +1656,7 @@ class SFTTrainer(_BaseTrainer):
 
         weighted_aux_loss = None
         try:
-            parallelism_config = (
-                self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
-            )
+            parallelism_config = self.accelerator.parallelism_config
             if (
                 parallelism_config is not None
                 and parallelism_config.sp_backend == "deepspeed"

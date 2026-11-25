@@ -37,8 +37,8 @@ class GRPOConfig(_BaseConfig):
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
-            processing classes.
+            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -442,7 +442,7 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string. The `revision` value is also used when loading "
-            "processing classes."
+            "the processing class."
         },
     )
     trust_remote_code: bool = field(
