@@ -90,6 +90,7 @@ from .utils import (
     nanmin,
     pad,
     print_prompt_completions_sample,
+    redact_secrets,
 )
 
 
@@ -1416,8 +1417,8 @@ class AsyncRolloutLoop:
 
             if self.config.log_completions and samples:
                 print_prompt_completions_sample(
-                    prompts=[s.prompt for s in samples],
-                    completions=[s.completion for s in samples],
+                    prompts=redact_secrets([s.prompt for s in samples]),
+                    completions=redact_secrets([s.completion for s in samples]),
                     rewards={"reward": [s.metrics["reward_trained"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,

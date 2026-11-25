@@ -71,6 +71,7 @@ from ...trainer.utils import (
     global_then_local_main_first,
     identity,
     pad,
+    redact_secrets,
     split_tensor_dict,
 )
 from ..utils import (
@@ -3477,8 +3478,8 @@ class GOLDTrainer(SFTTrainer):
 
         if on_policy and self._buffered_text_logs is not None and self._buffered_text_logs[slice_idx] is not None:
             prompt_texts, completion_texts = self._buffered_text_logs[slice_idx]
-            self._textual_logs["prompt"].extend(gather_object(prompt_texts))
-            self._textual_logs["completion"].extend(gather_object(completion_texts))
+            self._textual_logs["prompt"].extend(gather_object(redact_secrets(prompt_texts)))
+            self._textual_logs["completion"].extend(gather_object(redact_secrets(completion_texts)))
 
         loss_scalar = float(loss.detach())
         step_equiv = 1.0 / self.args.gradient_accumulation_steps

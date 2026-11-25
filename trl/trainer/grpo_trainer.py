@@ -92,6 +92,7 @@ from .utils import (
     nanstd,
     pad,
     print_prompt_completions_sample,
+    redact_secrets,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
@@ -3002,8 +3003,8 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompts and completions
-        self._logs["prompt"].extend(gather_object(prompts))
-        self._logs["completion"].extend(gather_object(completions))
+        self._logs["prompt"].extend(gather_object(redact_secrets(prompts)))
+        self._logs["completion"].extend(gather_object(redact_secrets(completions)))
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -3013,7 +3014,7 @@ class GRPOTrainer(_BaseTrainer):
         # get mis-attributed across columns (dict insertion order may differ between processes).
         for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
             values = self._pending_extra_logs.get(column, [None] * len(prompts))
-            self._logs["extra"][column].extend(gather_object(values))
+            self._logs["extra"][column].extend(gather_object(redact_secrets(values)))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.

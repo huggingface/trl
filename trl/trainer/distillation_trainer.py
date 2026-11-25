@@ -77,6 +77,7 @@ from .utils import (
     model_accepts_images,
     pad,
     print_prompt_completions_sample,
+    redact_secrets,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -1845,8 +1846,8 @@ class DistillationTrainer(_BaseTrainer):
         if self.log_completions:
             prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
             completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-            self._logs["prompt"].extend(gather_object(prompts_text))
-            self._logs["completion"].extend(gather_object(completions_text))
+            self._logs["prompt"].extend(gather_object(redact_secrets(prompts_text)))
+            self._logs["completion"].extend(gather_object(redact_secrets(completions_text)))
 
         output = {
             "prompt_ids": prompt_ids,

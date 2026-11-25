@@ -713,6 +713,60 @@ def selective_log_softmax_and_entropy(
     return logprobs, entropy
 
 
+# Environment variables whose names look like credentials (HF_TOKEN, OPENAI_API_KEY, DB_PASSWORD, ...)
+_SECRET_ENV_NAME = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD)(_|$)", re.IGNORECASE)
+# Common token formats: Hugging Face, OpenAI-style, GitHub, AWS access key IDs, PEM private keys
+_SECRET_PATTERN = re.compile(
+    r"hf_[A-Za-z0-9]{30,}"
+    r"|sk-[A-Za-z0-9_-]{20,}"
+    r"|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}"
+    r"|(?:AKIA|ASIA)[0-9A-Z]{16}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+)
+
+
+def redact_secrets(obj):
+    """
+    Replace secrets in logged prompts and completions with `"<REDACTED>"`.
+
+    A completion can contain what a tool or an environment returned, so a model that prints its environment puts the
+    trainer's credentials in the logs. This replaces the values of environment variables named like credentials
+    (`HF_TOKEN`, `*_API_KEY`, ...) and strings shaped like common tokens, in strings nested in lists and dicts.
+
+    Args:
+        obj (`str`, `list`, `dict` or any other type):
+            Prompt, completion or logged column value. Values that are not strings, lists or dicts (images,
+            numbers) are returned unchanged.
+
+    Returns:
+        A copy of `obj` with the secrets replaced.
+
+    Example:
+
+    ```python
+    >>> import os
+    >>> os.environ["MY_API_KEY"] = "my-secret-value"
+    >>> redact_secrets([{"role": "tool", "content": "MY_API_KEY=my-secret-value"}])
+    [{'role': 'tool', 'content': 'MY_API_KEY=<REDACTED>'}]
+    ```
+    """
+    # Short values ("1", "true") would redact unrelated text
+    secrets = [value for name, value in os.environ.items() if _SECRET_ENV_NAME.search(name) and len(value) >= 8]
+
+    def redact(obj):
+        if isinstance(obj, str):
+            for secret in secrets:
+                obj = obj.replace(secret, "<REDACTED>")
+            return _SECRET_PATTERN.sub("<REDACTED>", obj)
+        if isinstance(obj, list):
+            return [redact(item) for item in obj]
+        if isinstance(obj, dict):
+            return {key: redact(value) for key, value in obj.items()}
+        return obj
+
+    return redact(obj)
+
+
 def print_prompt_completions_sample(
     prompts: list,
     completions: list,
