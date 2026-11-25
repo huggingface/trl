@@ -696,6 +696,10 @@ cohere2_chat_template = (_CHAT_TEMPLATES_DIR / "cohere2.jinja").read_text(encodi
 
 deepseek_r1_distill_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill.jinja").read_text(encoding="utf-8")
 
+deepseek_r1_distill_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill_v2.jinja").read_text(
+    encoding="utf-8"
+)
+
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
 deepseekv3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2.jinja").read_text(encoding="utf-8")
@@ -746,7 +750,13 @@ glm5_2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2.jinja").read_text(encoding
 
 glm5_3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3.jinja").read_text(encoding="utf-8")
 
+glm5_3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_v2.jinja").read_text(encoding="utf-8")
+
 glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_v2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v2.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_v3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v3.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
@@ -757,6 +767,8 @@ inkling_chat_template = (_CHAT_TEMPLATES_DIR / "inkling.jinja").read_text(encodi
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
 lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
+
+lfm2_v3_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v3.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
@@ -806,6 +818,12 @@ nemotron_3_5_lightning_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_5_ligh
     encoding="utf-8"
 )
 
+olmo3_think_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think.jinja").read_text(encoding="utf-8")
+
+olmo3_think_v2_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think_v2.jinja").read_text(encoding="utf-8")
+
+olmo3_think_v3_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think_v3.jinja").read_text(encoding="utf-8")
+
 phi3_chat_template = (_CHAT_TEMPLATES_DIR / "phi3.jinja").read_text(encoding="utf-8")
 
 phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding="utf-8")
@@ -830,6 +848,10 @@ qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="
 qwen3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2.jinja").read_text(encoding="utf-8")
 
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
+
+qwen3_instruct_2507_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_v2.jinja").read_text(
+    encoding="utf-8"
+)
 
 qwen3_thinking_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507.jinja").read_text(encoding="utf-8")
 
@@ -946,8 +968,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         glm5_2_chat_template,
         glm5_2_training_chat_template,
         glm5_3_chat_template,
+        glm5_3_v2_chat_template,
         glm5_3_training_chat_template,
         glm5_3_flash_chat_template,
+        glm5_3_flash_v2_chat_template,
+        glm5_3_flash_v3_chat_template,
         glm5_3_flash_training_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
@@ -975,6 +1000,8 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_v2_training_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_instruct_2507_training_chat_template,
+        qwen3_instruct_2507_v2_chat_template,
+        qwen3_instruct_2507_v2_training_chat_template,
         qwen3_vl_chat_template,
         qwen3_vl_training_chat_template,
     ]:
@@ -1281,6 +1308,10 @@ deepseek_r1_distill_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1
     encoding="utf-8"
 )
 
+deepseek_r1_distill_v2_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "deepseek_r1_distill_v2_training.jinja"
+).read_text(encoding="utf-8")
+
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
 deepseekv3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2_training.jinja").read_text(
@@ -1351,6 +1382,8 @@ lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read
 
 lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
 
+lfm2_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v3_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llama3_1_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1_training.jinja").read_text(encoding="utf-8")
@@ -1395,6 +1428,16 @@ nemotron_3_5_lightning_training_chat_template = (
     _CHAT_TEMPLATES_DIR / "nemotron_3_5_lightning_training.jinja"
 ).read_text(encoding="utf-8")
 
+olmo3_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think_training.jinja").read_text(encoding="utf-8")
+
+olmo3_think_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+olmo3_think_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "olmo3_think_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 phi3_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_training.jinja").read_text(encoding="utf-8")
 
 phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").read_text(encoding="utf-8")
@@ -1422,6 +1465,10 @@ qwen3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2_training.jinj
 qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(
     encoding="utf-8"
 )
+
+qwen3_instruct_2507_v2_training_chat_template = (
+    _CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_v2_training.jinja"
+).read_text(encoding="utf-8")
 
 qwen3_thinking_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507_training.jinja").read_text(
     encoding="utf-8"
@@ -1546,6 +1593,9 @@ def get_training_chat_template(
     if chat_template == deepseek_r1_distill_chat_template:
         return deepseek_r1_distill_training_chat_template
 
+    if chat_template == deepseek_r1_distill_v2_chat_template:
+        return deepseek_r1_distill_v2_training_chat_template
+
     if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
@@ -1633,6 +1683,9 @@ def get_training_chat_template(
     if chat_template == lfm2_v2_chat_template:
         return lfm2_v2_training_chat_template
 
+    if chat_template == lfm2_v3_chat_template:
+        return lfm2_v3_training_chat_template
+
     if chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
@@ -1679,6 +1732,15 @@ def get_training_chat_template(
     if chat_template == nemotron_3_5_lightning_chat_template:
         return nemotron_3_5_lightning_training_chat_template
 
+    if chat_template == olmo3_think_chat_template:
+        return olmo3_think_training_chat_template
+
+    if chat_template == olmo3_think_v2_chat_template:
+        return olmo3_think_v2_training_chat_template
+
+    if chat_template == olmo3_think_v3_chat_template:
+        return olmo3_think_v3_training_chat_template
+
     if chat_template == phi3_chat_template:
         return phi3_training_chat_template
 
@@ -1714,6 +1776,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
+
+    if chat_template == qwen3_instruct_2507_v2_chat_template:
+        return qwen3_instruct_2507_v2_training_chat_template
 
     if chat_template == qwen3_thinking_2507_chat_template:
         return qwen3_thinking_2507_training_chat_template

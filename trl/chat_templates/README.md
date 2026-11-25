@@ -27,7 +27,11 @@ Original Cohere2 chat template (as shipped by `CohereLabs/tiny-aya-earth`).
 
 ### `deepseek_r1_distill.jinja`
 
-Original DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
+DeepSeek-R1-Distill chat template, shipped byte-identically by every distill checkpoint (both the Qwen and the Llama ones) since February 2025 (for example `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` since [3865e12](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/commit/3865e12a1eb7cbd641ab3f9dfc28c588c6b0c1e9)). It prefills the assistant turn with `<｜Assistant｜><think>\n`, so the model's output starts inside the reasoning block; response parsing uses `deepseek_r1_distill_template`. Assistant turns are re-rendered without their reasoning (the template drops everything up to and including `</think>`), and `tool_calls` are silently dropped whenever `content` is set, so the template does not support tool calling.
+
+### `deepseek_r1_distill_v2.jinja`
+
+Original DeepSeek-R1-Distill chat template, as first shipped by the distill checkpoints (for example `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` up to [b950d47](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/commit/b950d47742676362558ae821ef2202f847ac8109), and still by re-uploads such as `casperhansen/deepseek-r1-distill-qwen-32b-awq`). Same as `deepseek_r1_distill.jinja`, except that the generation prompt ends with `<｜Assistant｜>` instead of pre-filling `<｜Assistant｜><think>\n`, so the model generates the `<think>` opener itself.
 
 ### `deepseekv3.jinja`
 
@@ -127,11 +131,23 @@ Original GLM-5.2 chat template (as shipped by `zai-org/GLM-5.2`). Same as `glm5_
 
 ### `glm5_3.jinja`
 
-Original GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3`). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
+GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3` since [ba32f8c](https://huggingface.co/zai-org/GLM-5.3/commit/ba32f8c19c8738e2c57c71798c601d477a7bf844)). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_v2.jinja`
+
+Earlier GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3` from [aca966e](https://huggingface.co/zai-org/GLM-5.3/commit/aca966e4e02791568aa6a4ced368624b3d897f42) until [ba32f8c](https://huggingface.co/zai-org/GLM-5.3/commit/ba32f8c19c8738e2c57c71798c601d477a7bf844)). Only the tool-result reordering differs from `glm5_3.jinja`. Response parsing uses `glm4moe_template`.
 
 ### `glm5_3_flash.jinja`
 
-Original GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash`). Same tool-call format as `glm4moe.jinja`, without the newlines around the arguments (`<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>`), and the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block. Response parsing uses `glm4moe_template`.
+GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` since [46a050b](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/46a050bec13002ad29ee795c16e61cf4fa3c4a9c)). Same tool-call format as `glm4moe.jinja`, without the newlines around the arguments (`<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>`), and the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_flash_v2.jinja`
+
+Original GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` before [690b705](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/690b705278a3a58e538fcb37c2ca8b5f9511213c)). Differs from `glm5_3_flash.jinja` in the tool-result reordering, and renders a `None` message content as the text `None`. Response parsing uses `glm4moe_template`.
+
+### `glm5_3_flash_v3.jinja`
+
+Earlier GLM-5.3-Flash chat template (as shipped by `zai-org/GLM-5.3-Flash` from [690b705](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/690b705278a3a58e538fcb37c2ca8b5f9511213c) until [46a050b](https://huggingface.co/zai-org/GLM-5.3-Flash/commit/46a050bec13002ad29ee795c16e61cf4fa3c4a9c), and by `zai-org/GLM-5.3-Flash-BF16` over the same period). Only the tool-result reordering differs from `glm5_3_flash.jinja`. Response parsing uses `glm4moe_template`.
 
 ### `gptoss.jinja`
 
@@ -152,6 +168,10 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 ### `lfm2_v2.jinja`
 
 Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them. Response parsing reuses `lfm2_2_5_template`.
+
+### `lfm2_v3.jinja`
+
+LFM2 chat template shipped by `LiquidAI/LFM2-24B-A2B` from [6a74feb](https://huggingface.co/LiquidAI/LFM2-24B-A2B/commit/6a74febc3a311b88d84b3b58162ba7c7bb09c38f) until [a3bbacd](https://huggingface.co/LiquidAI/LFM2-24B-A2B/commit/a3bbacd91a678b97712f0e323e52f8c24ba29542), and still by its re-uploads (e.g. `lmstudio-community/LFM2-24B-A2B-MLX-4bit`). Like `lfm2.jinja`, it never reads `message['tool_calls']`. Unlike it, the tool list is not wrapped in `<|tool_list_start|>` / `<|tool_list_end|>`, tool message content is not wrapped in `<|tool_response_start|>` / `<|tool_response_end|>`, list content is flattened (`text` items concatenated, `image` items rendered as `<image>`), and assistant turns before the last one drop their reasoning (everything up to `</think>`) unless `keep_past_thinking` is set.
 
 ### `lfm2_2_5.jinja`
 
@@ -241,6 +261,18 @@ Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-U
 
 Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `olmo3_think.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-7B-Think` and `allenai/Olmo-3-7B-Think-DPO`). Its generation prompt pre-fills `<think>`, and the reasoning is read inline in the assistant content. Does not support tool calling.
+
+### `olmo3_think_v2.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-7B-Think-SFT` and `allenai/Olmo-3.1-32B-Think`). Same as `olmo3_think.jinja`, with a different default system prompt.
+
+### `olmo3_think_v3.jinja`
+
+OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-32B-Think`, `allenai/Olmo-3-32B-Think-SFT` and `allenai/Olmo-3-32B-Think-DPO`). Same as `olmo3_think.jinja`, with a different default system prompt.
+
 ### `phi3.jinja`
 
 Original Phi-3 chat template.
@@ -287,7 +319,11 @@ Original Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 
 
 ### `qwen3_instruct_2507.jinja`
 
-Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507`). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507` and the other Qwen3-Instruct-2507 checkpoints since [cdbee75](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/commit/cdbee75f17c01a7cc42f958dc650907174af0554)). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+
+### `qwen3_instruct_2507_v2.jinja`
+
+Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507` and the other Qwen3-Instruct-2507 checkpoints before [cdbee75](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/commit/cdbee75f17c01a7cc42f958dc650907174af0554), and still by re-uploads such as `unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit`). Same as `qwen3.jinja`, without the `enable_thinking` flag. Response parsing reuses `qwen3_template`.
 
 ### `qwen3_thinking_2507.jinja`
 
@@ -367,6 +403,10 @@ Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn, and the `<think>\n` that the generation prompt pre-fills after `<｜Assistant｜>`, stay outside the markers, since the prompt already ends with them.
 - Reads the content with `message.get('content')` instead of `message['content']`, so that a tool-call message without a `content` key renders like one with `content=None` (transformers drops `None`-valued message keys since 5.23). The original crashes on the missing key.
+
+### `deepseek_r1_distill_v2_training.jinja`
+
+Patched original DeepSeek-R1-Distill template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseek_r1_distill_v2.jinja`, except that the `<think>\n` stays inside the markers: the generation prompt does not pre-fill it, so the model generates it and assistant-only loss trains it.
 
 ### `deepseekv3_training.jinja`
 
@@ -494,6 +534,10 @@ Patched LFM2 template, later revision. Diff vs `lfm2_v2.jinja`:
 
 Wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the branch that renders `tool_calls` and the plain-content branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|im_start|>assistant\n` prompt cue stays outside the generation block, while the content, the tool calls and `<|im_end|>\n` sit inside.
 
+### `lfm2_v3_training.jinja`
+
+Patched LFM2-24B-A2B template, earlier revision. Same diff as `lfm2_training.jinja`, applied to `lfm2_v3.jinja`.
+
 ### `llama3_training.jinja`
 
 Patched Llama 3 template. Diff vs `llama3.jinja`:
@@ -563,6 +607,18 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
+
+### `olmo3_think_training.jinja`
+
+Patched OLMo 3 Think template. Diff vs `olmo3_think.jinja`: wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, with the `<think>` that the generation prompt pre-fills left outside them.
+
+### `olmo3_think_v2_training.jinja`
+
+Patched OLMo 3 Think template. Same diff as `olmo3_think_training.jinja`, applied to `olmo3_think_v2.jinja`.
+
+### `olmo3_think_v3_training.jinja`
+
+Patched OLMo 3 Think template. Same diff as `olmo3_think_training.jinja`, applied to `olmo3_think_v3.jinja`.
 
 ### `phi3_training.jinja`
 
@@ -644,6 +700,10 @@ Patched original Qwen3 template. Same diff as `qwen3_training.jinja`, applied to
 Patched Qwen3-Instruct-2507 template. Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_instruct_2507_v2_training.jinja`
+
+Patched original Qwen3-Instruct-2507 template. Same diff as `qwen3_training.jinja` (always include the thinking block for prefix-preservation, and `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss), applied to `qwen3_instruct_2507_v2.jinja`, without the `enable_thinking` pre-fill handling, since this template has no `enable_thinking` flag.
 
 ### `qwen3_thinking_2507_training.jinja`
 

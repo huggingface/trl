@@ -31,6 +31,7 @@ from trl.chat_template_utils import (
     cohere2_chat_template,
     cohere_chat_template,
     cohere_training_chat_template,
+    deepseek_r1_distill_v2_chat_template,
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
     deepseekv3_v5_chat_template,
@@ -49,6 +50,9 @@ from trl.chat_template_utils import (
     glm5_1_chat_template,
     glm5_2_chat_template,
     glm5_3_chat_template,
+    glm5_3_flash_v2_chat_template,
+    glm5_3_flash_v3_chat_template,
+    glm5_3_v2_chat_template,
     glm5_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
@@ -58,11 +62,15 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    lfm2_v3_chat_template,
     mistral_large_4_v2_chat_template,
     mistral_medium_3_5_v2_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
+    olmo3_think_chat_template,
+    olmo3_think_v2_chat_template,
+    olmo3_think_v3_chat_template,
     parse_response,
     phi4_chat_template,
     phi4_mini_chat_template,
@@ -75,6 +83,7 @@ from trl.chat_template_utils import (
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
     qwen3_coder_v2_chat_template,
+    qwen3_instruct_2507_v2_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
@@ -356,6 +365,11 @@ class TestAddResponseSchema:
             ),
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_v2_chat_template, id="qwen2.5-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template, id="qwen3-v2"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+                qwen3_instruct_2507_v2_chat_template,
+                id="qwen3-instruct-2507-v2",
+            ),
         ],
     )
     def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
@@ -380,19 +394,24 @@ class TestAddResponseSchema:
         assert parsed == messages[-1]
 
     @pytest.mark.parametrize(
-        "chat_template",
+        "tokenizer_name, chat_template",
         [
-            pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
-            pytest.param(qwen3_coder_v2_chat_template, id="qwen3-coder-v2"),
-            pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
-            pytest.param(qwen3_6_v2_chat_template, id="qwen3.6-v2"),
-            pytest.param(qwen3_8_v2_chat_template, id="qwen3.8-v2"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", None, id="qwen3-coder"),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template, id="qwen3-coder-v2"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template, id="qwen3-coder-next"
+            ),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_6_v2_chat_template, id="qwen3.6-v2"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
     )
-    def test_add_response_schema_qwen3_xml_tool_calls(self, chat_template):
+    def test_add_response_schema_qwen3_xml_tool_calls(self, tokenizer_name, chat_template):
         # Without the tools' schema, XML argument values parse back as strings, so the arguments here are strings
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
-        tokenizer.chat_template = chat_template
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:  # Qwen3 release without a tiny model of its own
+            tokenizer.chat_template = chat_template
         tokenizer = add_response_schema(tokenizer)
         tool_calls = [
             {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris, France"}}},
@@ -491,7 +510,18 @@ class TestAddResponseSchema:
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template, id="glm5.1"),
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template, id="glm5.2"),
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template, id="glm5.3"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_v2_chat_template, id="glm5.3-v2"),
             pytest.param("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", None, id="glm5.3-flash"),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v2_chat_template,
+                id="glm5.3-flash-v2",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v3_chat_template,
+                id="glm5.3-flash-v3",
+            ),
         ],
     )
     @pytest.mark.parametrize(
@@ -1221,9 +1251,15 @@ class TestSupportsToolCalling:
             # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
             # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
             pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
+            # The LFM2-24B-A2B revision never reads `tool_calls` either
+            pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v3_chat_template), id="lfm2-v3"),
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
+                id="r1_distill_v2",
+            ),
             # Same `tool_calls` rendering as DeepSeek-R1-Distill
             pytest.param(
                 ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template), id="deepseekv3-v3"
@@ -1489,6 +1525,10 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             id="cohere2-named-variants",
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
+            id="r1_distill_v2",
+        ),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
         pytest.param(
@@ -1682,6 +1722,7 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v3_chat_template), id="lfm2-v3"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
@@ -1787,6 +1828,30 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
                 reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_chat_template),
+            id="olmo3_think",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_v2_chat_template),
+            id="olmo3_think_v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_v3_chat_template),
+            id="olmo3_think_v3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
         # phi-4 uses ChatML special tokens, which the tiny Qwen2.5 tokenizer has and the tiny Phi-3 one doesn't
@@ -1808,6 +1873,10 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param(("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template), id="qwen3-v2"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", qwen3_instruct_2507_v2_chat_template),
+            id="qwen3_instruct_2507_v2",
+        ),
         pytest.param(
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
             id="qwen3_thinking_2507",
@@ -2113,6 +2182,7 @@ class TestGetTrainingChatTemplate:
             assert after == before + "<|user|>"
         elif tokenizer_name in (
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         ):
@@ -2306,9 +2376,11 @@ class TestGetTrainingChatTemplate:
         # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
         if prompt.rstrip().endswith(("</think>", "<channel|>")):
             assistant = {"role": "assistant", "content": "It is blue."}
-        # Templates without a reasoning field (DeepSeek) read the reasoning inline in the content
-        elif prompt.endswith("<think>\n") and "reasoning_content" not in tokenizer.chat_template:
-            assistant = {"role": "assistant", "content": "<think>\nRayleigh scattering.\n</think>\n\nIt is blue."}
+        # Templates without a reasoning field (DeepSeek, OLMo 3 Think) read the reasoning inline in the content, opened
+        # as the generation prompt opens it
+        elif prompt.endswith(("<think>", "<think>\n")) and "reasoning_content" not in tokenizer.chat_template:
+            opener = prompt[prompt.rindex("<think>") :]
+            assistant = {"role": "assistant", "content": f"{opener}Rayleigh scattering.\n</think>\n\nIt is blue."}
         else:
             assistant = {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
         messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
@@ -2423,6 +2495,10 @@ class TestDeepseekTrainingChatTemplates:
         "tokenizer_name",
         [
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
+                id="r1_distill_v2",
+            ),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
@@ -2468,6 +2544,26 @@ class TestDeepseekTrainingChatTemplates:
         assert "It is 12." in trained and "You are welcome." in trained
         assert "<｜Assistant｜>" not in trained
         assert "<｜tool▁outputs▁end｜>" not in trained
+
+    def test_r1_distill_v2_trains_think_opener(self):
+        # The original generation prompt doesn't pre-fill `<think>\n`, so it must be trained
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill")
+        tokenizer.chat_template = deepseek_r1_distill_v2_chat_template
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "<think>\nThe sky scatters light.\n</think>\n\nIt is blue."},
+        ]
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=get_training_chat_template(tokenizer),
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+        )
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained == "<think>\nThe sky scatters light.\n</think>\n\nIt is blue.<｜end▁of▁sentence｜>"
 
     @pytest.mark.parametrize(
         "chat_template",
