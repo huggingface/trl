@@ -75,6 +75,7 @@ from ..chat_template_utils import (
 from ..generation.async_vllm_client import AsyncVLLMClient
 from ..generation.weight_transfer import WeightTransferClient
 from ..import_utils import is_aiohttp_available, is_jmespath_available
+from ..kernels.tree_inkling2 import patch_tree_inkling2
 from .async_grpo_config import AsyncGRPOConfig
 from .base_trainer import _BaseTrainer
 from .utils import (
@@ -3152,8 +3153,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Check tree attention compat
         inkling2 = text_config.model_type in {"inkling2_text", "inkling2_loop_text"}
         if inkling2:
-            from ..kernels.tree_inkling2 import patch_tree_inkling2
-
             if text_config.attention_dropout:
                 raise ValueError("Tree packing of Inkling 2 requires attention_dropout=0.")
             patch_tree_inkling2(text_config.model_type)
