@@ -889,9 +889,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
@@ -899,23 +900,25 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
+                id="gpt-oss",
                 marks=pytest.mark.xfail(
                     raises=ValueError, reason="Attention sinks are not supported (#8231)", strict=True
                 ),
             ),
-            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-            "trl-internal-testing/tiny-PhimoeForCausalLM",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
+            pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
+                id="beam",
                 marks=pytest.mark.skip(
                     reason="Too slow on the stand-in vLLM server: a step takes over a minute, and the epoch does not end "
                     "within 20 minutes"
                 ),
             ),
-            "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+            pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", id="nemotron3-nano"),
         ],
     )
     def test_train(self, model_id, make_vllm_server):
@@ -976,20 +979,21 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         "model_id, expect_coef, expect_aux_loss",
         [
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True, id="qwen3-moe"),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False, id="deepseek-v3"),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
                 False,
+                id="beam",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.1"),
                     reason="Beam was introduced in transformers-5.20.1",
                 ),
             ),
             # Dense model: no coefficient to inherit
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False, id="qwen2.5"),
         ],
     )
     @pytest.mark.usefixtures("stub_weight_transfer")
@@ -3143,9 +3147,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen3.5-think",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
     )
@@ -3184,12 +3190,16 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen3.5-think",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
     )
@@ -3240,8 +3250,8 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
         ],
     )
     @require_peft
@@ -3464,15 +3474,15 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-                id="qwen35",
+                id="qwen3.5-think",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                id="qwen36-moe",
+                id="qwen3.6-moe",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
@@ -3496,15 +3506,15 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-                id="qwen35",
+                id="qwen3.5-think",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                id="qwen36-moe",
+                id="qwen3.6-moe",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
@@ -4253,6 +4263,35 @@ class TestTreePacking(TrlTestCase):
         row = _tree_row(self.ROWS)
         assert (len(row.tokens), row.load) == (10, 15 + 12 + 11)  # depths 1..5, then 3..5 and 5..6 for the branches
 
+    # 10 20 30 40 50, 10 20 30 60 70 and 10 20 30 60 80: the trie drawn in `TreeRow`'s docstring
+    FORKS = [[10, 20, 30, 40, 50], [10, 20, 30, 60, 70], [10, 20, 30, 60, 80]]
+
+    @pytest.mark.parametrize(
+        ("tokens", "shared"),
+        [
+            pytest.param([10, 20, 30, 40, 50], 5, id="copy"),
+            pytest.param([10, 20, 30, 60, 80], 5, id="copy-of-a-fork"),
+            pytest.param([10, 20, 30], 2, id="prefix"),  # its last 30 is keyed on no next token
+            pytest.param([10, 20, 30, 40, 50, 60], 4, id="extension"),  # the 50 it shares ends a sample
+            pytest.param([10, 20, 30, 60, 90], 3, id="fork-off-a-fork"),
+            pytest.param([10, 21], 0, id="first-token-only"),
+            pytest.param([11, 20, 30], 0, id="new-root"),
+        ],
+    )
+    def test_cost_counts_only_the_tokens_the_row_lacks(self, tokens, shared):
+        row = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS])
+        n = len(tokens)
+
+        assert row.cost(_tree_sample(tokens, n_prompt=1)) == (n * (n + 1) - shared * (shared + 1)) // 2
+
+    def test_chains_are_laid_out_depth_first(self):
+        packed = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS]).pack()
+
+        assert packed["input_ids"].tolist() == [10, 20, 30, 40, 50, 30, 60, 70, 60, 80]
+        assert packed["position_ids"].tolist() == [0, 1, 2, 3, 4, 2, 3, 4, 3, 4]
+        assert packed["tree_cu_seqlens_q"].tolist() == [0, 2, 5, 6, 8, 10]
+        assert packed["tree_segment_parents"].tolist() == [-1, 0, 0, 2, 2]
+
     def test_groups_share_a_common_prefix(self):
         rows = [_tree_sample([1, 2, 3, last], n_prompt=1, group_id=g) for g, last in ((0, 4), (1, 5))]
         packed = _tree_row(rows).pack()
@@ -4359,46 +4398,44 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
 @pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
-        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", {}, id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
             {},
-            id="qwen35-gdn",
+            id="qwen3.5-think",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
             {},
-            id="qwen38-gdn",
+            id="qwen3.8",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             {},
-            id="qwen36-moe-gdn",
+            id="qwen3.6-moe",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
-        pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron-h-mamba2"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv", marks=_LFM2_CONV_BEFORE_5_22),
+        pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron3-nano"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2", marks=_LFM2_CONV_BEFORE_5_22),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm2.5", marks=_LFM2_CONV_BEFORE_5_22),
         pytest.param(
-            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv", marks=_LFM2_CONV_BEFORE_5_22
-        ),
-        pytest.param(
-            "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv", marks=_LFM2_CONV_BEFORE_5_22
+            "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm2.5-moe", marks=_LFM2_CONV_BEFORE_5_22
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen25-vl"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, id="llama31"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, id="llama32"),
-        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen2.5-vl"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, id="llama3.2"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, id="mistral0.2"),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", {}, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {"sliding_window": 16},
-            id="gemma2-sliding-window-softcap",
+            id="gemma2",
             marks=[
                 pytest.mark.skipif(
                     torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
@@ -4414,7 +4451,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param(
             "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
             {},
-            id="inkling2_loop",
+            id="inkling2-loop",
             marks=[
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
@@ -4438,17 +4475,17 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", {}, id="glm4-moe"),
-        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", {}, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
             {"sliding_window": 16},
-            id="cohere2-interleaved-sliding-window",
+            id="cohere2",
         ),
         pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
             {"sliding_window": 16},
-            id="olmo3-interleaved-sliding-window",
+            id="olmo3",
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),

@@ -1083,9 +1083,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "instantiated"),
         [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False, id="qwen2.5"),
+            # an already instantiated model
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True, id="qwen2.5-instantiated"),
+            # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False, id="qwen3-moe"),
         ],
     )
     def test_train(self, model_id, instantiated):

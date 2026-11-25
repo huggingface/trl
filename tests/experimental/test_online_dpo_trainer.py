@@ -555,18 +555,33 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_init_reward_model_with_model_revision(self):
+        # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "8913f5819566"}
+        )
+        OnlineDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Idefics2ForConditionalGeneration", id="idefics2"),
+            pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                id="qwen3-vl",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="Qwen3-VL series were introduced in transformers-4.57.0",

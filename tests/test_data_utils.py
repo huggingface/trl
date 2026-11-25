@@ -430,31 +430,34 @@ class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         pytest.param(
             "trl-internal-testing/tiny-BeamForCausalLM",
+            id="beam",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.20.1"),
                 reason="Beam was introduced in transformers-5.20.1",
             ),
         ),
-        "trl-internal-testing/tiny-CohereForCausalLM",
-        "trl-internal-testing/tiny-Cohere2ForCausalLM",
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        "trl-internal-testing/tiny-FalconMambaForCausalLM",
-        "trl-internal-testing/tiny-Gemma2ForCausalLM",
-        "trl-internal-testing/tiny-GemmaForCausalLM",
-        "trl-internal-testing/tiny-GptOssForCausalLM",
-        "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-        "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+        pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseek-v3"),
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseek-v3-0528"),
+        pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falcon-mamba"),
+        pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
+        pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
+        pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+        pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+            id="glm4-moe",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="GLM4 tokenizer requires transformers>=5.0.0",
             ),
         ),
-        "trl-internal-testing/tiny-Lfm2ForCausalLM",
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param(
             "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            id="lfm2.5",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="LFM2.5 tokenizer requires transformers>=5.0.0",
@@ -462,18 +465,20 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+            id="lfm2.5-moe",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="LFM2-MoE requires transformers>=5.0.0",
             ),
         ),
-        "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-        "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-        "trl-internal-testing/tiny-LlamaForCausalLM-3",
-        "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-        "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.1", id="mistral0.1"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+            id="nemotron3-nano",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
@@ -481,6 +486,7 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-super",
+            id="nemotron3-super",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
@@ -488,6 +494,7 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-ultra",
+            id="nemotron3-ultra",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
@@ -495,6 +502,7 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            id="nemotron3.5-lightning",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.3.0"),
                 reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
@@ -502,18 +510,20 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            id="olmo3",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("4.57.0"),
                 reason="Olmo 3 requires transformers>=4.57.0",
             ),
         ),
-        "trl-internal-testing/tiny-Phi3ForCausalLM-3",
-        "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-        "trl-internal-testing/tiny-Qwen3ForCausalLM",
-        "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3-instruct-2507"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+            id="qwen3.5-nothink",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -521,6 +531,7 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            id="qwen3.6-moe",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -528,6 +539,7 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+            id="qwen3.8",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
