@@ -85,6 +85,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM": "0ea8ef8b1cb6b15f9d47860269de792c96e69d23",
     "trl-internal-testing/tiny-Idefics2ForConditionalGeneration": "05488b3ae9bb1815d8bc16019d3a60f5387e3f54",
     "trl-internal-testing/tiny-Idefics3ForConditionalGeneration": "ae70d0c8b17b38347e1f7d15d064efc077048781",
+    "trl-internal-testing/tiny-Inkling2ForConditionalGeneration": "03440e4f995792e355ee918423da6e1714fa12e5",
     "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
     "trl-internal-testing/tiny-InklingForConditionalGeneration": "0e2558582d4c6c8538d178db0c2df065ac5a9ac5",
     "trl-internal-testing/tiny-InternVLForConditionalGeneration": "99c02d42d51fd4f83e12f19850a126627d473109",

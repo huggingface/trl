@@ -10,7 +10,7 @@ On 30 fixed puzzles with 16 empty cells, with greedy decoding, [Qwen3-1.7B](http
 
 A solver plays 1,000 games and writes them as tool-calling conversations ([`openenv/sudoku-tool-calls-sft`](https://huggingface.co/datasets/openenv/sudoku-tool-calls-sft)). It only fills a cell when one digit fits, so every step of its reasoning can be checked on the grid. One epoch of SFT on those games takes 27 minutes on one A100. The SFT model ([`openenv/Qwen3-1.7B-Sudoku-SFT`](https://huggingface.co/openenv/Qwen3-1.7B-Sudoku-SFT)) solves 19 of 30 puzzles at 16 empty cells and 10 at 26, filling about half the grid.
 
-This example starts from the published SFT model. To train your own, follow the SFT steps of the [OpenEnv Sudoku tutorial](https://huggingface.co/docs/openenv/tutorials/sudoku-grpo#4-generate-the-sft-data), with [`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/sudoku/generate_sft_data.py) and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/sudoku/sft.py), then pass your model with `--model`.
+This example starts from the published SFT model. To train your own, follow the SFT steps of the [OpenEnv Sudoku tutorial](https://openenv.github.io/OpenEnv/main/tutorials/sudoku-grpo#4-generate-the-sft-data), with [`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/sudoku/generate_sft_data.py) and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/sudoku/sft.py), then pass your model with `--model`.
 
 ## 3. Train it with GRPO against the environment
 
@@ -50,4 +50,4 @@ Greedy decoding on the same 30 puzzles at each level, with up to 40 moves per ga
 
 ## The whole pipeline
 
-The puzzles, the SFT data, the SFT run, the evaluation and the GIF are explained step by step in the [OpenEnv Sudoku tutorial](https://huggingface.co/docs/openenv/tutorials/sudoku-grpo), with the scripts in [`examples/sudoku`](https://github.com/openenv/OpenEnv/tree/main/examples/sudoku) of the OpenEnv repo. The whole pipeline costs about $42 on Hugging Face Jobs.
+The puzzles, the SFT data, the SFT run, the evaluation and the GIF are explained step by step in the [OpenEnv Sudoku tutorial](https://openenv.github.io/OpenEnv/main/tutorials/sudoku-grpo), with the scripts in [`examples/sudoku`](https://github.com/openenv/OpenEnv/tree/main/examples/sudoku) of the OpenEnv repo. The whole pipeline costs about $42 on Hugging Face Jobs.

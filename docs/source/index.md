@@ -100,15 +100,30 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/spaces/trl-lib/async-grpo-stable">
+      <img src="https://huggingface.co/spaces/trl-lib/async-grpo-stable/resolve/main/app/public/thumb.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on November 13, 2026</p>
+      <p class="text-gray-700">AsyncGRPOTrainer is stable: async RL in TRL</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/asyncgrpo-lora-hfjobs">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/asyncgrpo-lora-hfjobs/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on September 10, 2026</p>
+      <p class="text-gray-700">Async GRPO with LoRA across HF Jobs: a bucket, a proxy, and no NCCL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/delta-weight-sync">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/delta-weight-sync/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on May 27, 2026</p>
       <p class="text-gray-700">Shipping a Trillion Parameters With a Hub Bucket: Delta Weight Sync in TRL</p>
     </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/spaces/HuggingFaceTB/trl-distillation-trainer">
+      <img src="https://huggingface.co/spaces/HuggingFaceTB/trl-distillation-trainer/resolve/main/app/public/thumb.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on April 12, 2026</p>
+      <p class="text-gray-700">Distilling 100B+ Models 40x Faster with TRL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-v1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl-v1/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on March 31, 2026</p>
-      <p class="text-gray-700">TRL v1: Post-Training Library That Holds When the Field Invalidates Its Own Assumptions</p>
+      <p class="text-gray-700">TRL v1.0: Post-Training Library Built to Move with the Field</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/async-rl-training-landscape">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/async-rl-landscape/thumbnail.png" alt="thumbnail" class="mt-0">
@@ -119,6 +134,11 @@ The documentation is organized into the following sections:
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/ulysses/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on March 9, 2026</p>
       <p class="text-gray-700">Ulysses Sequence Parallelism: Training with Million-Token Contexts</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation">
+      <img src="https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation/resolve/main/app/public/thumb.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on October 29, 2025</p>
+      <p class="text-gray-700">Unlocking On-Policy Distillation for Any Model Family</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
