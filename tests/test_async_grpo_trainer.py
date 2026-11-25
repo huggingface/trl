@@ -4261,6 +4261,35 @@ class TestTreePacking(TrlTestCase):
         row = _tree_row(self.ROWS)
         assert (len(row.tokens), row.load) == (10, 15 + 12 + 11)  # depths 1..5, then 3..5 and 5..6 for the branches
 
+    # 10 20 30 40 50, 10 20 30 60 70 and 10 20 30 60 80: the trie drawn in `TreeRow`'s docstring
+    FORKS = [[10, 20, 30, 40, 50], [10, 20, 30, 60, 70], [10, 20, 30, 60, 80]]
+
+    @pytest.mark.parametrize(
+        ("tokens", "shared"),
+        [
+            pytest.param([10, 20, 30, 40, 50], 5, id="copy"),
+            pytest.param([10, 20, 30, 60, 80], 5, id="copy-of-a-fork"),
+            pytest.param([10, 20, 30], 2, id="prefix"),  # its last 30 is keyed on no next token
+            pytest.param([10, 20, 30, 40, 50, 60], 4, id="extension"),  # the 50 it shares ends a sample
+            pytest.param([10, 20, 30, 60, 90], 3, id="fork-off-a-fork"),
+            pytest.param([10, 21], 0, id="first-token-only"),
+            pytest.param([11, 20, 30], 0, id="new-root"),
+        ],
+    )
+    def test_cost_counts_only_the_tokens_the_row_lacks(self, tokens, shared):
+        row = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS])
+        n = len(tokens)
+
+        assert row.cost(_tree_sample(tokens, n_prompt=1)) == (n * (n + 1) - shared * (shared + 1)) // 2
+
+    def test_chains_are_laid_out_depth_first(self):
+        packed = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS]).pack()
+
+        assert packed["input_ids"].tolist() == [10, 20, 30, 40, 50, 30, 60, 70, 60, 80]
+        assert packed["position_ids"].tolist() == [0, 1, 2, 3, 4, 2, 3, 4, 3, 4]
+        assert packed["tree_cu_seqlens_q"].tolist() == [0, 2, 5, 6, 8, 10]
+        assert packed["tree_segment_parents"].tolist() == [-1, 0, 0, 2, 2]
+
     def test_groups_share_a_common_prefix(self):
         rows = [_tree_sample([1, 2, 3, last], n_prompt=1, group_id=g) for g, last in ((0, 4), (1, 5))]
         packed = _tree_row(rows).pack()
