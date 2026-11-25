@@ -753,8 +753,10 @@ def redact_secrets(obj):
     [{'role': 'tool', 'content': 'MY_API_KEY=<REDACTED>'}]
     ```
     """
-    # Short values ("1", "true") would redact unrelated text
+    # Short values ("1", "true") would redact unrelated text. Longest first, so a secret that contains another one is
+    # replaced whole.
     secrets = [value for name, value in os.environ.items() if _SECRET_ENV_NAME.search(name) and len(value) >= 8]
+    secrets.sort(key=len, reverse=True)
 
     def redact(obj):
         if isinstance(obj, str):
