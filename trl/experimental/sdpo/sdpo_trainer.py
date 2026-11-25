@@ -598,15 +598,15 @@ class SDPOTrainer(_BaseTrainer):
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
-                reward_model_init_kwargs = args.model_init_kwargs or {}
+                model_init_kwargs = args.model_init_kwargs or {}
+                # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    reward_model_init_kwargs["device_map"] = None
-                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                    model_init_kwargs["device_map"] = None
+                model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
                 # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+                reward_model_init_kwargs = {k: v for k, v in model_init_kwargs.items() if k != "revision"}
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func,
-                    num_labels=1,
-                    **{k: v for k, v in reward_model_init_kwargs.items() if k != "revision"},
+                    reward_func, num_labels=1, **reward_model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
