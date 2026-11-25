@@ -13,12 +13,16 @@
 # limitations under the License.
 
 import copy
+import inspect
+import json
 import re
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 import transformers
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
@@ -57,6 +61,7 @@ from trl.chat_template_utils import (
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    lfm2_2_5_chat_template,
     lfm2_2_5_v2_chat_template,
     lfm2_2_5_v4_chat_template,
     lfm2_2_5_vl_v2_chat_template,
@@ -92,7 +97,7 @@ from trl.chat_template_utils import (
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_response_parsing, require_vision
+from .testing_utils import MODEL_REVISIONS, TrlTestCase, require_response_parsing, require_vision
 
 
 def multiply(a: int, b: int) -> int:
@@ -331,6 +336,15 @@ class TestAddResponseSchema:
                 marks=pytest.mark.skipif(
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_chat_template,
+                id="lfm2-2.5-v1",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
             ),
             pytest.param(
@@ -3194,3 +3208,50 @@ class TestChatTemplatesDocumentation:
             path.name for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja") if path.name not in documented
         )
         assert missing == []
+
+
+class TestChatTemplatesCoverage:
+    def test_every_stored_template_is_tested(self):
+        # A bare case tests whatever template its pinned tiny model ships, so regenerating the model silently moves
+        # that coverage to the newest template (#7492): keep an explicit (model, template) case for every revision
+        templates, models = set(), set()
+        for cls in [obj for obj in vars(sys.modules[__name__]).values() if inspect.isclass(obj)]:
+            for test in [cls, *(obj for obj in vars(cls).values() if inspect.isfunction(obj))]:
+                for mark in vars(test).get("pytestmark", []):
+                    if mark.name != "parametrize":
+                        continue
+                    for param in mark.args[1]:
+                        values = param.values if isinstance(param, type(pytest.param())) else (param,)
+                        for value in values:
+                            for item in value if isinstance(value, tuple) else (value,):
+                                if isinstance(item, str) and item.startswith("trl-internal-testing/"):
+                                    models.add(item)
+                                elif isinstance(item, str):
+                                    templates.add(item)
+                                elif isinstance(item, dict):  # named chat template variants
+                                    templates.update(v for v in item.values() if isinstance(v, str))
+        # Templates the pinned tiny models ship, read from their files so it works on every transformers version
+        for model_id in models:
+            path = Path(
+                snapshot_download(
+                    model_id,
+                    revision=MODEL_REVISIONS[model_id],
+                    allow_patterns=["chat_template.jinja", "chat_template.json", "tokenizer_config.json"],
+                )
+            )
+            if (path / "chat_template.jinja").exists():
+                templates.add((path / "chat_template.jinja").read_text(encoding="utf-8"))
+            for name in ["chat_template.json", "tokenizer_config.json"]:
+                if (path / name).exists():
+                    template = json.loads((path / name).read_text(encoding="utf-8")).get("chat_template")
+                    if isinstance(template, str):
+                        templates.add(template)
+        # Jinja drops a single trailing newline, so a copy that only adds or drops it is the same template (#8502)
+        templates = {template.removesuffix("\n") for template in templates}
+        untested = sorted(
+            path.name
+            for path in _CHAT_TEMPLATES_DIR.glob("*.jinja")
+            if not path.name.endswith("_training.jinja")
+            and path.read_text(encoding="utf-8").removesuffix("\n") not in templates
+        )
+        assert untested == []
