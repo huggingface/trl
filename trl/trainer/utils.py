@@ -715,13 +715,16 @@ def selective_log_softmax_and_entropy(
 
 # Environment variables whose names look like credentials (HF_TOKEN, OPENAI_API_KEY, DB_PASSWORD, ...)
 _SECRET_ENV_NAME = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD)(_|$)", re.IGNORECASE)
-# Common token formats: Hugging Face, OpenAI-style, GitHub, AWS access key IDs, PEM private keys
+# Common token formats: Hugging Face, OpenAI and Anthropic (`sk-`), GitHub, AWS access key IDs, Google API keys, Slack
+# and PEM private keys (up to the end of the text if the END line is missing)
 _SECRET_PATTERN = re.compile(
-    r"hf_[A-Za-z0-9]{30,}"
-    r"|sk-[A-Za-z0-9_-]{20,}"
-    r"|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}"
-    r"|(?:AKIA|ASIA)[0-9A-Z]{16}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+    r"\b(?:hf_|api_org_)[A-Za-z0-9]{30,}"
+    r"|\bsk-[A-Za-z0-9_-]{20,}"
+    r"|\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})"
+    r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
+    r"|\bAIza[0-9A-Za-z_-]{35}"
+    r"|\bxox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"
 )
 
 
