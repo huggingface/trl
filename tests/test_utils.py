@@ -1969,6 +1969,22 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
         ),
     ),
     pytest.param(
+        "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+        id="inkling2",
+        marks=[
+            require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.23.0"),
+                reason="Inkling 2 models were introduced in transformers-5.23.0",
+            ),
+            pytest.mark.xfail(
+                raises=AssertionError,
+                reason="Inkling 2's head keeps the padded vocabulary rows its forward slices off (#8497)",
+                strict=False,  # the backward check stays within tolerance on some GPUs (L40S)
+            ),
+        ],
+    ),
+    pytest.param(
         "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
         id="inkling2-loop",
         marks=pytest.mark.skipif(

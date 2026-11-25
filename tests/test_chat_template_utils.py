@@ -1021,6 +1021,14 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="Inkling 2 models were introduced in transformers-5.23.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
                 id="inkling2-loop",
                 marks=pytest.mark.skipif(
@@ -2829,6 +2837,17 @@ class TestNamedChatTemplateVariants:
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+            id="inkling2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="Inkling 2 models were introduced in transformers-5.23.0",
                 ),
             ],
         ),

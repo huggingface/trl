@@ -1575,6 +1575,19 @@ class TestKTOTrainerVLM(TrlTestCase):
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.23.0"),
+                        reason="Inkling 2 models were introduced in transformers-5.23.0",
+                    ),
+                    pytest.mark.xfail(
+                        reason="Dequantizing the MXFP8 checkpoint leaves the experts unscaled (#8497)", strict=True
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
                 id="inkling2-loop",
                 marks=pytest.mark.skipif(

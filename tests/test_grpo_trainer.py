@@ -4597,6 +4597,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.23.0"),
+                        reason="Inkling 2 models were introduced in transformers-5.23.0",
+                    ),
+                    pytest.mark.xfail(
+                        reason="The tiny model's random completions never open an answer, so they all parse to the same "
+                        "empty one, get the same reward and leave nothing to learn",
+                        strict=True,
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
                 id="inkling2-loop",
                 marks=[
@@ -4975,6 +4990,14 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="Inkling 2 models were introduced in transformers-5.23.0",
                 ),
             ),
             pytest.param(
