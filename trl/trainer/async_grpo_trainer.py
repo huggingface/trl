@@ -3093,7 +3093,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_kernels_available():
             from kernels import LayerRepository, Mode, kernelize, use_kernel_mapping
 
-            rms_norm = LayerRepository(repo_id="kernels-community/liger-kernels", layer_name="LigerRMSNorm", version=3)
+            rms_norm = LayerRepository(repo_id="kernels-community/liger-kernels", layer_name="LigerRMSNorm", version=4)
             with use_kernel_mapping({"RMSNorm": {"cuda": rms_norm, "rocm": rms_norm}}, inherit_mapping=False):
                 kernelize(model, mode=Mode.TRAINING, device="rocm" if torch.version.hip else "cuda")
 
