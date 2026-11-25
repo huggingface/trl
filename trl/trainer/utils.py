@@ -319,6 +319,7 @@ def generate_model_card(
     paper_title: str | None = None,
     paper_id: str | None = None,
     comet_url: str | None = None,
+    hf_jobs_flavor: str | None = None,
 ) -> ModelCard:
     """
     Generate a [`~huggingface_hub.ModelCard`] from a template.
@@ -350,6 +351,8 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
         comet_url (`str`, *optional*):
             Comet experiment URL.
+        hf_jobs_flavor (`str`, *optional*):
+            Hugging Face Jobs hardware flavor (e.g. `a10g-small`) the model was trained on.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:
@@ -378,6 +381,7 @@ def generate_model_card(
         trainer_citation=trainer_citation,
         paper_title=paper_title,
         paper_id=paper_id,
+        hf_jobs_flavor=hf_jobs_flavor,
         trl_version=version("trl"),
         transformers_version=version("transformers"),
         pytorch_version=version("torch"),
