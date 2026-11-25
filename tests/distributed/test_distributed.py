@@ -21,6 +21,7 @@ import pytest
 import torch
 import transformers
 from datasets import load_dataset
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
@@ -43,7 +44,7 @@ from trl import (
 )
 from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import MODEL_REVISIONS, TrlTestCase, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -238,6 +239,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
             ],
@@ -273,6 +275,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--loss_type", "nll",
@@ -309,6 +312,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
             ],
@@ -347,6 +351,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
                 "--precompute_ref_log_probs",
@@ -384,6 +389,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/kto.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_unpaired_preference",
                 "--precompute_ref_log_probs",
@@ -421,6 +427,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--dataset_streaming",
@@ -460,6 +467,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--use_peft",
@@ -496,6 +504,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/reward.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_implicit_prompt_preference",
             ],
@@ -532,15 +541,19 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_rloo(self, config, get_launch_args):
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
         # fmt: off
         run_command(
             [
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/rloo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", reward_model_path,
             ],
             os.environ.copy(),
         )
@@ -569,15 +582,19 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_grpo(self, config, get_launch_args):
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
         # fmt: off
         run_command(
             [
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/grpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", reward_model_path,
             ],
             os.environ.copy(),
         )
