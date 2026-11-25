@@ -2409,7 +2409,7 @@ class TestDistillationTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
-    def test_environment_reward_mixed_environments(self):
+    def test_environment_owned_reward_mixed_environments(self):
         # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
         # env *class* contributes one reward column (named after its class); a rollout is scored only when its
         # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
