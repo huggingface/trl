@@ -57,6 +57,7 @@ from trl.generation import weight_transfer as weight_transfer_module
 from trl.generation.weight_transfer import WeightTransferClient
 from trl.trainer import async_grpo_trainer as async_grpo_trainer_module
 from trl.trainer.async_grpo_trainer import (
+    TOKEN_COST,
     TREE_ATTENTION,
     AsyncRolloutLoop,
     AsyncRolloutWorker,
@@ -4084,6 +4085,15 @@ class TestPackingAwareBatching(TrlTestCase):
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
             assert all(length <= 8 for length in lengths)  # the oversized sample (12) was dropped
 
+    def test_token_budget_batcher_balances_a_long_sample_arriving_last(self):
+        # In arrival order, the 6-token sample joins a row of two 3-token samples: 12 tokens against 6
+        source = iter([_rollout_sample(n) for n in (3, 3, 3, 3, 6, 8)])
+        batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=12, metrics=defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        assert [_row_tokens(group) for group in micro_batch] == [9, 9]
+
     def test_collator_pads_unequal_rows(self):
         # The planner hands the collator a pre-partitioned micro-batch, wrapped in a length-1 list by the dataloader.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
@@ -4259,7 +4269,8 @@ class TestTreePacking(TrlTestCase):
 
     def test_cost_counts_unique_tokens_and_surviving_score_pairs(self):
         row = _tree_row(self.ROWS)
-        assert (len(row.tokens), row.load) == (10, 15 + 12 + 11)  # depths 1..5, then 3..5 and 5..6 for the branches
+        # depths 1..5, then 3..5 and 5..6 for the branches
+        assert (len(row.tokens), row.load) == (10, 10 * TOKEN_COST + 15 + 12 + 11)
 
     # 10 20 30 40 50, 10 20 30 60 70 and 10 20 30 60 80: the trie drawn in `TreeRow`'s docstring
     FORKS = [[10, 20, 30, 40, 50], [10, 20, 30, 60, 70], [10, 20, 30, 60, 80]]
@@ -4280,7 +4291,10 @@ class TestTreePacking(TrlTestCase):
         row = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS])
         n = len(tokens)
 
-        assert row.cost(_tree_sample(tokens, n_prompt=1)) == (n * (n + 1) - shared * (shared + 1)) // 2
+        assert (
+            row.cost(_tree_sample(tokens, n_prompt=1))
+            == (n - shared) * TOKEN_COST + (n * (n + 1) - shared * (shared + 1)) // 2
+        )
 
     def test_chains_are_laid_out_depth_first(self):
         packed = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS]).pack()
@@ -4316,34 +4330,10 @@ class TestTreePacking(TrlTestCase):
                 reads += 1
                 yield sample
 
-        batcher = TokenBudgetBatcher(counted(self._stream(50)), 2, 20, defaultdict(list))
+        batcher = TokenBudgetBatcher(counted(self._stream(50)), 2, 22, defaultdict(list))
         micro_batch = next(_micro_batches(batcher))
 
         assert reads == sum(len(group) for group in micro_batch) + 1
-
-    def test_a_full_group_spills_into_a_lighter_row_rather_than_close(self):
-        prompt = list(range(6))
-        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
-        stream.insert(2, _tree_sample([50, 51], n_prompt=1, group_id=1))
-        stream.append(_tree_sample(prompt + [103, 203], n_prompt=6))  # its group's row is full, row 1 is light
-        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=2))  # fits in neither row: closes
-        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list))
-
-        micro_batch = next(_micro_batches(batcher))
-
-        assert sum(len(group) for group in micro_batch) == 5
-        assert any(sample is stream[4] for sample in micro_batch[1])
-
-    def test_a_full_group_still_closes_when_spilling_would_lengthen_the_micro_batch(self):
-        prompt = list(range(6))
-        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
-        stream.insert(2, _tree_sample(list(range(50, 55)), n_prompt=1, group_id=1))
-        stream.append(_tree_sample(prompt + [103, 203, 303, 403, 503, 603], n_prompt=6))  # fits row 1, too costly
-        batcher = TokenBudgetBatcher(iter(stream), 2, 20, defaultdict(list))
-
-        micro_batch = next(_micro_batches(batcher))
-
-        assert sum(len(group) for group in micro_batch) == 4
 
     def test_cost_is_the_load_add_adds(self):
         row = _tree_row([_tree_sample(list(range(6)) + [100, 200], n_prompt=6)])
@@ -4353,7 +4343,16 @@ class TestTreePacking(TrlTestCase):
         cost = row.cost(sample)
         row.add(sample)
 
-        assert cost == row.load - load == 6 + 7 + 8  # the shared prompt is free up to the fork, one token early
+        # the shared prompt is free up to the fork, one token early
+        assert cost == row.load - load == 3 * TOKEN_COST + 6 + 7 + 8
+
+    def test_identical_samples_fill_every_row(self):
+        # The step's trie holds one copy of them, but each row needs its own: both rows still take five
+        source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(40))
+        batcher = TokenBudgetBatcher(source, 2, 20, defaultdict(list))
+
+        for micro_batch in itertools.islice(_micro_batches(batcher), 3):
+            assert [len(group) for group in micro_batch] == [5, 5]
 
     def test_rows_of_identical_samples_still_close_a_micro_batch(self):
         source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(10_000))
@@ -4364,18 +4363,56 @@ class TestTreePacking(TrlTestCase):
         assert all(len(group) > 0 for group in micro_batch)
         assert all(sum(sum(s["completion_mask"]) for s in group) <= 20 for group in micro_batch)
 
-    def test_a_split_group_can_be_rejoined_on_either_row(self):
-        prompt = list(range(1, 4))
-        stream = [
-            _tree_sample(prompt + list(range(10, 10 + n)), len(prompt) + n - t, group_id=0)
-            for n, t in ((3, 3), (6, 6), (4, 4), (5, 5), (7, 4))
-        ]
-        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=1))  # fits in neither row: closes
-        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list))
+    def _unshared(self, lengths):
+        """Samples of the given lengths, each in its own group, sharing nothing."""
+        return [_tree_sample(list(range(100 * g, 100 * g + n)), n_prompt=1, group_id=g) for g, n in enumerate(lengths)]
+
+    def test_a_step_is_split_longest_first(self):
+        # The two 6s arrive first and last: split longest first, each row gets one
+        batcher = TokenBudgetBatcher(iter(self._unshared([6, 2, 2, 2, 2, 6, 3])), 2, 10, defaultdict(list))
 
         micro_batch = next(_micro_batches(batcher))
 
-        assert sum(len(group) for group in micro_batch) == 5
+        assert [sorted(len(s["input_ids"]) for s in group) for group in micro_batch] == [[2, 2, 6], [2, 2, 6]]
+
+    def test_a_step_emits_rows_of_similar_load_together(self):
+        stream = self._unshared([2] * 5 + [10] + [2] * 5 + [10] + [3])
+        batcher = TokenBudgetBatcher(iter(stream), 2, 10, defaultdict(list), gradient_accumulation_steps=2)
+
+        heavy, light = itertools.islice(_micro_batches(batcher), 2)
+
+        assert [[len(s["input_ids"]) for s in group] for group in heavy] == [[10], [10]]
+        assert [[len(s["input_ids"]) for s in group] for group in light] == [[2] * 5, [2] * 5]
+
+    def test_a_sample_that_fits_no_row_goes_first_in_the_next_step(self):
+        stream = self._unshared([6, 6, 5, 3] + [2] * 10)
+        batcher = TokenBudgetBatcher(iter(stream), 2, 10, defaultdict(list))
+
+        first, second = itertools.islice(_micro_batches(batcher), 2)
+
+        assert [[len(s["input_ids"]) for s in group] for group in first] == [[6, 3], [6]]
+        assert any(sample is stream[2] for group in second for sample in group)
+
+    def test_a_sample_that_would_take_its_row_past_its_share_waits_for_the_next_step(self):
+        # Three 6s on two ranks: the third would double one rank's time, so it waits for the next step
+        stream = self._unshared([6, 6, 6, 8] + [2] * 14)
+        batcher = TokenBudgetBatcher(iter(stream), 2, 12, defaultdict(list))
+
+        first, second = itertools.islice(_micro_batches(batcher), 2)
+
+        assert [[len(s["input_ids"]) for s in group] for group in first] == [[6], [6]]
+        assert any(sample is stream[2] for group in second for sample in group)
+
+    def test_a_group_stays_on_one_row_within_its_share(self):
+        batcher = TokenBudgetBatcher(self._stream(50, rows_per_group=3), 2, 28, defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        rows_of_group = defaultdict(set)
+        for i, group in enumerate(micro_batch):
+            for sample in group:
+                rows_of_group[sample["group_id"]].add(i)
+        assert all(len(rows) == 1 for rows in rows_of_group.values())
 
     def test_a_group_is_split_rather_than_let_a_rank_starve(self):
         source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))

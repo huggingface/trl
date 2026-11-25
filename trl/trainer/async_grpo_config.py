@@ -116,12 +116,12 @@ class AsyncGRPOConfig(_BaseConfig):
             `--max-logprobs` bounds it.
         token_budget (`int`, *optional*):
             Maximum number of tokens forwarded in a single row (one DP rank's forward). A `TokenBudgetBatcher` forms
-            attention-cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory
-            independently of the sample count (the number of samples per row becomes dynamic). The budget bounds unique
-            tokens rather than raw ones, so tokens shared by several samples count once, and it bounds the row's loss
-            terms too. If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) —
-            the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer
-            than `token_budget` fits in no row and is dropped with a warning.
+            cost-balanced micro-batches whose rows each stay within this budget, bounding peak memory independently of
+            the sample count (the number of samples per row becomes dynamic). The budget bounds unique tokens rather
+            than raw ones, so tokens shared by several samples count once, and it bounds the row's loss terms too. If
+            `None` (default), it is set to the vLLM server's `max_model_len` (queried at train start) — the cap on
+            prompt + completion length — so no rollout sample can ever exceed the budget. A sample longer than
+            `token_budget` fits in no row and is dropped with a warning.
 
         > Parameters that control the async rollout pipeline
 
@@ -131,8 +131,10 @@ class AsyncGRPOConfig(_BaseConfig):
             of rollouts in flight follows the vLLM server's KV-cache usage and `max_staleness`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being dropped. Generation is held to it: a new group of rollouts starts only while the tokens queued and in
-            flight fit in what the trainer consumes in `max(max_staleness, 1)` steps.
+            being dropped, checked when the trainer takes it from the queue. A sample the planner carries over to the
+            next optimizer step is trained one step later. Generation is held to it: a new group of rollouts starts
+            only while the tokens queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)`
+            steps.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
         rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
@@ -351,7 +353,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward). A "
-            "`TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows each stay within this "
+            "`TokenBudgetBatcher` forms cost-balanced micro-batches whose rows each stay within this "
             "budget, bounding peak memory independently of the sample count. If None (default), it is set to the "
             "vLLM server's `max_model_len` (queried at train start), so no rollout sample can ever exceed the budget. "
             "A sample longer than `token_budget` fits in no row and is dropped with a warning."
@@ -371,8 +373,10 @@ class AsyncGRPOConfig(_BaseConfig):
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being dropped. Generation is held to it: a new group of rollouts starts only while the tokens "
-            "queued and in flight fit in what the trainer consumes in `max(max_staleness, 1)` steps."
+            "before being dropped, checked when the trainer takes it from the queue. A sample the planner carries over "
+            "to the next optimizer step is trained one step later. Generation is held to it: a new group of rollouts "
+            "starts only while the tokens queued and in flight fit in what the trainer consumes in "
+            "`max(max_staleness, 1)` steps."
         },
     )
     weight_sync_steps: int = field(

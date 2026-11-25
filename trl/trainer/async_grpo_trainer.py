@@ -107,6 +107,11 @@ if is_trackio_available():
     import trackio
 
 
+# A token's own work (norms, projections, MLP, LM head) takes about as long as attending to this many earlier tokens:
+# 15k to 38k on Qwen3 0.6B to 8B, on H100 and B300. Rows balance within about 1% of their best from half to twice it.
+TOKEN_COST = 24_576
+
+
 class TreeRow:
     """
     One DP rank's forward: its samples folded into a prefix trie, so a token shared by several samples is forwarded
@@ -140,6 +145,9 @@ class TreeRow:
                   └── 30 ──┬── 60  70         chain_depths  = [0, 2, 3]    depth of its first token
                            └── 60  80
     ```
+
+    The row's `load` estimates the time of its forward and backward, in units of one query attending to one key: each
+    unique token costs `TOKEN_COST` for its own work, plus `depth + 1` for the keys it attends to.
     """
 
     def __init__(self):
@@ -195,9 +203,10 @@ class TreeRow:
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
     def cost(self, sample: dict[str, Any]) -> int:
-        """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
+        """Load `add(sample)` would add to the row: `TOKEN_COST + depth + 1` per token not already in the trie."""
         n, shared = len(sample["input_ids"]), self._walk(sample["input_ids"])[0]
-        return (n * (n + 1) - shared * (shared + 1)) // 2  # sum of depth + 1 over depths shared..n - 1
+        # TOKEN_COST + depth + 1 summed over depths shared..n - 1
+        return (n - shared) * TOKEN_COST + (n * (n + 1) - shared * (shared + 1)) // 2
 
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"]
@@ -2461,23 +2470,28 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
 class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
-    Keeps `num_processes` open rows (one per DP rank) and pulls single samples from the source one at a time, dropping
-    each into the row with the smallest running attention cost that still fits within `token_budget` forwarded tokens.
-    When the next sample fits in no row, the current micro-batch is emitted — a list of `num_processes` groups, already
-    partitioned per rank — and a fresh one is started with that sample. The number of samples per row is therefore
-    dynamic: short samples pack many per row, long ones pack few, while every row stays within `token_budget` tokens.
-    This bounds peak memory independently of `per_device_train_batch_size` and keeps the rows cost-balanced so no rank
-    straggles at the per-micro-batch all-reduce.
+    Plans one optimizer step at a time: it pulls samples until they fill the step's `gradient_accumulation_steps ×
+    num_processes` rows of `token_budget` forwarded tokens, splits them across those rows, then emits the rows as
+    `gradient_accumulation_steps` micro-batches — each a list of `num_processes` rows, one per DP rank. The number of
+    samples per row is therefore dynamic: short samples pack many per row, long ones pack few, while every row stays
+    within `token_budget` tokens. This bounds peak memory independently of `per_device_train_batch_size`.
+
+    The split balances the rows' estimated time ([`TreeRow`]'s `load`) so no rank straggles at the per-micro-batch
+    all-reduce. Samples are placed longest first, each into the row it leaves the least loaded, so the short ones even
+    out what the long ones leave, and none takes a row past its share of the step's load. A sample joins a row already
+    holding its `group_id`, where its prompt is, as long as that row stays within its share. The rows are emitted most
+    loaded first, so each micro-batch holds rows of similar load: a micro-batch takes as long as its most loaded row.
+    When generation is the bottleneck, a sample can wait up to one more step before it is trained.
 
     The budget counts *unique* tokens, so it fits more samples than their raw length suggests: a sample costs only what
     it does not already share with its row. It also bounds the row's loss terms, which packing does not shrink —
     otherwise rows that share everything would add no tokens and the row would never close. A sample's standalone
     length upper-bounds both, so the drop rule below stays correct.
 
+    A sample that fits in no row, or only past its row's share, waits for the next step, where it is placed first.
     Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
-    FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
-    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` >= the vLLM server's
-    `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
+    FSDP/EP collectives). A sample longer than `token_budget` fits in no row, so it is dropped with a warning; set
+    `token_budget` >= the vLLM server's `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
 
     Args:
         dataset ([`RolloutQueueDataset`]):
@@ -2488,16 +2502,27 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
             Maximum tokens forwarded in a single row (one rank's forward).
         metrics (`dict`):
             The trainer's metric sink, appended to when a sample is dropped for exceeding the budget.
+        gradient_accumulation_steps (`int`, *optional*, defaults to `1`):
+            Number of micro-batches in an optimizer step, all split at once.
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
+    def __init__(
+        self,
+        dataset: "RolloutQueueDataset",
+        num_processes: int,
+        token_budget: int,
+        metrics: dict,
+        gradient_accumulation_steps: int = 1,
+    ):
         self.dataset = dataset
         self.num_processes = num_processes
         self.token_budget = token_budget
         self.metrics = metrics  # the trainer's sink, for the drop counter below
+        self.gradient_accumulation_steps = gradient_accumulation_steps
 
     def __iter__(self):
-        rows = [TreeRow() for _ in range(self.num_processes)]
+        num_rows = self.num_processes * self.gradient_accumulation_steps
+        step, carried = TreeRow(), []  # the step's samples in one trie, which counts their unique tokens
         for sample in self.dataset:
             n = len(sample["input_ids"])
             if n > self.token_budget:
@@ -2509,40 +2534,46 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                 )
                 self.metrics["batch/dropped_oversize_count"].append(1.0)
                 continue
-            while True:
-                placed_row = self._place(rows, sample)
-                if placed_row is not None:
-                    placed_row.add(sample)
-                    break
-                # No more place in rows
-                yield rows
-                rows = [TreeRow() for _ in range(self.num_processes)]
+            # The step is full: it holds at least `num_rows` samples, since each is at most `token_budget` tokens
+            if not step.fits(sample, num_rows * self.token_budget):
+                rows, carried = self._split(step, len(carried), num_rows)
+                rows.sort(key=lambda row: row.load, reverse=True)
+                for i in range(0, num_rows, self.num_processes):
+                    yield rows[i : i + self.num_processes]
+                step = TreeRow()
+                for leftover in carried:
+                    step.add(leftover)
+            step.add(sample)
 
-    def _place(self, rows: list[TreeRow], sample: dict[str, Any]) -> TreeRow | None:
-        """Pick the row `sample` belongs in, or `None` when the micro-batch has to close first.
+    def _split(self, step: TreeRow, num_carried: int, num_rows: int) -> tuple[list[TreeRow], list[dict[str, Any]]]:
+        """Split the step's samples across `num_rows` rows; return the rows and the samples left for the next step.
 
-        A sample is cheapest in a row that already holds its `group_id`, so those rows get first refusal — all of them,
-        since an earlier split can leave one group on several rows. When none of them has room, the sample goes to the
-        least loaded row it fits in. Once every rank is busy, it only does so if that does not raise the most loaded
-        row: the micro-batch takes as long as that row, so the split is free, whereas closing would add a micro-batch.
+        The samples carried from the previous step go first, so none waits twice, then the others longest first, each
+        into the row it leaves the least loaded among those it fits, unless that takes the row past its share of the
+        step's load once every row holds a sample. A sample joins the first row holding its group instead when that row
+        stays within its share, so a group splits only where its row is full, unless the samples left are only enough
+        for the empty rows: an empty row is the least loaded, so every row gets a sample.
         """
-
-        def least_loaded(candidates: list[TreeRow]) -> TreeRow | None:
-            return min(
-                (row for row in candidates if row.fits(sample, self.token_budget)),
-                key=lambda row: row.load,
-                default=None,
-            )
-
-        home = [row for row in rows if sample["group_id"] in row.groups]
-        placed = least_loaded(home)
-        if placed is not None:
-            return placed
-        placed = least_loaded(rows)
-        if placed is not None and home and all(row.samples for row in rows):
-            if placed.load + placed.cost(sample) > max(row.load for row in rows):
-                return None
-        return placed
+        carried, fresh = step.samples[:num_carried], step.samples[num_carried:]
+        samples = carried + sorted(fresh, key=lambda sample: len(sample["input_ids"]), reverse=True)
+        # The step's trie counts a shared prefix once but each row holds its own copy, so a row's share is at least the
+        # heaviest sample on its own; one token of slack, so a row is not held back for less
+        share = max(step.load / num_rows, max(TreeRow().cost(sample) for sample in samples)) + TOKEN_COST
+        rows, leftovers = [TreeRow() for _ in range(num_rows)], []
+        for i, sample in enumerate(samples):
+            fitting = [row for row in rows if row.fits(sample, self.token_budget)]
+            empty = sum(not row.samples for row in rows)
+            home = [
+                row for row in fitting if sample["group_id"] in row.groups and row.load + row.cost(sample) <= share
+            ]
+            least = min(fitting, key=lambda row: row.load + row.cost(sample), default=None)
+            if home and len(samples) - i > empty:
+                home[0].add(sample)
+            elif least is not None and (empty or least.load + least.cost(sample) <= share):
+                least.add(sample)
+            else:
+                leftovers.append(sample)
+        return rows, leftovers
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -2564,8 +2595,8 @@ class DataCollatorForRollout(DataCollatorMixin):
     Each row is a [`~packing.TreeRow`], so a token shared by several of its samples is forwarded once.
 
     The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
-    ([`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at the gradient all-reduce
-    — so the collator only packs and tensorizes the given rows.
+    ([`TokenBudgetBatcher`]) — which balances each row's cost to avoid stragglers at the gradient all-reduce — so the
+    collator only packs and tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
@@ -3551,7 +3582,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 * self.args.token_budget
             )
             self.rollout_worker.token_allowance.value = self._rollout_dataset.lookahead_tokens
-            dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
+            dataset = TokenBudgetBatcher(
+                dataset,
+                num_processes,
+                self.args.token_budget,
+                self._metrics["train"],
+                self.args.gradient_accumulation_steps,
+            )
         else:
             dataset = _EmptyIterableDataset()
 
