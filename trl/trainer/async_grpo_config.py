@@ -80,7 +80,7 @@ class AsyncGRPOConfig(_BaseConfig):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls. When the limit is reached, the tool
             calls of the last generated turn are not executed and the completion ends with that turn, so a final tool
-            call (for example one that submits an answer) is lost.
+            call (for example one that submits an answer) is never executed.
 
         > Parameters that control the vLLM server
 
@@ -291,7 +291,7 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
             "generation stops when the model generates a response turn with no tool calls. When the limit is "
             "reached, the tool calls of the last generated turn are not executed and the completion ends with that "
-            "turn, so a final tool call (for example one that submits an answer) is lost."
+            "turn, so a final tool call (for example one that submits an answer) is never executed."
         },
     )
 
