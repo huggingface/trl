@@ -11,8 +11,8 @@ Launch support usually covers "loads, trains a step, template recognized". The c
 import torch, transformers
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig, ProcessorMixin
 from trl.chat_template_utils import (
-    add_response_schema, get_training_chat_template, is_chat_template_stop_token_trained, parse_response,
-    supports_tool_calling,
+    add_response_schema, get_training_chat_template, is_chat_template_prefix_preserving,
+    is_chat_template_stop_token_trained, parse_response, supports_tool_calling,
 )
 
 tok = AutoTokenizer.from_pretrained(model_id, revision=sha)  # for a VLM, AutoProcessor, and its .tokenizer for ids
@@ -40,11 +40,12 @@ known = {p.read_text().removesuffix("\n"): p.name for p in Path("trl/chat_templa
 print(known.get(shipped.removesuffix("\n"), "not stored"))
 ```
 
-TRL trains with its stored training template when it has one, which already fixes the gaps it knows about (Qwen3 dropping reasoning from history), so the checks below run on that template. SFT asks for it without prefix-preservation, so that call raising means `assistant_only_loss=True` fails. The default call also requires prefix-preservation after a tool turn, so it raising means GRPO with tools fails:
+TRL trains with its stored training template when it has one, which already fixes the gaps it knows about (Qwen3 dropping reasoning from history), so the checks below run on that template. SFT asks for it without prefix-preservation, so that call raising means `assistant_only_loss=True` fails. GRPO, AsyncGRPO and Distillation with tools ask for it only when the shipped template isn't prefix-preserving after a tool turn, so the default call raising there means they fail:
 
 ```python
 template = get_training_chat_template(tok, require_prefix_preservation=False) or shipped
-get_training_chat_template(tok)
+if not is_chat_template_prefix_preserving(tok):
+    get_training_chat_template(tok)
 ```
 
 The generation prompt is a token prefix of the rendered turn, for every setting the template reads (`enable_thinking`, `reasoning_effort`, ...), with and without reasoning (reasoning with thinking off is a contradictory input, so skip it):
@@ -167,7 +168,14 @@ Packing doesn't leak across documents, through attention, conv and recurrent lay
 ```python
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
-model.set_attn_implementation("kernels-community/flash-attn3")  # eager and SDPA attend across documents
+# The kernel TRL picks (no FlashAttention-3 on Blackwell); eager and SDPA attend across documents
+if torch.version.hip:
+    attn = "kernels-community/aiter-flash-attn@v2"
+elif torch.cuda.get_device_capability()[0] >= 10:
+    attn = "kernels-community/flash-attn4"
+else:
+    attn = "kernels-community/flash-attn3"
+(model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(attn)  # wrappers that refuse it
 collator = DataCollatorForLanguageModeling(pad_token_id=tok.pad_token_id, padding_free=True)
 def logps(before, doc):  # lists of token ids
     batch = collator([{"input_ids": before}, {"input_ids": doc}])
