@@ -31,18 +31,20 @@ call = {"role": "assistant", "tool_calls": [{"type": "function", "function": {"n
 
 ## Chat template
 
-A model that ships `{% generation %}` markers, a prefix-preserving template and a native `response_template` needs nothing stored in TRL. Otherwise TRL falls back to its stored copies, matched by exact text, so every checkpoint's template has to match one:
+A model that ships `{% generation %}` markers, a prefix-preserving template and a native `response_template` needs nothing stored in TRL. Otherwise TRL falls back to its stored copies, matched by text (the `default` variant of named variants, ignoring a single trailing newline), so every checkpoint's template has to match one:
 
 ```python
 from pathlib import Path
-known = {p.read_text(): p.name for p in Path("trl/chat_templates").glob("*.jinja")}
-print(known.get(tok.chat_template, "not stored"))
+shipped = tok.chat_template["default"] if isinstance(tok.chat_template, dict) else tok.chat_template
+known = {p.read_text().removesuffix("\n"): p.name for p in Path("trl/chat_templates").glob("*.jinja")}
+print(known.get(shipped.removesuffix("\n"), "not stored"))
 ```
 
-TRL trains with its stored training template when it has one, which already fixes the gaps it knows about (Qwen3 dropping reasoning from history), so the checks below run on that template. `get_training_chat_template` raising means `assistant_only_loss=True` fails, and so does GRPO with tools when the template isn't prefix-preserving after a tool turn:
+TRL trains with its stored training template when it has one, which already fixes the gaps it knows about (Qwen3 dropping reasoning from history), so the checks below run on that template. SFT asks for it without prefix-preservation, so that call raising means `assistant_only_loss=True` fails. The default call also requires prefix-preservation after a tool turn, so it raising means GRPO with tools fails:
 
 ```python
-template = get_training_chat_template(tok) or tok.chat_template
+template = get_training_chat_template(tok, require_prefix_preservation=False) or shipped
+get_training_chat_template(tok)
 ```
 
 The generation prompt is a token prefix of the rendered turn, for every setting the template reads (`enable_thinking`, `reasoning_effort`, ...), with and without reasoning (reasoning with thinking off is a contradictory input, so skip it):
@@ -100,7 +102,8 @@ Parsing returns what the template rendered, with reasoning in `reasoning_content
 if getattr(tok, "response_template", None) is None:  # what the trainers check before falling back to TRL's copies
     tok = add_response_schema(tok)  # raises when TRL doesn't know the template
 prompt = ids(render(user, add_generation_prompt=True))
-assert parse_response(tok, ids(render(turn))[len(prompt):], prefix=prompt) == turn[-1]
+expected = turn[-1] if "Greet." in render(turn) else answer[-1]  # a template without reasoning drops it
+assert parse_response(tok, ids(render(turn))[len(prompt):], prefix=prompt) == expected
 prompt = ids(render(user, tools=tools, add_generation_prompt=True))
 completion = ids(render([*user, call], tools=tools))[len(prompt):]
 assert parse_response(tok, completion, prefix=prompt, tools=tools)["tool_calls"] == call["tool_calls"]
@@ -164,6 +167,7 @@ Packing doesn't leak across documents, through attention, conv and recurrent lay
 ```python
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
+model.set_attn_implementation("kernels-community/flash-attn3")  # eager and SDPA attend across documents
 collator = DataCollatorForLanguageModeling(pad_token_id=tok.pad_token_id, padding_free=True)
 def logps(before, doc):  # lists of token ids
     batch = collator([{"input_ids": before}, {"input_ids": doc}])
