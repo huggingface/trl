@@ -1944,7 +1944,7 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
             pytest.mark.xfail(
                 raises=AssertionError,
                 reason="Inkling 2's head keeps the padded vocabulary rows its forward slices off (#8497)",
-                strict=True,
+                strict=False,  # the backward check stays within tolerance on some GPUs (L40S)
             ),
         ],
     ),
