@@ -3212,8 +3212,7 @@ class TestChatTemplatesDocumentation:
 
 class TestChatTemplatesCoverage:
     def test_every_stored_template_is_tested(self):
-        # A bare case tests whatever template its pinned tiny model ships, so regenerating the model silently moves
-        # that coverage to the newest template (#7492): keep an explicit (model, template) case for every revision
+        # Regenerating a tiny model silently drops the coverage of its earlier template (#7492)
         templates, models = set(), set()
         for cls in [obj for obj in vars(sys.modules[__name__]).values() if inspect.isclass(obj)]:
             for test in [cls, *(obj for obj in vars(cls).values() if inspect.isfunction(obj))]:
@@ -3228,9 +3227,8 @@ class TestChatTemplatesCoverage:
                                     models.add(item)
                                 elif isinstance(item, str):
                                     templates.add(item)
-                                elif isinstance(item, dict):  # named chat template variants
+                                elif isinstance(item, dict):
                                     templates.update(v for v in item.values() if isinstance(v, str))
-        # Templates the pinned tiny models ship, read from their files so it works on every transformers version
         for model_id in models:
             path = Path(
                 snapshot_download(
@@ -3246,7 +3244,7 @@ class TestChatTemplatesCoverage:
                     template = json.loads((path / name).read_text(encoding="utf-8")).get("chat_template")
                     if isinstance(template, str):
                         templates.add(template)
-        # Jinja drops a single trailing newline, so a copy that only adds or drops it is the same template (#8502)
+        # Jinja drops a single trailing newline (#8502)
         templates = {template.removesuffix("\n") for template in templates}
         untested = sorted(
             path.name
