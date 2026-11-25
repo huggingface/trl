@@ -88,7 +88,7 @@ from trl.chat_template_utils import (
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
-    smolvlm_v2_chat_template,
+    smolvlm_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -1217,8 +1217,8 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
             pytest.param(
-                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-                id="smolvlm_v2",
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+                id="smolvlm_v1",
             ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
@@ -1988,8 +1988,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
-            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-            id="smolvlm_v2",
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+            id="smolvlm_v1",
             marks=require_vision,
         ),
         pytest.param(
