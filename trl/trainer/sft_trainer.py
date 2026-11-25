@@ -1030,7 +1030,9 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Stop generation on the chat template's end-of-turn token (#8564)
-        if is_conversational(dataset_sample):
+        if (is_conversational(dataset_sample) or is_conversational_from_value(dataset_sample)) and (
+            self.chat_template or processing_class.chat_template
+        ):
             end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class, chat_template=self.chat_template)
             eos_token_ids = model.generation_config.eos_token_id
             if eos_token_ids is None:

@@ -2895,15 +2895,34 @@ class TestSFTTrainer(TrlTestCase):
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
 
-    def test_end_of_turn_token_added_to_generation_config(self):
+    @pytest.mark.parametrize("dataset_format", ["messages", "from_value"])
+    def test_end_of_turn_token_added_to_generation_config(self, dataset_format):
         # The generation config stops only on <eos> (1), not on the template's <end_of_turn> (107) (#8564)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        if dataset_format == "from_value":
+            dataset = dataset.map(
+                lambda example: {
+                    "conversations": [{"from": m["role"], "value": m["content"]} for m in example["messages"]]
+                },
+                remove_columns="messages",
+            )
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-GemmaForCausalLM", args=training_args, train_dataset=dataset
         )
 
         assert trainer.model.generation_config.eos_token_id == [1, 107]
+
+    def test_pretokenized_conversational_data_without_chat_template(self):
+        # No chat template, and the pre-tokenized dataset keeps its `messages` column (#8564)
+        model_id = "trl-internal-testing/tiny-GPT2LMHeadModel"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = dataset.map(lambda example: tokenizer(" ".join(m["content"] for m in example["messages"])))
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.model.generation_config.eos_token_id == tokenizer.eos_token_id
 
     @pytest.mark.parametrize(
         "trainer_cls, topic",
