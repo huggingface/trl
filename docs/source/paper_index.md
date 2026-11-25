@@ -2029,3 +2029,15 @@ set `deepspeed="zero3.json"` in the training config, and launch the training scr
 ```sh
 torchrun --nproc_per_node 2 train.py
 ```
+
+
+### s3: Simple Scaling of Swarms via Cooperative Multi-agent RL
+
+**📜 Paper**: https://huggingface.co/papers/2611.08615
+
+The [Harbor swarm example](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor_swarm)
+adapts s3's shared-policy team training to Pi agents solving independent Harbor tasks with a common msgboard.
+A whole team attempt is one GRPO rollout; every agent receives the team's standardized advantage.
+The loss averages supervised tokens within each team, then averages teams, including when histories fork
+or require multiple training chunks. It uses binary native team success rather than the paper's token-cost
+reward shaping. This is an implementation example, not a reproduction of the paper's results.
