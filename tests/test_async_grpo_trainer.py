@@ -637,7 +637,8 @@ class TransformersVLLMServer:
             )
         # With top-k or top-p, the worker first checks that the server returns the candidate set of each sampled token
         if path == "/version":
-            return 200, {"version": "0.28.0"}  # the first vLLM that returns it
+            # vLLM >= 0.28 returns it; the generate log-probs below take the shape of vLLM >= 0.32
+            return 200, {"version": "0.33.0"}
         if path == "/server_info":
             return 200, {
                 "vllm_config": {
@@ -681,8 +682,9 @@ class TransformersVLLMServer:
                             "content": [
                                 {
                                     "logprob": logprob,
+                                    # The shape vLLM >= 0.32 returns (vllm-project/vllm#58181)
                                     "top_logprobs": [
-                                        {"token": f"token_id:{i}", "logprob": value}
+                                        {"token_id": i, "logprob": value}
                                         for i, value in zip(ids, values, strict=True)
                                         if value > -math.inf
                                     ],
@@ -5044,18 +5046,26 @@ class TestGenerateOneTurn(TrlTestCase):
         assert (turn.output_ids, turn.output_log_probs, turn.output_sampling_mask) == ([4, 5], [-0.1, -0.2], None)
         assert turn.output_sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
 
-    def test_sampler_logprobs_from_the_candidate_set_endpoint(self):
+    # vLLM 0.32.0 (vllm-project/vllm#58181) changed the entries from `token: "token_id:<id>"` to `token_id: <id>`
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            pytest.param(lambda i, logprob: {"token": f"token_id:{i}", "logprob": logprob}, id="vllm<0.32"),
+            pytest.param(lambda i, logprob: {"token_id": i, "logprob": logprob, "rank": 1}, id="vllm>=0.32"),
+        ],
+    )
+    def test_sampler_logprobs_from_the_candidate_set_endpoint(self, entry):
         loop = _rollout_loop(top_p=0.9, top_k=4, num_sampler_logprobs=2)
-        top_4 = [{"token": "token_id:7", "logprob": -0.5}, {"token": "token_id:4", "logprob": -1.0}]
-        top_5 = [{"token": "token_id:5", "logprob": 0.0}, {"token": "token_id:8", "logprob": -9999.0}]
+        top_4 = [entry(7, -0.5), entry(4, -1.0)]
+        top_5 = [entry(5, 0.0), entry(8, -9999.0)]
         response = {
             "choices": [
                 {
                     "token_ids": [4, 5],
                     "logprobs": {
                         "content": [
-                            {"token": "token_id:4", "logprob": -1.0, "top_logprobs": top_4},
-                            {"token": "token_id:5", "logprob": 0.0, "top_logprobs": top_5},
+                            {**entry(4, -1.0), "top_logprobs": top_4},
+                            {**entry(5, 0.0), "top_logprobs": top_5},
                         ]
                     },
                     "sampling_mask": [[4, 7, 6], [5]],

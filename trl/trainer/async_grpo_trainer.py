@@ -500,6 +500,23 @@ def _by_token_id(top_logprobs: list[dict[str, float]]) -> list[dict[int, float]]
     return [{int(token.removeprefix("token_id:")): logprob for token, logprob in top.items()} for top in top_logprobs]
 
 
+def _generate_top_logprobs(content: list[dict]) -> list[dict[int, float]]:
+    """
+    Key each token's top log-probs from a `/inference/v1/generate` response by token id.
+
+    vLLM 0.32.0 (vllm-project/vllm#58181) changed the entries of this endpoint from `{"token": "token_id:<id>", ...}`
+    to `{"token_id": <id>, ...}`. The shape is read from each entry, not from the installed vLLM, because the server
+    can run another version.
+    """
+    return [
+        {
+            (top["token_id"] if "token_id" in top else int(top["token"].removeprefix("token_id:"))): top["logprob"]
+            for top in token["top_logprobs"]
+        }
+        for token in content
+    ]
+
+
 @dataclass(frozen=True)
 class TurnRecord:
     """
@@ -1819,11 +1836,7 @@ class AsyncRolloutLoop:
         choice = output["choices"][0]
         content = choice["logprobs"]["content"]
         logprobs = [token["logprob"] for token in content]
-        sampler_logprobs = None
-        if self.num_sampler_logprobs:
-            sampler_logprobs = _by_token_id(
-                [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
-            )
+        sampler_logprobs = _generate_top_logprobs(content) if self.num_sampler_logprobs else None
         return TurnRecord(
             prompt_ids,
             choice["token_ids"],
