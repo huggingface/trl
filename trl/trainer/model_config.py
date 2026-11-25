@@ -28,7 +28,7 @@ class ModelConfig:
     Parameters:
         model_name_or_path (`str`, *optional*):
             Model checkpoint for weights initialization.
-        model_revision (`str`, *optional*, defaults to `"main"`):
+        model_revision (`str`, *optional*):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
         dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*, defaults to `"float32"`):
             Override the default `torch.dtype` and load the model under this dtype. Possible values are
@@ -84,8 +84,8 @@ class ModelConfig:
         default=None,
         metadata={"help": "Model checkpoint for weights initialization."},
     )
-    model_revision: str = field(
-        default="main",
+    model_revision: str | None = field(
+        default=None,
         metadata={"help": "Specific model version to use. It can be a branch name, a tag name, or a commit id."},
     )
     dtype: str | None = field(
