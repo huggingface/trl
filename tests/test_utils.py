@@ -2072,7 +2072,8 @@ class TestAddFusedLMHeadLoss:
         add_fused_lm_head(chunked_model)
 
         B, S = 2, 16
-        vocab_size = ref_model.config.text_config.vocab_size
+        # Inkling 2's head outputs unpadded_vocab_size < vocab_size logits (#8590)
+        vocab_size = ref_model.get_output_embeddings().out_features
         input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100
