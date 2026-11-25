@@ -738,8 +738,8 @@ def redact_secrets(obj):
 
     Args:
         obj (`str`, `list`, `dict` or any other type):
-            Prompt, completion or logged column value. Values that are not strings, lists or dicts (images,
-            numbers) are returned unchanged.
+            Prompt, completion or logged column value. Values that are not strings, lists or dicts (images, numbers)
+            are returned unchanged.
 
     Returns:
         A copy of `obj` with the secrets replaced.
@@ -748,6 +748,7 @@ def redact_secrets(obj):
 
     ```python
     >>> import os
+
     >>> os.environ["MY_API_KEY"] = "my-secret-value"
     >>> redact_secrets([{"role": "tool", "content": "MY_API_KEY=my-secret-value"}])
     [{'role': 'tool', 'content': 'MY_API_KEY=<REDACTED>'}]
