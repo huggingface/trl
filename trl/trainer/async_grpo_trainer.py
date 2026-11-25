@@ -3150,7 +3150,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "mlp",
         }
         # Check tree attention compat
-        if layer_types not in (set(), {"linear_attention"}, {"conv"}):
+        inkling2 = text_config.model_type in {"inkling2_text", "inkling2_loop_text"}
+        if inkling2:
+            from ..kernels.tree_inkling2 import patch_tree_inkling2
+
+            if text_config.attention_dropout:
+                raise ValueError("Tree packing of Inkling 2 requires attention_dropout=0.")
+            patch_tree_inkling2(text_config.model_type)
+            model.set_attn_implementation("eager")
+        elif layer_types not in (set(), {"linear_attention"}, {"conv"}):
             raise ValueError(
                 f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
                 "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
@@ -3168,7 +3176,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "before it, these layers do not pass the forward's keyword arguments down to the module-level "
                 "function tree packing patches, so they would scan across samples."
             )
-        if layer_types and not patch_tree_recurrent(model, *layer_types):
+        if layer_types and not inkling2 and not patch_tree_recurrent(model, *layer_types):
             raise ValueError(
                 f"{type(model).__name__}'s {sorted(layer_types)} layers don't run through the functions tree packing "
                 "patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan across "

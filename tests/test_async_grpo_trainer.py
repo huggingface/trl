@@ -4395,6 +4395,12 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
 )
 
 
+_INKLING2_BEFORE_5_24 = pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.24.0"),
+    reason="Tree packing Inkling 2 needs get_relative_distance, introduced in transformers-5.24.0",
+)
+
+
 @require_torch_accelerator
 @pytest.mark.usefixtures("stub_weight_transfer")
 @pytest.mark.parametrize(
@@ -4452,35 +4458,17 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
         pytest.param(
             "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
-            {},
+            # bf16 noise is a few percent on Inkling 2's gradients, fp32 keeps the check tight
+            {"dtype": torch.float32},
             id="inkling2",
-            marks=[
-                pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.23.0"),
-                    reason="Inkling 2 models were introduced in transformers-5.23.0",
-                ),
-                pytest.mark.xfail(
-                    raises=ValueError,
-                    reason="Tree packing doesn't support Inkling 2's hybrid layers (#8497)",
-                    strict=True,
-                ),
-            ],
+            marks=_INKLING2_BEFORE_5_24,
         ),
         pytest.param(
             "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
-            {},
+            # bf16 noise is a few percent on Inkling 2's gradients, fp32 keeps the check tight
+            {"dtype": torch.float32},
             id="inkling2-loop",
-            marks=[
-                pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.24.0"),
-                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
-                ),
-                pytest.mark.xfail(
-                    raises=ValueError,
-                    reason="Tree packing doesn't support Inkling 2 Mini's hybrid layers",
-                    strict=True,
-                ),
-            ],
+            marks=_INKLING2_BEFORE_5_24,
         ),
         pytest.param(
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
@@ -4553,8 +4541,13 @@ class TestTreePackingParity(TrlTestCase):
                 param.data.fill_(-4.0)
         samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
-        # The per-sample reference uses the kernel that tree attention picks for this device
-        if torch.version.hip:
+        # The per-sample reference uses the kernel that tree attention picks for this device, and Inkling 2 its eager
+        # attention for the relative bias and sinks.
+        inkling2 = model.config.get_text_config().model_type in {"inkling2_text", "inkling2_loop_text"}
+        if inkling2:
+            model.activation_checkpointing_enable()
+            reference = "eager"
+        elif torch.version.hip:
             reference = "kernels-community/aiter-flash-attn@v2"
         elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
             reference = "kernels-community/flash-attn4"
@@ -4575,7 +4568,6 @@ class TestTreePackingParity(TrlTestCase):
             grads = {name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None}
             return loss.detach().float(), grads
 
-        model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
         # Models that refuse Flash Attention take it on their language model (#8400)
         (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(reference)
