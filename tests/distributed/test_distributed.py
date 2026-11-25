@@ -70,6 +70,51 @@ def get_launch_args(lazy_shared_datadir):
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
     @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+        ],
+    )
+    def test_distillation_multi_teacher(self, config, lazy_shared_datadir):
+        config_kwargs = {}
+        if config in ("zero2", "zero3"):
+            deepspeed_config = json.loads((lazy_shared_datadir / f"{config}.json").read_text())
+            if config == "zero3":
+                deepspeed_config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"] = True
+            config_kwargs = {"deepspeed": deepspeed_config}
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_distillation_trainer.py",
+                "-k",
+                "test_distributed_teacher_routing",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_DISTILLATION_CONFIG": json.dumps(config_kwargs)},
+        )
+
+    @pytest.mark.parametrize(
         "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
     )
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file):
@@ -136,6 +181,28 @@ class TestDistributed(TrlTestCase):
                 "tests/test_async_grpo_trainer.py",
                 "-k",
                 "test_train_expert_parallel_lora_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_merged_lora_sync(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_expert_parallel_merged_sync_sends_merged_lora_weights_body",
                 "-x",
                 "-q",
                 "-p",
@@ -607,7 +674,7 @@ class TestModelParallel:
             "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
         )
         teacher_model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/small-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32", device_map=device_map
         )
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

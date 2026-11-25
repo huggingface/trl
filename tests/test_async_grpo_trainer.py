@@ -2831,6 +2831,64 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for name, param in previous.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
+    @require_peft
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_expert_parallel_merged_sync_sends_merged_lora_weights_body(self, make_vllm_server, monkeypatch):
+        # Sharded at load, the base weights are DTensors next to plain LoRA weights, so the merge goes through
+        # `implicit_replication`
+        from peft import LoraConfig
+        from peft.tuners.lora import LoraLayer
+        from transformers.distributed import DistributedConfig
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
+            def send_weights(self, iterator):
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
+
+        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
+        server_url = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url
+        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _RecordingWeightTransfer)
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            vllm_server_base_url=server_url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            # Non-zero adapters, so that the merged weights differ from the base ones
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], init_lora_weights=False),
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.full_tensor() for name, module in lora_layers.items()}
+        trainer._sync_weight()
+
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            if trainer.accelerator.is_main_process:
+                expected = base_weights[name] + module.get_delta_weight("default")
+                assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight.full_tensor(), base_weights[name]), name
+
     @pytest.mark.parametrize(
         ("temperature", "logprobs_mode", "top_k"),
         [
@@ -4288,12 +4346,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
-    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
-    "text config",
-    strict=True,
-)
-
 _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.22.0"),
     reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
@@ -4399,9 +4451,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),
         pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, id="idefics3"),
-        pytest.param(
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl", marks=_VLM_TEXT_HEAD_DIM_4
-        ),
+        pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl"),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
@@ -5941,27 +5991,37 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, server):
-        merged_during_send = []
+    def test_merged_sync_and_lora_bias_raises(self, server):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(server, self._lora_config(lora_bias=True))
 
-        class _RaisingWeightTransfer(_StubWeightTransfer):
+    def test_merged_sync_sends_merged_lora_weights(self, server):
+        from peft.tuners.lora import LoraLayer
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
             def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
 
-        trainer = self._build(server, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        trainer = self._build(
+            server, self._lora_config(init_lora_weights=False), weight_transfer=_RecordingWeightTransfer
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.clone() for name, module in lora_layers.items()}
+        trainer._sync_weight()
 
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            expected = base_weights[name] + module.get_delta_weight("default")
+            assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight, base_weights[name]), name
 
 
 def _tensors_handed_to_producer(info, stream):

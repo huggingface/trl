@@ -15,6 +15,7 @@
 import gc
 import logging
 import os
+import sys
 import traceback
 from functools import wraps
 
@@ -74,13 +75,32 @@ def pytest_runtest_makereport(item, call):
             stack.append(exc.__cause__)
 
 
+# ============================================================================
+# Peak host memory per test
+# ============================================================================
+# Print the tests that raise their process's peak RSS by 2 GB or more, to catch memory regressions (#8429)
+# Linux only: `ru_maxrss` is in bytes on macOS, and `resource` does not exist on Windows (#8441)
+if sys.platform == "linux":
+    import resource
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        yield
+        increase = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+        item.user_properties.append(("peak_rss_increase_gb", increase / 2**20))
+
+    def pytest_runtest_logreport(report):
+        # Written as each test ends, so it reaches the log even when the job is killed before the summary (#8429)
+        if report.when == "call":
+            increase = dict(report.user_properties)["peak_rss_increase_gb"]
+            if increase >= 2:
+                print(f"\n{report.nodeid} raised its process's peak host memory by {increase:.2f} GB", flush=True)  # noqa: T201
+
+
 def check_pinned(model_id, revision):
     # A tiny model loaded without a revision must be pinned, otherwise the tests load whatever is on the Hub `main`
-    if (
-        str(model_id).startswith("trl-internal-testing/")
-        and model_id not in MODEL_REVISIONS
-        and revision in (None, "main")
-    ):
+    if str(model_id).startswith("trl-internal-testing/") and model_id not in MODEL_REVISIONS and revision is None:
         raise ValueError(f"{model_id} is not pinned: add it to `MODEL_REVISIONS` in tests/testing_utils.py")
 
 
@@ -108,8 +128,7 @@ def apply_model_revisions(monkeypatch):
             check_pinned(pretrained_model_name_or_path, kwargs.get("revision"))
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                # The scripts pass the default revision "main" explicitly (see #8263)
-                if kwargs.get("revision") in (None, "main"):
+                if kwargs.get("revision") is None:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -126,7 +145,7 @@ def apply_model_revisions(monkeypatch):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
             check_pinned(model_id, kwargs.get("revision"))
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
 
@@ -154,7 +173,7 @@ def apply_model_revisions(monkeypatch):
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
             check_pinned(model_id, kwargs.get("revision"))
-            if model_id in MODEL_REVISIONS and kwargs.get("revision") in (None, "main"):
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)
 

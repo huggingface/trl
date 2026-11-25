@@ -1775,6 +1775,26 @@ class TestKTOTrainerVLM(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    def test_train_vlm_pad_to_multiple_of(self):
+        # Regression test for #8551: padding to a multiple raised for VLMs, and it is the default on Neuron
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            per_device_train_batch_size=2,
+            pad_to_multiple_of=128,
+            report_to="none",
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        assert batch["input_ids"].shape[1] % 128 == 0
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     def test_vision_dataset_with_text_model_raises(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
         training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
