@@ -456,11 +456,13 @@ def _generate_top_logprobs(content: list[dict]) -> list[dict[int, float]]:
     to `{"token_id": <id>, ...}`. The shape is read from each entry, not from the installed vLLM, because the server
     can run another version.
     """
-
-    def token_id(top: dict) -> int:
-        return top["token_id"] if "token_id" in top else int(top["token"].removeprefix("token_id:"))
-
-    return [{token_id(top): top["logprob"] for top in token["top_logprobs"]} for token in content]
+    return [
+        {
+            (top["token_id"] if "token_id" in top else int(top["token"].removeprefix("token_id:"))): top["logprob"]
+            for top in token["top_logprobs"]
+        }
+        for token in content
+    ]
 
 
 @dataclass(frozen=True)
