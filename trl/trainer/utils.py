@@ -742,7 +742,8 @@ def redact_secrets(obj):
             are returned unchanged.
 
     Returns:
-        A copy of `obj` with the secrets replaced.
+        Same type as `obj`:
+            A copy of `obj` with the secrets replaced.
 
     Example:
 
