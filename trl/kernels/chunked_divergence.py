@@ -22,7 +22,15 @@ import torch
 from transformers.utils import is_triton_available
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
-from .chunked_logprob import _BLOCK_SIZE, _MM_OUT_DTYPE, _addmm_fp32, _jit, _torch_transform, _transform, _use_triton
+from .chunked_logprob import (
+    _BLOCK_SIZE,
+    _MM_OUT_DTYPE_DEVICES,
+    _addmm_fp32,
+    _jit,
+    _torch_transform,
+    _transform,
+    _use_triton,
+)
 
 
 if is_triton_available():
@@ -578,7 +586,7 @@ def _compute_dtype(hidden: torch.Tensor) -> torch.dtype:
 def _project(tile, hidden_chunk, weight, bias, start, end, dtype):
     # FP32 projection output avoids rounding logits before computing the divergence.
     w = weight[start:end].to(dtype).t()
-    if _MM_OUT_DTYPE and tile.device.type == "cuda" and dtype in (torch.float16, torch.bfloat16):
+    if tile.device.type in _MM_OUT_DTYPE_DEVICES and dtype in (torch.float16, torch.bfloat16):
         torch.mm(hidden_chunk, w, out_dtype=torch.float32, out=tile)
     else:
         torch.mm(hidden_chunk.float(), w.float(), out=tile)
