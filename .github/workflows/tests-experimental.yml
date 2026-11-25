@@ -81,6 +81,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test_experimental
@@ -90,6 +91,7 @@ jobs:
         run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Test OpenEnv harness with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         if: ${{ !cancelled() }}
         run: |
           source .venv/bin/activate
