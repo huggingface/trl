@@ -2403,10 +2403,17 @@ class TestSFTTrainer(TrlTestCase):
         [
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.0.0"),
-                    reason="LFM2.5-VL requires transformers>=5.0.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="LFM2.5-VL requires transformers>=5.0.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version("5.24.0") <= Version(transformers.__version__) < Version("5.25.0.dev0"),
+                        reason="transformers 5.24 refuses Flash Attention kernels for the SigLIP2 vision tower (see #8504)",
+                        strict=True,
+                    ),
+                ],
             ),
             pytest.param(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
