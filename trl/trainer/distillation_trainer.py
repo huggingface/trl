@@ -790,7 +790,7 @@ class DistillationTrainer(_BaseTrainer):
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
         if args.pad_to_multiple_of == "auto":
-            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
 

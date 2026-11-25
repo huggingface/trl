@@ -979,7 +979,7 @@ class SFTTrainer(_BaseTrainer):
 
         # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
         if args.pad_to_multiple_of == "auto":
-            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
 
         # Data collator
         # Recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as they are to varlen kernels

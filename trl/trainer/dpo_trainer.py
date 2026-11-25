@@ -792,7 +792,7 @@ class DPOTrainer(_BaseTrainer):
 
         # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
         if args.pad_to_multiple_of == "auto":
-            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
 
         # Data collator
         self.padding_free = args.padding_free
