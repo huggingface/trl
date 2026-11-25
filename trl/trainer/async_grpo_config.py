@@ -78,7 +78,9 @@ class AsyncGRPOConfig(_BaseConfig):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls.
+            stops when the model generates a response turn with no tool calls. When the limit is reached, the tool
+            calls of the last generated turn are not executed and the completion ends with that turn, so a final tool
+            call (for example one that submits an answer) is never executed.
 
         > Parameters that control the vLLM server
 
@@ -287,7 +289,9 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
-            "generation stops when the model generates a response turn with no tool calls."
+            "generation stops when the model generates a response turn with no tool calls. When the limit is "
+            "reached, the tool calls of the last generated turn are not executed and the completion ends with that "
+            "turn, so a final tool call (for example one that submits an answer) is never executed."
         },
     )
 

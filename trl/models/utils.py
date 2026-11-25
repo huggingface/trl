@@ -314,14 +314,15 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
         elif fsdp_plugin.fsdp_version == 2:
             from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-            mesh = getattr(accelerator, "torch_device_mesh", None)
             ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             fsdp2_kwargs = {
                 "reshard_after_forward": fsdp_plugin.reshard_after_forward,
                 "offload_policy": fsdp_plugin.cpu_offload,
                 # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
                 "mp_policy": fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                "mesh": mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                "mesh": accelerator.torch_device_mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)]
+                if accelerator.torch_device_mesh is not None
+                else None,
             }
             # `ignored_params` is only supported in torch >= 2.7.0
             if Version(torch.__version__) >= Version("2.7.0"):
