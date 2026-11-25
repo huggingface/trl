@@ -65,6 +65,7 @@ from trl.chat_template_utils import (
     lfm2_v3_chat_template,
     mistral_large_4_v2_chat_template,
     mistral_medium_3_5_v2_chat_template,
+    muse_glimmer_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
@@ -400,9 +401,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template, id="qwen3-coder-v2"
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template, id="qwen3-coder-next"
-            ),
+            pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", None, id="qwen3-coder-next"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_6_v2_chat_template, id="qwen3.6-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
@@ -1237,6 +1236,13 @@ class TestSupportsToolCalling:
             ),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
+            # The Phi-4 templates never read `tool_calls`
+            pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", phi4_chat_template), id="phi4"),
+            pytest.param(("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_chat_template), id="phi4-mini"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Phi3ForCausalLM-3", phi4_mini_reasoning_chat_template),
+                id="phi4-mini-reasoning",
+            ),
             # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
@@ -1253,6 +1259,12 @@ class TestSupportsToolCalling:
                 ("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", deepseek_r1_distill_v2_chat_template),
                 id="qwen2-r1-distill-v2",
             ),
+            # Same `tool_calls` rendering as DeepSeek-R1-Distill
+            pytest.param(
+                ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv3_v3_chat_template), id="deepseek-v3-v3"
+            ),
+            # SmolLM2 never reads `tool_calls`
+            pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
             pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
             pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
         ],
@@ -1764,6 +1776,17 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
             id="muse-glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", muse_glimmer_chat_template),
+            id="muse-glimmer-v1",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
