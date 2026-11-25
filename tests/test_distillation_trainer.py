@@ -1759,6 +1759,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
         [
             pytest.param(
                 "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                id="gemma3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
@@ -1766,6 +1767,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
@@ -1773,17 +1775,19 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
                     reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", id="internvl"),
+            pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava-next"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen3.5-nothink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1791,6 +1795,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1857,9 +1862,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
+                id="qwen2-vl",
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",  # image_position_ids path
+                id="gemma3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
@@ -1895,10 +1904,11 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
@@ -1906,6 +1916,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
                     reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
