@@ -8,7 +8,7 @@ On 30 fixed words, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwe
 
 ## 2. Warm it up with SFT
 
-[`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/generate_sft_data.py) plays 1,000 games with a solver and writes them as tool-calling conversations ([`openenv/wordle-tool-calls-sft`](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft)), and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/sft.py) trains on them with `SFTTrainer`, in 7 minutes on one A100. The SFT model ([`openenv/Qwen3-1.7B-Wordle-SFT`](https://huggingface.co/openenv/Qwen3-1.7B-Wordle-SFT)) wins 10 of the 30 words, which is enough signal for GRPO. Both scripts are in the [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo#3-generate-the-sft-data). This example starts from the published SFT model, and `--model` takes your own.
+[`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/generate_sft_data.py) plays 1,000 games with a solver and writes them as tool-calling conversations ([`openenv/wordle-tool-calls-sft`](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft)), and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/sft.py) trains on them with `SFTTrainer`, in 7 minutes on one A100. The SFT model ([`openenv/Qwen3-1.7B-Wordle-SFT`](https://huggingface.co/openenv/Qwen3-1.7B-Wordle-SFT)) wins 10 of the 30 words, which is enough signal for GRPO. Both scripts are in the [OpenEnv Wordle tutorial](https://openenv.github.io/OpenEnv/main/tutorials/wordle-grpo#3-generate-the-sft-data). This example starts from the published SFT model, and `--model` takes your own.
 
 ## 3. Train it with GRPO against the environment
 
@@ -35,4 +35,4 @@ GRPO doubles the wins and nearly removes invalid guesses. The [Wordle Arena](htt
 
 ## The whole pipeline
 
-The SFT data, the SFT run, the evaluation and the GIF are explained step by step in the [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo), with the scripts in [`examples/wordle`](https://github.com/openenv/OpenEnv/tree/main/examples/wordle) of the OpenEnv repo. The whole pipeline costs about $6 on Hugging Face Jobs.
+The SFT data, the SFT run, the evaluation and the GIF are explained step by step in the [OpenEnv Wordle tutorial](https://openenv.github.io/OpenEnv/main/tutorials/wordle-grpo), with the scripts in [`examples/wordle`](https://github.com/openenv/OpenEnv/tree/main/examples/wordle) of the OpenEnv repo. The whole pipeline costs about $6 on Hugging Face Jobs.
