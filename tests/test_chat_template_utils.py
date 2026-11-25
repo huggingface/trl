@@ -65,6 +65,7 @@ from trl.chat_template_utils import (
     lfm2_v3_chat_template,
     mistral_large_4_v2_chat_template,
     mistral_medium_3_5_v2_chat_template,
+    muse_glimmer_chat_template,
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
@@ -400,9 +401,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template, id="qwen3-coder-v2"
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template, id="qwen3-coder-next"
-            ),
+            pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", None, id="qwen3-coder-next"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_6_v2_chat_template, id="qwen3.6-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
@@ -1777,6 +1776,17 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
             id="muse_glimmer",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", muse_glimmer_chat_template),
+            id="muse_glimmer_v1",
             marks=[
                 require_vision,
                 pytest.mark.skipif(

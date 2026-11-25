@@ -24,7 +24,9 @@ print(output["score"])
 {% if trackio_url %}[<img src="https://raw.githubusercontent.com/gradio-app/trackio/refs/heads/main/trackio/assets/badge.png" alt="Visualize in Trackio" title="Visualize in Trackio" width="150" height="24"/>]({{ trackio_url }}){% endif %}
 {% if comet_url %}[<img src="https://raw.githubusercontent.com/comet-ml/comet-examples/master/logo/comet_badge.png" alt="Visualize in Comet" width="150" height="24"/>]({{ comet_url }}){% endif %}
 
-This model was trained with {{ trainer_name }}{% if paper_id %}, a method introduced in [{{ paper_title }}](https://huggingface.co/papers/{{ paper_id }}){% endif %}.
+This model was trained with {{ trainer_name }}{% if paper_id %}, a method introduced in [{{ paper_title }}](https://huggingface.co/papers/{{ paper_id }}){% endif %}.{% if hf_jobs_flavor %}
+
+Trained with Hugging Face Jobs on `{{ hf_jobs_flavor }}` hardware.{% endif %}
 
 ### Framework versions
 

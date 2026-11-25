@@ -485,6 +485,7 @@ class TestGenerateModelCard(TrlTestCase):
             trainer_citation="@article{my_trainer, ...}",
             paper_title="My Paper",
             paper_id="1234.56789",
+            hf_jobs_flavor="a10g-small",
         )
         card_text = str(model_card)
         assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
@@ -497,6 +498,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert "My Trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
         assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
+        assert "Trained with Hugging Face Jobs on `a10g-small` hardware." in card_text
 
     def test_val_none(self):
         model_card = generate_model_card(
@@ -517,6 +519,7 @@ class TestGenerateModelCard(TrlTestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "My Trainer" in card_text
+        assert "Hugging Face Jobs" not in card_text
 
 
 class TestFlushLeft(TrlTestCase):

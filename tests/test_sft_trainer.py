@@ -2408,7 +2408,14 @@ class TestSFTTrainer(TrlTestCase):
                         Version(transformers.__version__) < Version("5.0.0"),
                         reason="LFM2.5-VL requires transformers>=5.0.0",
                     ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                    # transformers main has the SigLIP2 fix (#8504), but no release has it yet: strict, so a release with the
+                    # fix fails loudly
+                    pytest.mark.xfail(
+                        Version("5.24.0") <= Version(transformers.__version__) < Version("5.25.0")
+                        and not Version(transformers.__version__).is_devrelease,
+                        reason="transformers 5.24 refuses Flash Attention kernels for the SigLIP2 vision tower (see #8504)",
+                        strict=True,
+                    ),
                 ],
             ),
             pytest.param(
@@ -2417,13 +2424,10 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.15.0"),
-                        reason="Muse Glimmer was introduced in transformers-5.15.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
             ),
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
