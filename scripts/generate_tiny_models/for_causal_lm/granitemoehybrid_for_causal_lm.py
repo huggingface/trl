@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GraniteMoeHybridConfig(
     vocab_size=100352,
-    hidden_size=8,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
@@ -44,7 +44,7 @@ config = GraniteMoeHybridConfig(
     shared_intermediate_size=32,
     layer_types=["mamba", "attention"],  # one of each layer type
     mamba_n_heads=4,
-    mamba_d_head=4,
+    mamba_d_head=16,  # mamba_expand * hidden_size // mamba_n_heads
     mamba_d_state=16,
     mamba_conv_bias=True,
     # The reference is dense: no experts, but it declares a router aux loss coefficient
