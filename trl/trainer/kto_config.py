@@ -265,12 +265,12 @@ class KTOConfig(_BaseConfig):
             self.pad_to_multiple_of = (
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
-        if self.pad_to_multiple_of == "auto":
-            # Neuron compiles and cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
-            cudnn_sdpa = (
-                torch.version.cuda is not None
-                and self.device.type == "cuda"
-                and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
-                and (self.model_init_kwargs or {}).get("attn_implementation") in (None, "sdpa")
-            )
-            self.pad_to_multiple_of = 128 if self.device.type == "neuron" or cudnn_sdpa else None
+        # Neuron compiles once per input shape, so padding bounds the number of compilations. On GPUs where SDPA uses
+        # cuDNN, the trainer resolves "auto" once it knows the model's attention implementation (#8439)
+        cudnn_sdpa_gpu = (
+            torch.version.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+        )
+        if self.pad_to_multiple_of == "auto" and not cudnn_sdpa_gpu:
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None

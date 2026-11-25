@@ -873,6 +873,10 @@ class KTOTrainer(_BaseTrainer):
                 "collections. Unpair your dataset first: `dataset = unpair_preference_dataset(dataset)`."
             )
 
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
+
         # Data collator
         calculate_kl = args.loss_type not in ["apo_zero_unpaired"]
         if data_collator is None and not self._is_vision_dataset:

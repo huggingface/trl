@@ -614,6 +614,9 @@ class RLOOTrainer(_BaseTrainer):
             self.continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
         else:
             self.continuous_batching_config = None
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode

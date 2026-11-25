@@ -72,6 +72,15 @@ require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requ
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
 require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
+_cudnn_sdpa = (
+    torch.version.cuda is not None and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in (9, 10)
+)
+require_cudnn_sdpa = pytest.mark.skipif(
+    not _cudnn_sdpa, reason="test requires an NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
+require_no_cudnn_sdpa = pytest.mark.skipif(
+    _cudnn_sdpa, reason="test requires no NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",

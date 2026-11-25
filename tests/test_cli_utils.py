@@ -17,7 +17,6 @@ import tempfile
 from dataclasses import dataclass
 
 import pytest
-import torch
 from datasets import DatasetDict, load_dataset
 
 from trl import (
@@ -34,7 +33,7 @@ from trl import (
 )
 from trl.scripts.utils import DatasetConfig
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_no_cudnn_sdpa
 
 
 @dataclass
@@ -75,29 +74,20 @@ class TestTrlParser(TrlTestCase):
         "config_cls", [DistillationConfig, DPOConfig, GRPOConfig, KTOConfig, RewardConfig, RLOOConfig, SFTConfig]
     )
     @pytest.mark.parametrize(
-        ("value", "expected"), [("128", 128), ("None", None), ("none", None), ("null", None), ("auto", None)]
+        ("value", "expected"),
+        [
+            ("128", 128),
+            ("None", None),
+            ("none", None),
+            ("null", None),
+            pytest.param("auto", None, marks=require_no_cudnn_sdpa),
+        ],
     )
     def test_pad_to_multiple_of_from_command_line(self, config_cls, value, expected):
         """`pad_to_multiple_of` arrives as a string on the command line; `"auto"` resolves to `None` off Neuron and
-        without cuDNN SDPA."""
+        cuDNN SDPA GPUs."""
         parser = TrlParser(dataclass_types=[config_cls])
-        args = ["--output_dir", "dummy", "--pad_to_multiple_of", value]
-        args += ["--model_init_kwargs", '{"attn_implementation": "eager"}']
-        (config,) = parser.parse_args_into_dataclasses(args)
-        assert config.pad_to_multiple_of == expected
-
-    @pytest.mark.skipif(
-        not (torch.version.cuda and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in (9, 10)),
-        reason="cuDNN is the default SDPA backend only on NVIDIA GPUs of compute capability 9.x and 10.x",
-    )
-    @pytest.mark.parametrize(
-        "config_cls", [DistillationConfig, DPOConfig, GRPOConfig, KTOConfig, RewardConfig, RLOOConfig, SFTConfig]
-    )
-    @pytest.mark.parametrize(("attn_implementation", "expected"), [(None, 128), ("sdpa", 128), ("eager", None)])
-    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, config_cls, attn_implementation, expected):
-        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
-        model_init_kwargs = {"attn_implementation": attn_implementation} if attn_implementation else None
-        config = config_cls(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs)
+        (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", "--pad_to_multiple_of", value])
         assert config.pad_to_multiple_of == expected
 
     def test_init_without_config_field(self):

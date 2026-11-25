@@ -41,6 +41,7 @@ from .testing_utils import (
     ignore_warnings,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_kernels,
     require_peft,
     require_torch_accelerator,
@@ -413,6 +414,18 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = SFTConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     @pytest.mark.parametrize(
         "config_name",

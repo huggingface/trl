@@ -626,6 +626,10 @@ class RewardTrainer(_BaseTrainer):
         # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
 
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config._attn_implementation == "sdpa" else None
+
         # Data collator
         if data_collator is None:
             data_collator = DataCollatorForPreference(
