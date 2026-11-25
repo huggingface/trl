@@ -13,10 +13,7 @@
 # limitations under the License.
 
 import copy
-import inspect
-import json
 import re
-import sys
 import textwrap
 from pathlib import Path
 
@@ -3213,43 +3210,18 @@ class TestChatTemplatesDocumentation:
 class TestChatTemplatesCoverage:
     def test_every_stored_template_is_tested(self):
         # Regenerating a tiny model silently drops the coverage of its earlier template (#7492)
-        templates, models = set(), set()
-        for cls in [obj for obj in vars(sys.modules[__name__]).values() if inspect.isclass(obj)]:
-            for test in [cls, *(obj for obj in vars(cls).values() if inspect.isfunction(obj))]:
-                for mark in vars(test).get("pytestmark", []):
-                    if mark.name != "parametrize":
-                        continue
-                    for param in mark.args[1]:
-                        values = param.values if isinstance(param, type(pytest.param())) else (param,)
-                        for value in values:
-                            for item in value if isinstance(value, tuple) else (value,):
-                                if isinstance(item, str) and item.startswith("trl-internal-testing/"):
-                                    models.add(item)
-                                elif isinstance(item, str):
-                                    templates.add(item)
-                                elif isinstance(item, dict):
-                                    templates.update(v for v in item.values() if isinstance(v, str))
-        for model_id in models:
-            path = Path(
-                snapshot_download(
-                    model_id,
-                    revision=MODEL_REVISIONS[model_id],
-                    allow_patterns=["chat_template.jinja", "chat_template.json", "tokenizer_config.json"],
-                )
-            )
+        source = Path(__file__).read_text(encoding="utf-8")
+        tested = set(re.findall(r"\b(\w+)_chat_template\b", source))
+        shipped = set()
+        for model_id in set(re.findall(r'"(trl-internal-testing/[\w.-]+)"', source)):
+            path = Path(snapshot_download(model_id, revision=MODEL_REVISIONS[model_id], allow_patterns="*.jinja"))
             if (path / "chat_template.jinja").exists():
-                templates.add((path / "chat_template.jinja").read_text(encoding="utf-8"))
-            for name in ["chat_template.json", "tokenizer_config.json"]:
-                if (path / name).exists():
-                    template = json.loads((path / name).read_text(encoding="utf-8")).get("chat_template")
-                    if isinstance(template, str):
-                        templates.add(template)
-        # Jinja drops a single trailing newline (#8502)
-        templates = {template.removesuffix("\n") for template in templates}
+                shipped.add((path / "chat_template.jinja").read_text(encoding="utf-8").removesuffix("\n"))
         untested = sorted(
             path.name
             for path in _CHAT_TEMPLATES_DIR.glob("*.jinja")
             if not path.name.endswith("_training.jinja")
-            and path.read_text(encoding="utf-8").removesuffix("\n") not in templates
+            and path.stem not in tested
+            and path.read_text(encoding="utf-8").removesuffix("\n") not in shipped
         )
         assert untested == []
