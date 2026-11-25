@@ -2832,6 +2832,64 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for name, param in previous.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
+    @require_peft
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_expert_parallel_merged_sync_sends_merged_lora_weights_body(self, make_vllm_server, monkeypatch):
+        # Sharded at load, the base weights are DTensors next to plain LoRA weights, so the merge goes through
+        # `implicit_replication`
+        from peft import LoraConfig
+        from peft.tuners.lora import LoraLayer
+        from transformers.distributed import DistributedConfig
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
+            def send_weights(self, iterator):
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
+
+        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
+        server_url = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url
+        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _RecordingWeightTransfer)
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            vllm_server_base_url=server_url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            # Non-zero adapters, so that the merged weights differ from the base ones
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], init_lora_weights=False),
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.full_tensor() for name, module in lora_layers.items()}
+        trainer._sync_weight()
+
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            if trainer.accelerator.is_main_process:
+                expected = base_weights[name] + module.get_delta_weight("default")
+                assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight.full_tensor(), base_weights[name]), name
+
     @pytest.mark.parametrize(
         ("temperature", "logprobs_mode", "top_k"),
         [
@@ -4203,6 +4261,38 @@ class TestTreePacking(TrlTestCase):
         row = _tree_row(self.ROWS)
         # depths 1..5, then 3..5 and 5..6 for the branches
         assert (len(row.tokens), row.load) == (10, 10 * TOKEN_COST + 15 + 12 + 11)
+
+    # 10 20 30 40 50, 10 20 30 60 70 and 10 20 30 60 80: the trie drawn in `TreeRow`'s docstring
+    FORKS = [[10, 20, 30, 40, 50], [10, 20, 30, 60, 70], [10, 20, 30, 60, 80]]
+
+    @pytest.mark.parametrize(
+        ("tokens", "shared"),
+        [
+            pytest.param([10, 20, 30, 40, 50], 5, id="copy"),
+            pytest.param([10, 20, 30, 60, 80], 5, id="copy-of-a-fork"),
+            pytest.param([10, 20, 30], 2, id="prefix"),  # its last 30 is keyed on no next token
+            pytest.param([10, 20, 30, 40, 50, 60], 4, id="extension"),  # the 50 it shares ends a sample
+            pytest.param([10, 20, 30, 60, 90], 3, id="fork-off-a-fork"),
+            pytest.param([10, 21], 0, id="first-token-only"),
+            pytest.param([11, 20, 30], 0, id="new-root"),
+        ],
+    )
+    def test_cost_counts_only_the_tokens_the_row_lacks(self, tokens, shared):
+        row = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS])
+        n = len(tokens)
+
+        assert (
+            row.cost(_tree_sample(tokens, n_prompt=1))
+            == (n - shared) * TOKEN_COST + (n * (n + 1) - shared * (shared + 1)) // 2
+        )
+
+    def test_chains_are_laid_out_depth_first(self):
+        packed = _tree_row([_tree_sample(forked, n_prompt=1) for forked in self.FORKS]).pack()
+
+        assert packed["input_ids"].tolist() == [10, 20, 30, 40, 50, 30, 60, 70, 60, 80]
+        assert packed["position_ids"].tolist() == [0, 1, 2, 3, 4, 2, 3, 4, 3, 4]
+        assert packed["tree_cu_seqlens_q"].tolist() == [0, 2, 5, 6, 8, 10]
+        assert packed["tree_segment_parents"].tolist() == [-1, 0, 0, 2, 2]
 
     def test_groups_share_a_common_prefix(self):
         rows = [_tree_sample([1, 2, 3, last], n_prompt=1, group_id=g) for g, last in ((0, 4), (1, 5))]
@@ -5967,27 +6057,37 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, server):
-        merged_during_send = []
+    def test_merged_sync_and_lora_bias_raises(self, server):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(server, self._lora_config(lora_bias=True))
 
-        class _RaisingWeightTransfer(_StubWeightTransfer):
+    def test_merged_sync_sends_merged_lora_weights(self, server):
+        from peft.tuners.lora import LoraLayer
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
             def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
 
-        trainer = self._build(server, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        trainer = self._build(
+            server, self._lora_config(init_lora_weights=False), weight_transfer=_RecordingWeightTransfer
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.clone() for name, module in lora_layers.items()}
+        trainer._sync_weight()
 
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            expected = base_weights[name] + module.get_delta_weight("default")
+            assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight, base_weights[name]), name
 
 
 def _tensors_handed_to_producer(info, stream):

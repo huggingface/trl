@@ -194,6 +194,31 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @require_peft
+    @require_vllm
+    @pytest.mark.parametrize("peft_config_name", ["prompt_tuning", "lora_bias"])
+    def test_vllm_and_peft_without_lora_merge_raises(self, peft_config_name):
+        # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which can't express the virtual
+        # tokens of prompt tuning or a LoRA bias
+        from peft import PromptTuningConfig, TaskType
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True)
+        peft_config = {
+            "prompt_tuning": PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+            "lora_bias": LoraConfig(lora_bias=True),
+        }[peft_config_name]
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            OnlineDPOTrainer(
+                model=self.model_id,
+                reward_funcs=self.reward_model,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=peft_config,
+            )
+
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -529,6 +554,20 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert pad_token_id is not None
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    def test_init_reward_model_with_model_revision(self):
+        # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "8913f5819566"}
+        )
+        OnlineDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
 
 
 @require_vision

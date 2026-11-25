@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import bisect
 import contextvars
 import copy
 import functools
@@ -100,6 +101,7 @@ if is_aiohttp_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft.tuners.lora import LoraLayer, ParamWrapper
 
 if is_trackio_available():
     import trackio
@@ -130,9 +132,19 @@ class TreeRow:
     branch costs one extra token per extra branch, and the loss can go through plain per-position labels. A sample's
     last token is keyed on `None`, which no other sample extends, so every sample ends on a leaf.
 
-    The nodes a sample adds form one chain, numbered in a run, that branches off the last node it shares. So the trie
-    stores, for each node, only the chains that branch off it, and a walk down the trie compares whole runs of tokens
-    against the sample that added them: placing a sample costs a few array comparisons, not a dict lookup per token.
+    The trie is stored as chains: the tokens a sample adds, from where it leaves the trie to its end, form one chain,
+    laid out in `tokens` after the previous ones, and the chain hangs off the last node the sample shares:
+
+    ```
+    S0 = 10 20 30 40 50                       node     0  1  2  3  4    5  6  7    8  9
+    S1 = 10 20 30 60 70                       token   10 20 30 40 50   30 60 70   60 80
+    S2 = 10 20 30 60 80                       chain   └───── 0 ────┘   └── 1 ─┘   └ 2 ┘
+
+                  ┌── 30  40  50              chain_offsets = [0, 5, 8, 10]
+    10 ── 20 ─────┤                           chain_parents = [-1, 1, 5]   node each chain hangs off
+                  └── 30 ──┬── 60  70         chain_depths  = [0, 2, 3]    depth of its first token
+                           └── 60  80
+    ```
 
     The row's `load` estimates the time of its forward and backward, in units of one query attending to one key: each
     unique token costs `TOKEN_COST` for its own work, plus `depth + 1` for the keys it attends to.
@@ -140,32 +152,50 @@ class TreeRow:
 
     def __init__(self):
         self.samples: list[dict[str, Any]] = []
-        self.sample_nodes: list[np.ndarray] = []  # sample -> trie node of each of its tokens
-        self.shared: list[int] = []  # sample -> how many of its leading tokens were in the trie when it was added
-        self.tokens: list[int] = []  # node -> its token
-        self.roots: dict[tuple[int, int | None], int] = {}  # {(token, next token): sample whose chain starts there}
-        self.branches: dict[int, dict[tuple[int, int | None], int]] = {}  # node -> the same, for chains branching off
+        self.sample_ends: list[int] = []  # sample -> node of its last token
+        self.tokens = np.zeros(0, dtype=np.int64)  # node -> its token
+        self.chain_offsets: list[int] = [0]  # chain c holds the nodes chain_offsets[c] to chain_offsets[c + 1] - 1
+        self.chain_parents: list[int] = []  # chain -> node it hangs off, -1 for a root
+        self.chain_depths: list[int] = []  # chain -> depth of its first node
         self.groups: set[Any] = set()
         self.trained = 0
         self.load = 0
 
-    @staticmethod
-    def _key(input_ids: np.ndarray, depth: int) -> tuple[int, int | None]:
-        return int(input_ids[depth]), int(input_ids[depth + 1]) if depth + 1 < len(input_ids) else None
-
     def _walk(self, input_ids: np.ndarray) -> tuple[int, int]:
-        """How many leading tokens of `input_ids` are in the trie, and the sample whose chain holds the last of them."""
-        shared, sample, children = 0, -1, self.roots
-        while (child := children.get(self._key(input_ids, shared))) is not None:
-            sample, other = child, self.samples[child]["input_ids"]
-            end = min(len(input_ids), len(other))
-            mismatch = np.flatnonzero(input_ids[shared:end] != other[shared:end])
-            if len(mismatch) == 0 and len(input_ids) == len(other):
-                return len(input_ids), sample  # a copy of `sample`
-            # Nodes are keyed on the next token too, so the walk stops one token before the first one that differs
-            shared = (shared + int(mismatch[0]) if len(mismatch) else end) - 1
-            children = self.branches.get(int(self.sample_nodes[sample][shared - 1]), {})
-        return shared, sample
+        """
+        How many leading tokens of `input_ids` the trie holds, and the node of the last one, `-1` if none.
+
+        The walk compares whole chains. Since a node is also keyed on the next token, the sample shares a chain's nodes
+        up to one before the first token that differs, then goes on along the chains hanging off the last one:
+
+        ```
+        chain    30 60 70
+        sample   30 60 80     same = 2 tokens, so 1 node shared (the 30); then the chains hanging off that 30
+        ```
+        """
+        depth, node = 0, -1
+        while True:
+            for c in np.flatnonzero(np.asarray(self.chain_parents) == node):  # the chains hanging off `node`
+                start, end = self.chain_offsets[c], self.chain_offsets[c + 1]
+                ids = input_ids[depth : depth + end - start]
+                match = ids == self.tokens[start : start + len(ids)]
+                same = len(ids) if match.all() else int(match.argmin())
+                if same == end - start and depth + same == len(input_ids):
+                    return len(input_ids), end - 1  # a copy of the sample that added this chain
+                if same >= 2:
+                    depth, node = depth + same - 1, start + same - 2
+                    break
+            else:
+                return depth, node
+
+    def _nodes(self, end: int) -> np.ndarray:
+        """Node of each token of the sample ending at `end`: the chains from the root down to it."""
+        runs = []
+        while end != -1:
+            c = bisect.bisect_right(self.chain_offsets, end) - 1  # the chain holding `end`
+            runs.append(np.arange(self.chain_offsets[c], end + 1))
+            end = self.chain_parents[c]
+        return np.concatenate(runs[::-1])
 
     def fits(self, sample: dict[str, Any], budget: int) -> bool:
         """Whether the row stays within `budget` unique tokens and `budget` trained tokens with `sample` added."""
@@ -181,18 +211,15 @@ class TreeRow:
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"]
         self.load += self.cost(sample)
-        shared, sample_index = self._walk(input_ids)
-        if shared == 0:
-            self.roots[self._key(input_ids, 0)] = len(self.samples)
-        elif shared < len(input_ids):  # a copy of a sample already in the row adds no node
-            node = int(self.sample_nodes[sample_index][shared - 1])
-            self.branches.setdefault(node, {})[self._key(input_ids, shared)] = len(self.samples)
-        path = self.sample_nodes[sample_index][:shared] if shared else np.zeros(0, dtype=np.int64)
-        new = np.arange(len(self.tokens), len(self.tokens) + len(input_ids) - shared)
+        shared, node = self._walk(input_ids)
+        if shared < len(input_ids):  # a copy of a sample already in the row adds no chain
+            self.chain_parents.append(node)
+            self.chain_depths.append(shared)
+            self.tokens = np.concatenate([self.tokens, input_ids[shared:]])
+            self.chain_offsets.append(len(self.tokens))
+            node = len(self.tokens) - 1
         self.samples.append(sample)
-        self.sample_nodes.append(np.concatenate([path, new]))
-        self.shared.append(shared)
-        self.tokens.extend(input_ids[shared:].tolist())
+        self.sample_ends.append(node)
         self.groups.add(sample["group_id"])
         self.trained += int(sample["completion_mask"].sum())
 
@@ -227,31 +254,37 @@ class TreeRow:
                 - `old_log_probs` (`M`), `advantages` (`M`): generator log-probability and advantage of each target.
                 - `segment_id` (`M`): index of the sample each target came from.
         """
-        # A sample's chain is laid out whole: a node's first child is the next node of its chain, the chains branching
-        # off it follow in the order they were added. The chain is cut into segments after each node others branch off.
+        # Chains are laid out depth-first, each one whole. A chain is cut into segments after each node other chains
+        # hang off; those chains follow the whole chain, the ones hanging off its last segments first:
+        #
+        #            ┌── 30  40  50          packed   10 20 | 30 40 50 | 30 | 60 70 | 60 80
+        #  10 ── 20 ─┤                       segment  └ 0 ┘   └── 1 ─┘   └2┘  └ 3 ─┘  └ 4 ┘
+        #            └── 30 ──┬── 60  70     parent    -1       0        0      2      2
+        #                     └── 60  80
+        children = defaultdict(list)  # node -> the chains hanging off it, in the order they were added
+        for c, parent in enumerate(self.chain_parents):
+            children[parent].append(c)
         is_branch = np.zeros(len(self.tokens), dtype=bool)
-        is_branch[list(self.branches)] = True
+        is_branch[[node for node in children if node != -1]] = True
         packed = np.empty(len(self.tokens), dtype=np.int64)  # node -> its packed position
         input_ids, position_ids, offsets, paths, cu_seqlens_k = [], [], [0], [], [0]
         parents, depths = [], []
-        stack = [(sample, -1) for sample in reversed(self.roots.values())]
+        stack = [(c, -1) for c in reversed(children[-1])]  # (chain, segment it follows)
         while stack:
-            sample, parent = stack.pop()
-            shared, ids = self.shared[sample], self.samples[sample]["input_ids"]
-            new = self.sample_nodes[sample][shared:]  # the nodes it added, its chain
-            start = offsets[-1]
-            packed[new] = np.arange(start, start + len(new))
-            input_ids.append(ids[shared:])
-            position_ids.append(np.arange(shared, len(ids)))
-            for last in [*np.flatnonzero(is_branch[new]).tolist(), len(new) - 1]:
+            c, parent = stack.pop()
+            start, end, depth = self.chain_offsets[c], self.chain_offsets[c + 1], self.chain_depths[c]
+            packed[start:end] = np.arange(offsets[-1], offsets[-1] + end - start)
+            input_ids.append(self.tokens[start:end])
+            position_ids.append(np.arange(depth, depth + end - start))
+            for last in [*(start + np.flatnonzero(is_branch[start : end - 1])).tolist(), end - 1]:
                 segment = len(paths)
                 parents.append(parent)
                 depths.append(0 if parent == -1 else depths[parent] + 1)
-                positions = np.arange(offsets[-1], start + last + 1)
+                positions = np.arange(offsets[-1], packed[last] + 1)
                 paths.append(positions if parent == -1 else np.concatenate([paths[parent], positions]))
-                offsets.append(start + last + 1)
+                offsets.append(int(packed[last]) + 1)
                 cu_seqlens_k.append(cu_seqlens_k[-1] + len(paths[-1]))
-                stack.extend((child, segment) for child in reversed(self.branches.get(int(new[last]), {}).values()))
+                stack.extend((child, segment) for child in reversed(children.get(last, [])))
                 parent = segment
 
         lengths = [end - start for start, end in zip(offsets[:-1], offsets[1:], strict=True)]
@@ -264,9 +297,9 @@ class TreeRow:
         sampler_ids = np.full((len(packed), num_logprobs), -1, dtype=np.int64)
         sampler_log_probs = np.full((len(packed), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
-        for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
+        for i, (sample, end) in enumerate(zip(self.samples, self.sample_ends, strict=True)):
             trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
-            index = packed[nodes[trained - 1]]
+            index = packed[self._nodes(end)[trained - 1]]
             shift_labels[index] = sample["input_ids"][trained]
             owner[index], owner_token[index] = i, trained
             sizes = np.fromiter(map(len, sample["sampling_mask"]), dtype=np.int64, count=len(sample["sampling_mask"]))
@@ -2657,6 +2690,33 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
 
 
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
+
+
 def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch.nn.Parameter]]:
     """Yield `(name, param)` for every parameter the vLLM server receives, under its base-checkpoint name.
 
@@ -2676,7 +2736,7 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
         # When using PEFT, we need to recover the original parameter name
         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+        # Skip PEFT layers: they don't exist in vLLM, and they are merged into the weights they adapt.
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
@@ -3419,6 +3479,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if isinstance(lora_sync, Exception):
                 raise lora_sync
             self._lora_sync = lora_sync
+            # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if not lora_sync and any(
+                not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()
+            ):
+                raise ValueError(
+                    "Syncing merged weights to vLLM supports LoRA adapters without `lora_bias` only: vLLM receives the "
+                    "base weights with the LoRA deltas merged in."
+                )
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             if self._lora_sync:
@@ -3831,7 +3900,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
-        for name, param in _iter_vllm_named_params(self.accelerator.unwrap_model(self.model)):
+        model = self.accelerator.unwrap_model(self.model)
+        lora_layers = {}
+        if is_peft_model(model):
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in model.modules()
+                if isinstance(module, LoraLayer)
+            }
+        for name, param in _iter_vllm_named_params(model):
+            if param in lora_layers:
+                # A model sharded at load time has DTensor base weights next to plain LoRA weights, so the delta
+                # is treated as replicated. No-op without DTensors.
+                with implicit_replication():
+                    param = _merge_lora(lora_layers[param], param)
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
@@ -3856,7 +3939,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
 
     def _sync_weight_merged(self, t0: float) -> tuple[float, float, float]:
-        """Fold the adapter, if any, into the base weights and stream every parameter to vLLM over NCCL.
+        """Stream every parameter to vLLM over NCCL, with the adapter, if any, merged into the base weights.
 
         Args:
             t0 (`float`):
@@ -3866,9 +3949,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             `tuple[float, float, float]`:
                 The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
         """
-        # Under DDP `self.model` is the wrapper, which exposes none of the PEFT API used below.
-        model = self.accelerator.unwrap_model(self.model)
-
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process:
             self.weight_transfer.pause()
@@ -3882,22 +3962,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
-        # `finally` is not optional: leaving it merged would train merged weights from the next step on.
-        if is_peft_model(model):
-            with implicit_replication():
-                model.merge_adapter()
-        try:
-            if self.accelerator.is_main_process:
-                self.weight_transfer.send_weights(self._streaming_iter())
-            else:
-                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-                for _ in self._streaming_iter():
-                    pass
-        finally:
-            if is_peft_model(model):
-                with implicit_replication():
-                    model.unmerge_adapter()
+        if self.accelerator.is_main_process:
+            self.weight_transfer.send_weights(self._streaming_iter())
+        else:
+            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+            for _ in self._streaming_iter():
+                pass
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
