@@ -902,9 +902,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
@@ -912,23 +913,25 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
+                id="gpt-oss",
                 marks=pytest.mark.xfail(
                     raises=ValueError, reason="Attention sinks are not supported (#8231)", strict=True
                 ),
             ),
-            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-            "trl-internal-testing/tiny-PhimoeForCausalLM",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
+            pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
+                id="beam",
                 marks=pytest.mark.skip(
                     reason="Too slow on the stand-in vLLM server: a step takes over a minute, and the epoch does not end "
                     "within 20 minutes"
                 ),
             ),
-            "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+            pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", id="nemotron3-nano"),
         ],
     )
     def test_train(self, model_id, make_vllm_server):
@@ -989,20 +992,21 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         "model_id, expect_coef, expect_aux_loss",
         [
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True, id="qwen3-moe"),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False, id="deepseek-v3"),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
                 False,
+                id="beam",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.1"),
                     reason="Beam was introduced in transformers-5.20.1",
                 ),
             ),
             # Dense model: no coefficient to inherit
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False, id="qwen2.5"),
         ],
     )
     @pytest.mark.usefixtures("stub_weight_transfer")
@@ -2846,6 +2850,64 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for name, param in previous.items():
             assert not torch.equal(param, trainer.model.get_parameter(name)), f"{name} has not changed."
 
+    @require_peft
+    @pytest.mark.skipif("TRL_TEST_EP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_expert_parallel_merged_sync_sends_merged_lora_weights_body(self, make_vllm_server, monkeypatch):
+        # Sharded at load, the base weights are DTensors next to plain LoRA weights, so the merge goes through
+        # `implicit_replication`
+        from peft import LoraConfig
+        from peft.tuners.lora import LoraLayer
+        from transformers.distributed import DistributedConfig
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
+            def send_weights(self, iterator):
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
+
+        monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
+        server_url = make_vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url
+        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _RecordingWeightTransfer)
+        world_size = int(os.environ["WORLD_SIZE"])
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_EP_OUTPUT_DIR"],
+            model_init_kwargs={
+                "dtype": "bfloat16",
+                "distributed_config": DistributedConfig(fsdp_size=world_size, ep_size=world_size),
+            },
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_only_model=True,
+            vllm_server_base_url=server_url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            # Non-zero adapters, so that the merged weights differ from the base ones
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], init_lora_weights=False),
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.full_tensor() for name, module in lora_layers.items()}
+        trainer._sync_weight()
+
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            if trainer.accelerator.is_main_process:
+                expected = base_weights[name] + module.get_delta_weight("default")
+                assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight.full_tensor(), base_weights[name]), name
+
     @pytest.mark.parametrize(
         ("temperature", "logprobs_mode", "top_k"),
         [
@@ -3098,9 +3160,11 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen3.5-think",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
     )
@@ -3139,12 +3203,16 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen3.5-think",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", marks=_GATED_DELTANET_BEFORE_5_15
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
+                marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
     )
@@ -3195,8 +3263,8 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
         ],
     )
     @require_peft
@@ -3419,15 +3487,15 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-                id="qwen35",
+                id="qwen3.5-think",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                id="qwen36-moe",
+                id="qwen3.6-moe",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
@@ -3451,15 +3519,15 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
-                id="qwen35",
+                id="qwen3.5-think",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                id="qwen36-moe",
+                id="qwen3.6-moe",
                 marks=_GATED_DELTANET_BEFORE_5_15,
             ),
         ],
@@ -4303,12 +4371,6 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
-    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
-    "text config",
-    strict=True,
-)
-
 _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.22.0"),
     reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
@@ -4320,46 +4382,44 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
 @pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
-        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", {}, id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
             {},
-            id="qwen35-gdn",
+            id="qwen3.5-think",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
             {},
-            id="qwen38-gdn",
+            id="qwen3.8",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
             {},
-            id="qwen36-moe-gdn",
+            id="qwen3.6-moe",
             marks=_GATED_DELTANET_BEFORE_5_15,
         ),
-        pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron-h-mamba2"),
-        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv", marks=_LFM2_CONV_BEFORE_5_22),
+        pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron3-nano"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2", marks=_LFM2_CONV_BEFORE_5_22),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm2.5", marks=_LFM2_CONV_BEFORE_5_22),
         pytest.param(
-            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv", marks=_LFM2_CONV_BEFORE_5_22
-        ),
-        pytest.param(
-            "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv", marks=_LFM2_CONV_BEFORE_5_22
+            "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm2.5-moe", marks=_LFM2_CONV_BEFORE_5_22
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen25-vl"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, id="llama31"),
-        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, id="llama32"),
-        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", {}, id="qwen2.5-vl"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", {}, id="llama3.1"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", {}, id="llama3.2"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", {}, id="mistral0.2"),
         pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", {}, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {"sliding_window": 16},
-            id="gemma2-sliding-window-softcap",
+            id="gemma2",
             marks=[
                 pytest.mark.skipif(
                     torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
@@ -4375,7 +4435,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
         pytest.param(
             "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
             {},
-            id="inkling2_loop",
+            id="inkling2-loop",
             marks=[
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
@@ -4399,24 +4459,22 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", {}, id="glm4-moe"),
-        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", {}, id="phi3.5"),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", {}, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
             {"sliding_window": 16},
-            id="cohere2-interleaved-sliding-window",
+            id="cohere2",
         ),
         pytest.param(
             "trl-internal-testing/tiny-Olmo3ForCausalLM",
             {"sliding_window": 16},
-            id="olmo3-interleaved-sliding-window",
+            id="olmo3",
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),
         pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, id="idefics3"),
-        pytest.param(
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl", marks=_VLM_TEXT_HEAD_DIM_4
-        ),
+        pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl"),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
@@ -5956,27 +6014,37 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, server):
-        merged_during_send = []
+    def test_merged_sync_and_lora_bias_raises(self, server):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(server, self._lora_config(lora_bias=True))
 
-        class _RaisingWeightTransfer(_StubWeightTransfer):
+    def test_merged_sync_sends_merged_lora_weights(self, server):
+        from peft.tuners.lora import LoraLayer
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
             def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
 
-        trainer = self._build(server, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        trainer = self._build(
+            server, self._lora_config(init_lora_weights=False), weight_transfer=_RecordingWeightTransfer
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.clone() for name, module in lora_layers.items()}
+        trainer._sync_weight()
 
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            expected = base_weights[name] + module.get_delta_weight("default")
+            assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight, base_weights[name]), name
 
 
 def _tensors_handed_to_producer(info, stream):

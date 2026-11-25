@@ -205,8 +205,10 @@ class _BaseTrainer(Trainer):
             tags = set(tags)
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
-        if "JOB_ID" in os.environ:
+        hf_jobs_flavor = None
+        if "HF_JOB_ID" in os.environ:
             tags.add("hf_jobs")
+            hf_jobs_flavor = os.environ.get("HF_JOB_FLAVOR")
         tags.update(self._tag_names)
 
         trackio_url = get_trackio_space_url()
@@ -233,5 +235,6 @@ class _BaseTrainer(Trainer):
             template_file=self._template_file,
             paper_title=self._paper.get("title"),
             paper_id=self._paper.get("id"),
+            hf_jobs_flavor=hf_jobs_flavor,
         )
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

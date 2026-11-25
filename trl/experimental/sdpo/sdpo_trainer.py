@@ -596,18 +596,17 @@ class SDPOTrainer(_BaseTrainer):
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
-        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
-                reward_model_init_kwargs = args.model_init_kwargs or {}
+                model_init_kwargs = args.model_init_kwargs or {}
+                # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    reward_model_init_kwargs["device_map"] = None
-                reward_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-                reward_model_revisions[i] = reward_model_init_kwargs.get("revision")
+                    model_init_kwargs["device_map"] = None
+                model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+                reward_model_init_kwargs = {k: v for k, v in model_init_kwargs.items() if k != "revision"}
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func,
-                    num_labels=1,
-                    **reward_model_init_kwargs,
+                    reward_func, num_labels=1, **reward_model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
@@ -636,7 +635,6 @@ class SDPOTrainer(_BaseTrainer):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(
                         get_config_model_id(reward_func.config),
-                        revision=reward_model_revisions[i],
                         trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class.pad_token_id is None:
