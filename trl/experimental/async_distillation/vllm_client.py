@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 class VLLMClient:
     """Synchronous HTTP client for a vLLM server used by async distillation.
 
-    Ported from [`~trl.experimental.async_grpo.vllm_client.VLLMClient`]. The student's server uses the full API
+    Ported from [`~trl.generation.async_vllm_client.AsyncVLLMClient`]. The student's server uses the full API
     (readiness, world size, pause/resume, weight-update endpoints) since [`WeightTransferClient`] streams updated
     weights to it; the teachers' servers don't use this client: they are static, and the rollout worker queries them
     directly over `/v1/completions` from its `aiohttp` session.

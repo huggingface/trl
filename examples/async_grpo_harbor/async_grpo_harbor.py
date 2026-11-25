@@ -53,7 +53,7 @@ Run (2 GPUs: vLLM on one, trainer on the other):
 
 ```sh
 # Terminal 1: serve the policy with token capture and weight updates.
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-memory-utilization 0.9 \
     --host 0.0.0.0 --port 8000 \
     --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     --reasoning-parser qwen3 \
@@ -76,7 +76,7 @@ weight sync publishes only the adapter. `--max-lora-rank` must be at least `--lo
 `--max-staleness + 1` adapter versions requests may still name, plus the one being loaded (6 for the default of 4):
 
 ```sh
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3.5-2B --gpu-memory-utilization 0.9 \
     --host 0.0.0.0 --port 8000 \
     --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     --reasoning-parser qwen3 \
@@ -110,7 +110,7 @@ from harbor_env.harness import HarborSessionFactory
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
-from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl import AsyncGRPOConfig
 from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer, HarnessRolloutOutcome
 
 
@@ -262,9 +262,9 @@ def main() -> None:
         optim="adamw_torch",
         dtype="bfloat16",
         bf16=True,
-        gradient_checkpointing=True,
+        activation_checkpointing=True,
         # Support layers whose inputs are passed as keyword arguments.
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        activation_checkpointing_kwargs={"use_reentrant": False},
         report_to="trackio",
         project=args.project,
         trackio_space_id=args.trackio_space_id,

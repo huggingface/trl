@@ -21,6 +21,7 @@ import pytest
 import torch
 import transformers
 from datasets import load_dataset
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
@@ -43,7 +44,7 @@ from trl import (
 )
 from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase, require_peft, require_torch_multi_accelerator
+from ..testing_utils import MODEL_REVISIONS, TrlTestCase, require_peft, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,7 +69,54 @@ def get_launch_args(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
-    @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+        ],
+    )
+    def test_distillation_multi_teacher(self, config, lazy_shared_datadir):
+        config_kwargs = {}
+        if config in ("zero2", "zero3"):
+            deepspeed_config = json.loads((lazy_shared_datadir / f"{config}.json").read_text())
+            if config == "zero3":
+                deepspeed_config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"] = True
+            config_kwargs = {"deepspeed": deepspeed_config}
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_distillation_trainer.py",
+                "-k",
+                "test_distributed_teacher_routing",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_DISTILLATION_CONFIG": json.dumps(config_kwargs)},
+        )
+
+    @pytest.mark.parametrize(
+        "test_file", ["test_async_grpo_trainer.py", "experimental/test_async_distillation_trainer.py"]
+    )
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file):
         run_command(
             [
@@ -77,7 +125,7 @@ class TestDistributed(TrlTestCase):
                 "2",
                 "-m",
                 "pytest",
-                f"tests/experimental/{test_file}.py",
+                f"tests/{test_file}",
                 "-k",
                 "test_fsdp_checkpoint_body",
                 "-x",
@@ -96,6 +144,72 @@ class TestDistributed(TrlTestCase):
         assert AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto").dtype == torch.bfloat16
         master = torch.load(os.path.join(checkpoint, "pytorch_model_fsdp.bin"), map_location="cpu", weights_only=True)
         assert {tensor.dtype for tensor in master.values() if tensor.is_floating_point()} == {torch.float32}
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_lora(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_train_expert_parallel_lora_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.19.0"), reason="expert parallelism needs transformers>=5.19.0"
+    )
+    def test_async_grpo_expert_parallel_merged_lora_sync(self):
+        run_command(
+            [
+                "torchrun",
+                "--nproc_per_node",
+                "2",
+                "-m",
+                "pytest",
+                "tests/test_async_grpo_trainer.py",
+                "-k",
+                "test_expert_parallel_merged_sync_sends_merged_lora_weights_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_EP_OUTPUT_DIR": self.tmp_dir},
+        )
 
     @pytest.mark.parametrize(
         "config",
@@ -125,6 +239,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
             ],
@@ -186,6 +301,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--loss_type", "nll",
@@ -222,6 +338,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
             ],
@@ -260,6 +377,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/dpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
                 "--precompute_ref_log_probs",
@@ -297,6 +415,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/kto.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_unpaired_preference",
                 "--precompute_ref_log_probs",
@@ -334,6 +453,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--dataset_streaming",
@@ -373,6 +493,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/sft.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_language_modeling",
                 "--use_peft",
@@ -409,6 +530,7 @@ class TestDistributed(TrlTestCase):
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/reward.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_implicit_prompt_preference",
             ],
@@ -445,15 +567,19 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_rloo(self, config, get_launch_args):
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
         # fmt: off
         run_command(
             [
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/rloo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", reward_model_path,
             ],
             os.environ.copy(),
         )
@@ -482,15 +608,19 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_grpo(self, config, get_launch_args):
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        # Local snapshot of the pinned reward model: by name, it would load from the Hub `main` (#8532)
+        reward_model_path = snapshot_download(reward_model_id, revision=MODEL_REVISIONS[reward_model_id])
         # fmt: off
         run_command(
             [
                 "torchrun", "--nproc_per_node", "2", "trl/scripts/grpo.py", *get_launch_args(config),
                 "--output_dir", self.tmp_dir,
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--model_revision", MODEL_REVISIONS["trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"],
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
-                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--reward_model_name_or_path", reward_model_path,
             ],
             os.environ.copy(),
         )
@@ -570,7 +700,7 @@ class TestModelParallel:
             "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
         )
         teacher_model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/small-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32", device_map=device_map
         )
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

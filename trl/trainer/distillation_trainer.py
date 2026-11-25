@@ -22,6 +22,7 @@ import time
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,10 @@ from .utils import (
     unsplit_pixel_values_by_grid,
 )
 
+
+# peft<0.22 remaps MoE LoRA `target_modules` only for Mixtral and models mapped to it or to Qwen2-MoE (#8427)
+if Version(transformers.__version__) >= Version("5.0.0"):
+    from transformers.conversion_mapping import _MODEL_TO_CONVERSION_PATTERN
 
 if is_peft_available():
     import peft
@@ -253,11 +258,12 @@ class DistillationTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
+        teacher_model (`str`, [`~transformers.PreTrainedModel`] or `dict[str, str | PreTrainedModel]`, *optional*):
             Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
-            (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
-            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses
-            that supply the teacher another way (e.g. a remote server).
+            (loaded like `model`, using `args.teacher_model_init_kwargs`), an instantiated
+            [`~transformers.PreTrainedModel`], or a mapping from teacher ID to either of those, in which case the
+            `teacher_id` column of each row selects its teacher. Every teacher must share the student's vocabulary. May
+            be omitted by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -323,7 +329,7 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel | None = None,
+        teacher_model: str | PreTrainedModel | dict[str, str | PreTrainedModel] | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -530,8 +536,6 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
-            # peft <= 0.17.1 (peft#2821).
             if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
                     "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
@@ -545,7 +549,10 @@ class DistillationTrainer(_BaseTrainer):
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
                 and not peft_config.target_parameters
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and (
                     peft_config.target_modules == "all-linear"
                     or any(
@@ -560,12 +567,15 @@ class DistillationTrainer(_BaseTrainer):
                     "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
                     "https://github.com/huggingface/trl/issues/7765."
                 )
-            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            # With transformers v5, peft 0.19 to 0.21 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
-                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
-                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.22.0")
+                and (
+                    model.config.model_type == "mixtral"
+                    or _MODEL_TO_CONVERSION_PATTERN.get(model.config.model_type) in ("mixtral", "qwen2_moe")
+                )
                 and any(
                     isinstance(module, torch.nn.Linear)
                     and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
@@ -580,34 +590,45 @@ class DistillationTrainer(_BaseTrainer):
                 )
             ):
                 logger.warning(
-                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
-                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
-                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                    "With transformers v5 and peft>=0.19.0,<0.22.0, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. This is fixed on peft main, "
+                    "not yet released. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
-        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
-        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing before DeepSpeed 0.19.3. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703 and
+        # https://github.com/deepspeedai/DeepSpeed/pull/8148.
+        # Can be removed once the minimum supported DeepSpeed version is 0.19.3.
         if (
             is_peft_model(model)
             and args.deepspeed_plugin is not None
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
+            and Version(version("deepspeed")) < Version("0.19.3")
         ):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
                     "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
-                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
-                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training with "
+                    "DeepSpeed < 0.19.3. To remove this warning, upgrade DeepSpeed to 0.19.3 or later, unset "
+                    "`use_reentrant` in `gradient_checkpointing_kwargs`, or set it to `True`."
                 )
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
+            # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
+            # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
-        # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
-        if is_peft_model(model) and args.gradient_checkpointing:
+        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
+        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        if (
+            is_peft_model(model)
+            and args.gradient_checkpointing
+            and Version(transformers.__version__) < Version("5.0.0")
+        ):
             model.enable_input_require_grads()
 
         # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
@@ -651,22 +672,39 @@ class DistillationTrainer(_BaseTrainer):
         self._forward_redirection = _ForwardRedirection()
 
         # Teacher model setup
-        # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
-        if teacher_model is not None:
-            if isinstance(teacher_model, str):
-                dtype = teacher_model_init_kwargs.get("dtype")
-                teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
+        # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way. A
+        # single teacher is a one-entry mapping keyed by `None`, so one or several teachers share one code path.
+        if teacher_model is None:
+            teacher_models, teacher_models_init_kwargs = {}, {}
+        elif isinstance(teacher_model, dict):
+            teacher_models, teacher_models_init_kwargs = dict(teacher_model), teacher_model_init_kwargs
+            unknown = set(teacher_models_init_kwargs) - set(teacher_models)
+            if unknown:
+                raise ValueError(
+                    f"`teacher_model_init_kwargs` has entries for unknown teacher IDs {sorted(unknown)}. Use the IDs "
+                    f"of `teacher_model`: {list(teacher_models)}."
+                )
+        else:
+            teacher_models = {None: teacher_model}
+            teacher_models_init_kwargs = (
+                {None: teacher_model_init_kwargs} if args.teacher_model_init_kwargs is not None else {}
+            )
+        for teacher_id, teacher in teacher_models.items():
+            if isinstance(teacher, str):
+                init_kwargs = dict(teacher_models_init_kwargs.get(teacher_id, {}))
+                dtype = init_kwargs.get("dtype")
+                init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
                 if args.teacher_model_revision is not None:
-                    teacher_model_init_kwargs.setdefault("revision", args.teacher_model_revision)
+                    init_kwargs.setdefault("revision", args.teacher_model_revision)
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    teacher_model_init_kwargs["device_map"] = None
-                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-                teacher_model = create_model_from_path(teacher_model, **teacher_model_init_kwargs)
-            elif args.teacher_model_init_kwargs is not None:
+                    init_kwargs["device_map"] = None
+                init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                teacher_models[teacher_id] = create_model_from_path(teacher, **init_kwargs)
+            elif teacher_id in teacher_models_init_kwargs:
                 raise ValueError(
                     "You passed teacher_model_init_kwargs to the config, but your teacher_model is already "
-                    "instantiated."
+                    "instantiated. Pass the teacher as a model id, or remove its `teacher_model_init_kwargs`."
                 )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
@@ -733,25 +771,34 @@ class DistillationTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        # Prepare teacher model (after super().__init__ so accelerator is ready)
-        if teacher_model is not None:
+        # Prepare teacher models (after super().__init__ so accelerator is ready)
+        self._multi_teacher = isinstance(teacher_model, dict)
+        if self._multi_teacher and self._is_vlm:
+            raise ValueError(
+                "Multiple teachers are not supported with vision-language models. Pass a single `teacher_model`."
+            )
+        if self._multi_teacher and self._dist.is_fsdp:
+            raise ValueError(
+                "FSDP is not supported with a `teacher_model` mapping. Use DDP or DeepSpeed for multi-teacher "
+                "distillation."
+            )
+        self.teacher_models = {}
+        for teacher_id, teacher in teacher_models.items():
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
             # must be defined over the same vocabulary.
             student_vocab_size = self.model.config.get_text_config().vocab_size
-            teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+            teacher_vocab_size = teacher.config.get_text_config().vocab_size
             if student_vocab_size != teacher_vocab_size:
                 raise ValueError(
-                    f"The student model has vocab_size {student_vocab_size} but the teacher model has vocab_size "
-                    f"{teacher_vocab_size}. Distillation compares the teacher's full next-token distribution, which "
-                    f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
-                    f"cross-tokenizer distillation."
+                    f"The student model has vocab_size {student_vocab_size} but the teacher model "
+                    f"{'' if teacher_id is None else f'{teacher_id!r} '}has vocab_size {teacher_vocab_size}. "
+                    f"Distillation compares the teacher's full next-token distribution, which requires a shared "
+                    f"vocabulary. Use a teacher with the same vocab_size, or GOLD for cross-tokenizer distillation."
                 )
             if self.is_deepspeed_enabled:
-                self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+                self.teacher_models[teacher_id] = prepare_deepspeed(teacher, self.accelerator)
             else:
-                self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
-        else:
-            self.teacher_model = None
+                self.teacher_models[teacher_id] = self.accelerator.prepare_model(teacher, evaluation_mode=True)
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -884,7 +931,7 @@ class DistillationTrainer(_BaseTrainer):
         # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
         # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "teacher_id"]
 
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
@@ -1100,7 +1147,7 @@ class DistillationTrainer(_BaseTrainer):
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
                     generate_inputs[k] = pad(
-                        [torch.tensor(x) for x in v],
+                        [torch.tensor(np.array(x)) for x in v],
                         padding_value=0,
                         padding_side="left",
                         pad_to_multiple_of=self.pad_to_multiple_of,
@@ -1201,17 +1248,20 @@ class DistillationTrainer(_BaseTrainer):
                 prefix_ids = prefix_ids.tolist()
                 full_ids = full_ids.tolist()
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        # Some chat templates render whitespace after the token that ends the assistant turn (e.g. Qwen3 renders
+        # "<|im_end|>\n"). The model stops generating at that token, so drop the whitespace to start the suffix right
+        # after it.
+        while not self._tokenizer.decode(prefix_ids[-1:]).strip():
+            prefix_ids = prefix_ids[:-1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+            raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -1596,6 +1646,16 @@ class DistillationTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Check the routing before generating, so a bad `teacher_id` does not cost a generation pass
+        if self._multi_teacher:
+            teacher_ids = [x.get("teacher_id") for x in inputs]
+            for teacher_id in set(teacher_ids):
+                if teacher_id not in self.teacher_models:
+                    raise ValueError(
+                        f"Example has `teacher_id={teacher_id!r}`, which is not among the teachers passed to "
+                        f"`teacher_model`. Expected one of: {list(self.teacher_models)}."
+                    )
+
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
         elif "image" in inputs[0]:
@@ -1692,9 +1752,11 @@ class DistillationTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
+        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
         elif (
             images is not None
+            and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
@@ -1815,6 +1877,8 @@ class DistillationTrainer(_BaseTrainer):
                 output["num_tiles"] = num_tiles
         if tool_mask is not None:
             output["tool_mask"] = tool_mask
+        if self._multi_teacher:
+            output["teacher_id"] = teacher_ids
         return output
 
     @profiling_decorator
@@ -1862,7 +1926,7 @@ class DistillationTrainer(_BaseTrainer):
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
+        loss, entropy_sum, num_valid_tokens, teacher_stats = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
 
@@ -1870,6 +1934,13 @@ class DistillationTrainer(_BaseTrainer):
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
         # ordering risk). Mirrors `SFTTrainer.compute_loss`.
         mode = "train" if self.model.training else "eval"
+        if self._multi_teacher:
+            # Per-teacher divergence and share of tokens; NaN divergence for a teacher absent from this micro-batch
+            divergence_sums, counts = self.accelerator.reduce(teacher_stats, reduction="sum")
+            for teacher_id, divergence_sum, count in zip(self.teacher_models, divergence_sums, counts, strict=True):
+                jsd = (divergence_sum / count).item() if count > 0 else float("nan")
+                self._metrics[mode][f"teacher/{teacher_id}/jsd"].append(jsd)
+                self._metrics[mode][f"teacher/{teacher_id}/token_frac"].append((count / counts.sum()).item())
         num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
@@ -1905,40 +1976,12 @@ class DistillationTrainer(_BaseTrainer):
             unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
-        # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
-        # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
-        self.teacher_model.eval()
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        with torch.no_grad():
-            teacher_hidden_states = self._forward_redirection(
-                self.teacher_model,
-                unwrapped_teacher,
-                self._get_last_hidden_state,
-                unwrapped_teacher,
-                input_ids,
-                attention_mask,
-                logits_to_keep,
-                **multimodal_inputs,
-            )
-
         student_lm_head = unwrapped_student.get_output_embeddings()
-        teacher_lm_head = unwrapped_teacher.get_output_embeddings()
-
-        # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
-        if student_lm_head.weight.device != teacher_lm_head.weight.device:
-            raise ValueError(
-                f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
-                f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
-            )
-
         # With the model split across devices (`device_map`), the backbone can end on another device than the head
         student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
-        teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
         loss_mask = loss_mask.to(student_lm_head.weight.device)
-
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
-        teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
         # as-is. Muse Glimmer applies the same pre-softcap multiplier under the name `output_multiplier`.
         student_logit_scale = getattr(student_config, "logit_scale", None)
@@ -1951,37 +1994,87 @@ class DistillationTrainer(_BaseTrainer):
         if student_logit_scale is None and getattr(student_config, "logits_scaling", None) is not None:
             logits_scaling = student_config.logits_scaling
             student_logit_scale = logits_scaling if student_config.model_type == "hyperclovax" else 1 / logits_scaling
-        teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
-        if teacher_logit_scale is None:
-            teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
-        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
-        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
-        if teacher_logit_scale is None:
-            teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
-        if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
-            logits_scaling = teacher_config.logits_scaling
-            teacher_logit_scale = logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
-        teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
-        loss, entropy_sum, n_valid = _chunked_divergence_loss(
-            student_hidden_states,
-            teacher_hidden_states,
-            student_lm_head.weight,
-            teacher_lm_head.weight,
-            loss_mask,
-            self.beta,
-            num_items_in_batch=num_items_in_batch,
-            student_lm_head_bias=student_lm_head.bias,
-            teacher_lm_head_bias=teacher_lm_head.bias,
-            student_logit_scale=student_logit_scale,
-            teacher_logit_scale=teacher_logit_scale,
-            student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
-            teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
-            temperature=self.temperature,
-        )
-        # Return the raw entropy sum and valid-token count for `compute_loss` to aggregate and log after the forward
-        # returns (see there). Detached: the metric is gradient-free.
-        return loss, entropy_sum.detach(), n_valid
+
+        # The per-teacher losses are summed, so they share one denominator: the local valid-token count in evaluation
+        denominator = loss_mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch
+        teacher_ids = inputs["teacher_id"] if self._multi_teacher else [None] * input_ids.size(0)
+        loss, entropy_sum, n_valid = 0.0, 0.0, 0
+        teacher_stats = torch.zeros(2, len(self.teacher_models), device=student_hidden_states.device)
+        zero3 = self.args.deepspeed_plugin is not None and self.args.deepspeed_plugin.zero_stage == 3
+        for teacher_index, (teacher_id, teacher_model) in enumerate(self.teacher_models.items()):
+            rows = [i for i, t in enumerate(teacher_ids) if t == teacher_id]
+            # Under ZeRO-3 the teacher forward is a collective, so every rank scores every teacher, on one masked-out
+            # row when it has none
+            if not rows and not zero3:
+                continue
+            scored = rows or [0]
+
+            # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
+            # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
+            teacher_model.eval()
+            unwrapped_teacher = self.accelerator.unwrap_model(teacher_model)
+            with torch.no_grad():
+                teacher_hidden_states = self._forward_redirection(
+                    teacher_model,
+                    unwrapped_teacher,
+                    self._get_last_hidden_state,
+                    unwrapped_teacher,
+                    input_ids[scored],
+                    attention_mask[scored],
+                    logits_to_keep,
+                    **multimodal_inputs,
+                )
+
+            teacher_lm_head = unwrapped_teacher.get_output_embeddings()
+            # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
+            if student_lm_head.weight.device != teacher_lm_head.weight.device:
+                raise ValueError(
+                    f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
+                    f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
+                )
+            # ZeRO-3 gathers the output heads in both passes of the chunked loss, so the loss also runs on the
+            # masked-out row
+            teacher_loss_mask = loss_mask[scored] if rows else torch.zeros_like(loss_mask[:1])
+            teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
+
+            # Read the teacher's logit post-processing the same way as the student's, above
+            teacher_config = unwrapped_teacher.config.get_text_config()
+            teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
+            if teacher_logit_scale is None:
+                teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+            if teacher_logit_scale is None:
+                teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
+            if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
+                logits_scaling = teacher_config.logits_scaling
+                teacher_logit_scale = (
+                    logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
+                )
+            teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
+            teacher_loss, teacher_entropy_sum, teacher_n_valid = _chunked_divergence_loss(
+                student_hidden_states[scored],
+                teacher_hidden_states,
+                student_lm_head.weight,
+                teacher_lm_head.weight,
+                teacher_loss_mask,
+                self.beta,
+                num_items_in_batch=denominator,
+                student_lm_head_bias=student_lm_head.bias,
+                teacher_lm_head_bias=teacher_lm_head.bias,
+                student_logit_scale=student_logit_scale,
+                teacher_logit_scale=teacher_logit_scale,
+                student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
+                teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+                temperature=self.temperature,
+            )
+            loss = loss + teacher_loss
+            entropy_sum = entropy_sum + teacher_entropy_sum
+            n_valid = n_valid + teacher_n_valid
+            teacher_stats[0, teacher_index] = teacher_loss.detach() * denominator
+            teacher_stats[1, teacher_index] = teacher_n_valid
+        # Return the raw entropy sum, valid-token count and per-teacher statistics for `compute_loss` to aggregate and
+        # log after the forward returns (see there). Detached: the metrics are gradient-free.
+        return loss, entropy_sum.detach(), n_valid, teacher_stats
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()

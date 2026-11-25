@@ -2,6 +2,8 @@
     Modifications vs the original:
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the part of the thinking block that the generation prompt pre-fills before {% generation %},
+      so that assistant-only loss doesn't train it.
 -#}
 {% macro render_extra_keys(json_dict, handled_keys) %}
     {%- if json_dict is mapping %}
@@ -122,10 +124,9 @@
                 {%- set content = content -%}
             {%- endif -%}
         {%- endif %}
+        {%- set turn %}
         {%- if message.tool_calls is defined and message.tool_calls is iterable and message.tool_calls | length > 0 %}
             {# Assistant message has tool calls. #}
-            {{- '<|im_start|>assistant\n' }}
-            {%- generation %}
                 {%- set include_content = not (truncate_history_thinking and loop.index0 < ns.last_user_idx) %}
                 {%- if content is string and content | trim | length > 0 %}
                     {%- if include_content %}
@@ -162,14 +163,10 @@
                     {{- '</function>\n</tool_call>\n' -}}
                 {%- endfor %}
                 {{- '<|im_end|>\n' }}
-            {%- endgeneration %}
         {%- else %}
             {# Assistant message doesn't have tool calls. #}
             {%- if not (truncate_history_thinking and loop.index0 < ns.last_user_idx) %}
-                {{- '<|im_start|>assistant\n' }}
-                {%- generation %}
                 {{- (content | default('', true) | string | trim) ~ '<|im_end|>\n' }}
-                {%- endgeneration %}
             {%- else %}
                 {%- set c = (content | default('', true) | string) %}
                 {%- if '<think>' in c and '</think>' in c %}
@@ -177,18 +174,22 @@
                 {%- endif %}
                 {%- set c = c | trim %}
                 {%- if c | length > 0 %}
-                    {{- '<|im_start|>assistant\n' }}
-                    {%- generation %}
                     {{- c ~ '<|im_end|>\n' }}
-                    {%- endgeneration %}
                 {%- else %}
-                    {{- '<|im_start|>assistant\n' }}
-                    {%- generation %}
                     {{- '<|im_end|>\n' }}
-                    {%- endgeneration %}
                 {%- endif %}
             {%- endif %}
         {%- endif %}
+        {%- endset %}
+        {{- '<|im_start|>assistant\n' }}
+        {%- set prefill = '<think>\n' if enable_thinking else '<think></think>' %}
+        {%- if turn.startswith(prefill) %}
+            {{- prefill }}
+            {%- set turn = turn[prefill | length:] %}
+        {%- endif %}
+        {%- generation %}
+        {{- turn }}
+        {%- endgeneration %}
     {%- elif message.role == "user" or message.role == "system" %}
         {{- '<|im_start|>' + message.role + '\n' }}
         {%- set content = message.content | string %}

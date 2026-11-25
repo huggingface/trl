@@ -22,7 +22,7 @@ jobs:
     name: Tests with Python ${{ matrix.python-version }}
     strategy:
       matrix:
-        python-version: ['3.11', '3.12', '3.14']  # 3.13 is already covered by the Tests workflow
+        python-version: ['3.11', '3.12', '3.14', '3.15']  # 3.13 is already covered by the Tests workflow
       fail-fast: false
     runs-on:
       group: aws-g6e-4xlarge
@@ -59,6 +59,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test

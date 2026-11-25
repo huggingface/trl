@@ -14,6 +14,8 @@
 
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -59,10 +61,12 @@ class _BaseConfig(TrainingArguments):
             "will be interpreted as ratio of total training steps."
         },
     )
-    gradient_checkpointing: bool = field(
-        default=True,
+    gradient_checkpointing: bool | None = field(
+        default=None,
         metadata={
-            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training."
+            "help": "Enable gradient checkpointing to trade compute for memory. Reduces memory at the cost of ~20%% slower training.",
+            "nargs": "?",
+            "const": True,
         },
     )
     bf16: bool | None = field(
@@ -106,5 +110,15 @@ class _BaseConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # TRL enables activation checkpointing by default, under the name this transformers version reads: from 5.23,
+        # `activation_checkpointing`. A `gradient_checkpointing` the user passes still gets transformers' deprecation
+        # warning.
+        if self.gradient_checkpointing is None:
+            if Version(transformers.__version__) >= Version("5.23.0"):
+                if self.activation_checkpointing is None:
+                    self.activation_checkpointing = True
+            else:
+                self.gradient_checkpointing = True
 
         super().__post_init__()
