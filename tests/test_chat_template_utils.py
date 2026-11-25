@@ -401,9 +401,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template, id="qwen3-coder-v2"
             ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template, id="qwen3-coder-next"
-            ),
+            pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", None, id="qwen3-coder-next"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_6_v2_chat_template, id="qwen3.6-v2"),
             pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_8_v2_chat_template, id="qwen3.8-v2"),
         ],
