@@ -58,7 +58,14 @@ from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
-from transformers import AttentionInterface, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    AttentionInterface,
+    AutoConfig,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
@@ -356,6 +363,12 @@ def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
 TREE_ATTENTION = "tree_fa3"
 
 
+def tree_attn_implementation(config) -> str:
+    """`sdpa` for models whose attention selects its own keys (Qwen4-Exp), tree attention otherwise."""
+    layer_types = getattr(config.get_text_config(), "layer_types", None) or []
+    return "sdpa" if "indexed_attention" in layer_types else TREE_ATTENTION
+
+
 # (the last row's `tree_cu_seqlens_q`, its maps): every layer asks for the maps of the same row, and building them
 # costs a host sync
 _MAPS = None
@@ -495,6 +508,51 @@ def tree_qsa_select_tokens(q, raw_keys, full_cos, full_sin, k_layernorm, block_t
         selected[start:stop, :n] |= visible[start:stop] & (depth >= tail_start.unsqueeze(1))
 
     return selected[:, :n].contiguous().view(1, 1, n, n)
+
+
+_QWEN4_PATCHED = set()
+
+
+def patch_tree_qwen4_exp(model) -> bool:
+    """
+    Wrap Qwen4-Exp's `_shift_right_ignore_eos`, `_short_conv` and `_select_tokens`: given the tree of
+    [`TreeRow.pack`] in their kwargs they follow it, otherwise they run unchanged. Returns whether they exist.
+    """
+    # The modeling file; unlike type(model).__module__, also right when FSDP2 swaps the class
+    modeling = sys.modules[type(model).forward.__module__]
+    names = ("Qwen4ExpTextNGramEmbedding", "Qwen4ExpTextPLELayer", "Qwen4ExpTextQSAIndexer")
+    ngram, ple, indexer = (vars(modeling).get(name) for name in names)
+    if not all(
+        hasattr(cls, name)
+        for cls, name in ((ngram, "_shift_right_ignore_eos"), (ple, "_short_conv"), (indexer, "_select_tokens"))
+    ):
+        return False
+    if modeling in _QWEN4_PATCHED:
+        return True
+    shift_right, short_conv, select_tokens = ngram._shift_right_ignore_eos, ple._short_conv, indexer._select_tokens
+
+    def _shift_right_ignore_eos(self, token_ids, shift, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return shift_right(self, token_ids, shift, **kwargs)
+        return tree_ngram_shift_right(token_ids, shift, self.eos_token_id, kwargs)
+
+    def _short_conv(self, hidden_states, cache, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return short_conv(self, hidden_states, cache, **kwargs)
+        return tree_ple_short_conv(hidden_states.transpose(1, 2), self.conv1d, kwargs).transpose(1, 2)
+
+    def _select_tokens(self, hidden_states, q, raw_keys, full_cos, full_sin, attention_mask, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return select_tokens(self, hidden_states, q, raw_keys, full_cos, full_sin, attention_mask, **kwargs)
+        return tree_qsa_select_tokens(
+            q, raw_keys, full_cos, full_sin, self.k_layernorm, self.block_topk, self.compress_ratio, kwargs
+        )
+
+    ngram._shift_right_ignore_eos = _shift_right_ignore_eos
+    ple._short_conv = _short_conv
+    indexer._select_tokens = _select_tokens
+    _QWEN4_PATCHED.add(modeling)
+    return True
 
 
 @cache
@@ -3267,15 +3325,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
             model_revision = model_init_kwargs.get("revision")
+            config = AutoConfig.from_pretrained(
+                model, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
             model = create_model_from_path(
                 model,
                 device_map=None,
-                attn_implementation=TREE_ATTENTION,
+                attn_implementation=tree_attn_implementation(config),
                 **model_init_kwargs,
             )
         else:
             model_revision = None
-            model.set_attn_implementation(TREE_ATTENTION)
+            model.set_attn_implementation(tree_attn_implementation(model.config))
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
@@ -3293,13 +3354,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "mlp",
         }
         # Check tree attention compat
-        if layer_types not in (set(), {"linear_attention"}, {"conv"}):
+        if layer_types not in (set(), {"linear_attention"}, {"conv"}, {"linear_attention", "indexed_attention"}):
             raise ValueError(
                 f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
-                "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
-                "path; any other recurrent or convolutional layer would scan across samples."
+                "transformers' gated DeltaNet and Mamba2 layers, LFM2's short convolutions and Qwen4-Exp's indexed "
+                "attention along each sample's own path; any other recurrent or convolutional layer would scan across "
+                "samples."
             )
-        if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
+        if "linear_attention" in layer_types and Version(transformers.__version__) < Version("5.15.0"):
             raise ValueError(
                 f"Tree packing of {type(model).__name__}'s linear attention layers requires transformers>=5.15.0: "
                 "before it, these layers do not call the module-level functions tree packing patches, so they would "
@@ -3311,12 +3373,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "before it, these layers do not pass the forward's keyword arguments down to the module-level "
                 "function tree packing patches, so they would scan across samples."
             )
-        if layer_types and not patch_tree_recurrent(model, *layer_types):
+        recurrent_types = layer_types - {"indexed_attention"}
+        if recurrent_types and not patch_tree_recurrent(model, *recurrent_types):
             raise ValueError(
-                f"{type(model).__name__}'s {sorted(layer_types)} layers don't run through the functions tree packing "
-                "patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan across "
-                "samples."
+                f"{type(model).__name__}'s {sorted(recurrent_types)} layers don't run through the functions tree "
+                "packing patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan "
+                "across samples."
             )
+        if "indexed_attention" in layer_types and not patch_tree_qwen4_exp(model):
+            raise ValueError(
+                f"Tree packing of {type(model).__name__} patches its `_select_tokens`, `_shift_right_ignore_eos` "
+                "and `_short_conv` methods, which its modeling module lacks."
+            )
+        # Under `sdpa` the model infers a missing mask from the position ids, which are depths: it would cut each path
+        # off from its earlier segments. An all-ones mask keeps it plain causal, and the tree-aware selection decides.
+        self.explicit_attention_mask = tree_attn_implementation(model.config) == "sdpa"
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
@@ -3757,6 +3828,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
         router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
+        mask_kwargs = {"attention_mask": torch.ones_like(input_ids)} if self.explicit_attention_mask else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -3765,6 +3837,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             score_ids=sampler_ids,
             fused_lm_head=True,
             **router_kwargs,
+            **mask_kwargs,
             **unpad_tree(inputs),
         )
         log_probs = outputs.log_probs.flatten()[token_index]

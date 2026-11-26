@@ -73,6 +73,8 @@ from trl.trainer.async_grpo_trainer import (
     _iter_vllm_named_params,
     _reduce_metric,
     _spawn_stop_watcher,
+    patch_tree_qwen4_exp,
+    patch_tree_recurrent,
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
@@ -80,6 +82,7 @@ from trl.trainer.async_grpo_trainer import (
     tree_ngram_shift_right,
     tree_ple_short_conv,
     tree_qsa_select_tokens,
+    unpad_tree,
     validate_lora_for_vllm_sync,
 )
 from trl.trainer.base_trainer import _BaseTrainer
@@ -4768,6 +4771,106 @@ class TestTreeQwen4Exp(TrlTestCase):
             rows = table[path]  # the sample's queries, against all n tokens
             assert rows[:, path].tolist() == alone(path).tolist()  # same picks inside the sample
             assert rows.sum() == rows[:, path].sum()  # nothing picked outside the sample
+
+
+def _tiny_qwen4_exp_config():
+    return {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 16,
+        "max_position_embeddings": 64,
+        "layer_types": ["linear_attention", "indexed_attention"],
+        "linear_key_head_dim": 16,
+        "linear_value_head_dim": 16,
+        "linear_num_key_heads": 1,
+        "linear_num_value_heads": 1,
+        "hc_count": 2,
+        "hc_lowrank": 8,
+        "ple_layer_ids": [1],
+        "ple_embed_dim": 16,
+        "ple_conv_kernel_size": 3,
+        "heads_per_ngram": 2,
+        "ngram_vocab_size_base": 30,
+        "moe_intermediate_size": 16,
+        "shared_expert_intermediate_size": 16,
+        "num_experts": 4,
+        "num_experts_per_tok": 2,
+        "indexer_n_heads": 2,
+        "indexer_kv_heads": 1,
+        "indexer_head_dim": 16,
+        "indexer_budget": 4,
+        "indexer_compress_ratio": 2,
+        "eos_token_id": 0,
+        "pad_token_id": 0,
+    }
+
+
+@require_torch_accelerator
+class TestTreePackingParityQwen4Exp(TrlTestCase):
+    """
+    A tree-packed Qwen4-Exp row must give each sample the logits and gradients the sample gives alone.
+
+    The loss weighs each logit with a random weight. A position shared by k samples is split k ways in the solo runs,
+    so the solo gradients must add up to the packed one.
+    """
+
+    SAMPLES = [
+        _tree_sample([1, 2, 3, 4, 5], n_prompt=3),  # sample A: prompt 1 2 3, answer 4 5
+        _tree_sample([1, 2, 3, 6, 7], n_prompt=3),  # sample B: same prompt, other answer
+        _tree_sample([1, 2, 3, 4, 5, 8, 9], n_prompt=3),  # sample C: like A, then continues with 8 9
+        _tree_sample([11, 12], n_prompt=1),  # sample D: unrelated, prompt 11, answer 12
+    ]
+    # The row is 1 2 3 4 5 | 5 8 9 | 3 6 7 | 11 12, and these are each sample's positions in it
+    PATHS = [[0, 1, 2, 3, 4], [0, 1, 8, 9, 10], [0, 1, 2, 3, 5, 6, 7], [11, 12]]
+
+    def test_logits_and_grads_match_each_sample_alone(self):
+        pytest.importorskip("transformers.models.qwen4_exp.modeling_qwen4_exp")
+        from transformers import Qwen4ExpForCausalLM, Qwen4ExpTextConfig
+
+        torch.manual_seed(0)
+        model = Qwen4ExpForCausalLM(Qwen4ExpTextConfig(**_tiny_qwen4_exp_config())).to(torch_device)
+        assert patch_tree_recurrent(model, "linear_attention")
+        assert patch_tree_qwen4_exp(model)
+        model.set_attn_implementation("sdpa")
+        model.gradient_checkpointing_enable()
+
+        def forward_backward(input_ids, position_ids, weights, tree):
+            """The logits of one row, and the gradients its weighted logits leave on the model."""
+            model.zero_grad()
+            logits = model(
+                input_ids=input_ids[None],
+                position_ids=position_ids[None],
+                attention_mask=torch.ones_like(input_ids)[None],
+                **tree,
+            ).logits[0]
+            (logits.float() * weights[:, None]).sum().backward()
+            grads = {name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None}
+            return logits.detach().float(), grads
+
+        packed = _tree_row(self.SAMPLES).pack()
+        input_ids = packed["input_ids"].to(torch_device)
+        weights = torch.randn(len(input_ids), device=torch_device)
+        tree = unpad_tree({key: value[None].to(torch_device) for key, value in _tree_kwargs(packed).items()})
+        position_ids = packed["position_ids"].to(torch_device)  # each position's depth in its own sample
+        logits, grads = forward_backward(input_ids, position_ids, weights, tree)
+
+        shares = torch.zeros_like(weights)  # how many samples share each position
+        for path in self.PATHS:
+            shares[path] += 1
+        alone_grads = {name: torch.zeros_like(grad) for name, grad in grads.items()}
+        for path in self.PATHS:
+            depths = torch.arange(len(path), device=torch_device)
+            path_logits, path_grads = forward_backward(input_ids[path], depths, weights[path] / shares[path], {})
+            torch.testing.assert_close(path_logits, logits[path], atol=1e-4, rtol=1e-4)
+            for name in alone_grads:
+                alone_grads[name] += path_grads[name]
+
+        packed_flat = torch.cat([grad.flatten() for grad in grads.values()])
+        alone_flat = torch.cat([grad.flatten() for grad in alone_grads.values()])
+        assert (packed_flat - alone_flat).norm() < 1e-2 * alone_flat.norm()
 
 
 def _finalize(turns, rollout_id="r0"):
