@@ -49,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install .
+          uv pip install ".[vlm]"
 
       - name: Check chat templates
         run: |
