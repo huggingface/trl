@@ -173,9 +173,34 @@ def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: floa
     raise RuntimeError(f"the capture proxy never became publicly reachable in {deadline_s:.0f}s\n{tail}")
 
 
+def _run_hf_sandbox_openenv() -> None:
+    from harbor.environments import hf_sandbox
+    from openenv.cli.__main__ import main as openenv_main
+
+    # Remove once OpenEnv resolves Harbor with harbor-framework/harbor#4411.
+    unpack = hf_sandbox.remote_unpack_command
+
+    def unpack_without_owner(*args, **kwargs):
+        command = unpack(*args, **kwargs)
+        if " --no-same-owner" in command:
+            return command
+        if "tar -xzf " not in command:
+            raise RuntimeError("Unexpected Harbor tar command. Check the HF Sandbox upload workaround.")
+        return command.replace("tar -xzf ", "tar --no-same-owner -xzf ", 1)
+
+    hf_sandbox.remote_unpack_command = unpack_without_owner
+    openenv_main()
+
+
+def _openenv_cmd(args: argparse.Namespace) -> list[str]:
+    if args.sandbox == "hf-sandbox":
+        return [sys.executable, str(pathlib.Path(__file__).resolve()), "--hf-sandbox-openenv"]
+    return ["openenv"]
+
+
 def _serve_cmd(args: argparse.Namespace) -> list[str]:
     return [
-        "openenv", "harbor", "serve",
+        *_openenv_cmd(args), "harbor", "serve",
         "--dataset", args.split,
         "--port", str(args.server_port),
         "--capture-port", str(args.capture_port),
@@ -206,7 +231,7 @@ def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: fl
             continue
         print("[launcher] the published proxy is not reachable; restarting the Harbor server", flush=True)
         for proc in list(_children):
-            if proc.args[:3] == ["openenv", "harbor", "serve"]:
+            if proc.args == _serve_cmd(args):
                 _stop_process(proc)
                 _children.remove(proc)
         if _stopping.is_set():
@@ -246,7 +271,7 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
 def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib.Path) -> None:
     """Warm task 0's sandbox image before concurrent rollouts can race its first build."""
     cmd = [
-        "openenv", "harbor", "rollout",
+        *_openenv_cmd(args), "harbor", "rollout",
         "--llm-url", vllm_url,
         "--model", args.model,
         "--dataset", args.split,
@@ -406,6 +431,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--hf-sandbox-openenv"]:
+        del sys.argv[1]
+        _run_hf_sandbox_openenv()
+        sys.exit(0)
+
     try:
         main()
     finally:
