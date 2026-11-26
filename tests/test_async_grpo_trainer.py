@@ -884,6 +884,17 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            reward_funcs=str_length_reward,
+            train_dataset=dataset,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+
     @pytest.mark.parametrize(
         "model_id",
         [

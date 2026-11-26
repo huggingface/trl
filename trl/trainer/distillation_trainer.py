@@ -52,6 +52,7 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
@@ -465,6 +466,11 @@ class DistillationTrainer(_BaseTrainer):
             eos_token_ids = [eos_token_ids]
         if self._tokenizer.eos_token_id not in eos_token_ids:
             eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if train_dataset is not None and is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                eos_token_ids = [*eos_token_ids, end_of_turn_id]
         self.eos_token_ids = eos_token_ids
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
@@ -1025,7 +1031,7 @@ class DistillationTrainer(_BaseTrainer):
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
                 logprobs=None,  # distillation trains on the teacher distribution, not sampled logprobs
-                generation_kwargs=args.generation_kwargs,
+                generation_kwargs={"stop_token_ids": self.eos_token_ids, **(args.generation_kwargs or {})},
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 

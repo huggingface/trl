@@ -67,11 +67,13 @@ from transformers.utils import is_peft_available
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
     supports_tool_calling,
 )
+from ..data_utils import is_conversational
 from ..generation.async_vllm_client import AsyncVLLMClient
 from ..generation.weight_transfer import WeightTransferClient
 from ..import_utils import is_aiohttp_available, is_jmespath_available
@@ -1776,6 +1778,8 @@ class AsyncRolloutLoop:
             "repetition_penalty": 1.0,
             "n": 1,
             "logprobs": self.num_sampler_logprobs,
+            # vLLM stops on the checkpoint's own eos only (#8566)
+            "stop_token_ids": list(self.eos_token_ids),
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
             # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
             # per request keeps them independent.
@@ -3336,6 +3340,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             raise TypeError(
                 f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
+
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            if end_of_turn_id is not None and end_of_turn_id not in self.eos_token_ids:
+                self.eos_token_ids = [*self.eos_token_ids, end_of_turn_id]
 
         # Vision dataset detection
         dataset_sample = next(iter(train_dataset))

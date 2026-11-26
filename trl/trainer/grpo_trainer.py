@@ -62,6 +62,7 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
@@ -939,6 +940,12 @@ class GRPOTrainer(_BaseTrainer):
                 f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
 
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            if end_of_turn_id is not None and end_of_turn_id not in self.eos_token_ids:
+                self.eos_token_ids = [*self.eos_token_ids, end_of_turn_id]
+
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
         # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
@@ -1199,7 +1206,7 @@ class GRPOTrainer(_BaseTrainer):
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
                 logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
-                generation_kwargs=args.generation_kwargs,
+                generation_kwargs={"stop_token_ids": self.eos_token_ids, **(args.generation_kwargs or {})},
                 return_sampling_mask=return_sampling_mask,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
