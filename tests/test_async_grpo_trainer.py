@@ -79,6 +79,7 @@ from trl.trainer.async_grpo_trainer import (
     tree_maps,
     tree_ngram_shift_right,
     tree_ple_short_conv,
+    tree_qsa_select_tokens,
     validate_lora_for_vllm_sync,
 )
 from trl.trainer.base_trainer import _BaseTrainer
@@ -4641,7 +4642,8 @@ def _tree_kwargs(packed):
 class TestTreeQwen4Exp(TrlTestCase):
     """
     Tree packing stores the tokens that samples share once, then each sample continues on its own branch. The n-gram
-    shift and the short conv must read earlier tokens along that branch, as if the sample ran alone.
+    shift, the short conv and the QSA token selection must read earlier tokens along that branch, as if the sample ran
+    alone.
 
     The four samples (0 is EOS) form this tree:
 
@@ -4724,6 +4726,58 @@ class TestTreeQwen4Exp(TrlTestCase):
             # The model pads one sequence on the left with (kernel_size - 1) * dilation zeros
             alone = torch.nn.functional.silu(conv1d(torch.nn.functional.pad(hidden_states[..., path], (4, 0))))
             torch.testing.assert_close(output[..., path], alone)
+
+    @pytest.mark.parametrize(("block_topk", "compress_ratio"), [(1, 2), (2, 4), (1, 8)])  # 8: no full block at all
+    def test_sparse_selection_matches_each_sample_alone(self, block_topk, compress_ratio):
+        """
+        QSA lets each token (the query) attend to a few earlier tokens of its own sample only. It cuts the sample into
+        blocks of `compress_ratio` tokens, keeps the `block_topk` blocks that score best against the query, and always
+        keeps the tokens after the last full block.
+
+        Example with `compress_ratio=2`, `block_topk=1`, and the query at position 9 (B's 302):
+
+        ```
+            B's positions:            0 1 | 7 8 | 9
+            blocks:                   (0 1)  (7 8)    tail: 9
+            is allowed to attend to:  the block that scores higher, (0 1) or (7 8), and the tail 9
+        ```
+
+        In the table below, row 9 says yes at 0 1 9 or at 7 8 9, and no everywhere else.
+
+        The tree version runs once on the whole row and gives a 13 x 13 yes/no table: row = query, column = token. For
+        each sample, the table at its positions must equal the model's table for that sample run alone, and its rows
+        must say no everywhere else.
+        """
+        modeling = pytest.importorskip("transformers.models.qwen4_exp.modeling_qwen4_exp")
+        packed = _tree_row(self.SAMPLES).pack()
+        n = len(packed["input_ids"])
+        torch.manual_seed(0)
+        q, keys = torch.randn(1, n, 2, 8), torch.randn(1, n, 8)  # one query (2 heads) and one key per position
+        cos, sin = torch.randn(2, 1, n, 8)  # any values: both sides read the same ones per position
+        norm = torch.nn.RMSNorm(8)
+
+        def alone(path):
+            """The model's table for one sample run alone."""
+            layer = SimpleNamespace(  # all the model's selection reads from its layer
+                k_layernorm=norm,
+                block_topk=block_topk,
+                compress_ratio=compress_ratio,
+                token_budget=block_topk * compress_ratio,
+                index_head_dim=8,
+            )
+            causal = torch.ones(len(path), len(path), dtype=torch.bool).tril()[None, None]  # a sample sees its past
+            hidden_states = torch.empty(1, len(path), 1)  # only its shape is read
+            table = modeling.Qwen4ExpTextQSAIndexer._select_tokens(
+                layer, hidden_states, q[:, path], keys[:, path], cos[:, path], sin[:, path], causal
+            )
+            return table[0, 0]
+
+        table = tree_qsa_select_tokens(q, keys, cos, sin, norm, block_topk, compress_ratio, _tree_kwargs(packed))[0, 0]
+
+        for path in self.PATHS:
+            rows = table[path]  # the sample's queries, against all n tokens
+            assert rows[:, path].tolist() == alone(path).tolist()  # same picks inside the sample
+            assert rows.sum() == rows[:, path].sum()  # nothing picked outside the sample
 
 
 def _finalize(turns, rollout_id="r0"):
