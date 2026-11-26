@@ -1391,11 +1391,11 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         ),
         pytest.param(
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv4_1_flash_chat_template),
-            id="deepseekv4.1-flash",
+            id="deepseek-v4.1-flash",
         ),
         pytest.param(
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", deepseekv4_1_flash_1017_chat_template),
-            id="deepseekv4.1-flash-1017",
+            id="deepseek-v4.1-flash-1017",
         ),
         pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
