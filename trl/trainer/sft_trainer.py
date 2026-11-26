@@ -23,7 +23,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -48,6 +47,7 @@ from transformers.utils import is_peft_available
 
 from ..chat_template_utils import (
     clone_chat_template,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_stop_token_trained,
 )
@@ -433,11 +433,6 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
     def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        if self.pad_to_multiple_of is not None:
-            raise NotImplementedError(
-                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data."
-            )
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
@@ -509,6 +504,38 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 token_type_ids = token_type_ids[:, : self.max_length]
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+        # Pad to a multiple of `pad_to_multiple_of` if necessary
+        if self.pad_to_multiple_of is not None:
+            input_ids = pad(
+                list(input_ids),
+                padding_value=self.processor.tokenizer.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                list(attention_mask), padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            completion_mask = pad(
+                list(completion_mask),
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = pad(
+                    list(token_type_ids),
+                    padding_value=0,
+                    padding_side="right",
+                    pad_to_multiple_of=self.pad_to_multiple_of,
+                )
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = pad(
+                    list(mm_token_type_ids),
+                    padding_value=0,
+                    padding_side="right",
+                    pad_to_multiple_of=self.pad_to_multiple_of,
+                )
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
@@ -1028,6 +1055,19 @@ class SFTTrainer(_BaseTrainer):
                 "`{% generation %}...{% endgeneration %}`."
             )
 
+        # Stop generation on the chat template's end-of-turn token (#8564)
+        if (is_conversational(dataset_sample) or is_conversational_from_value(dataset_sample)) and (
+            self.chat_template or processing_class.chat_template
+        ):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class, chat_template=self.chat_template)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         if args.completion_only_loss is None:
@@ -1227,11 +1267,9 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
-        # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in
-        # accelerate 1.12.0.
+        # `position_ids` in every batch to preserve each token's global position.
         if (
-            Version(accelerate.__version__) >= Version("1.12.0")
-            and self.accelerator.parallelism_config is not None
+            self.accelerator.parallelism_config is not None
             and self.accelerator.parallelism_config.sp_enabled
             and isinstance(self.data_collator, DataCollatorForLanguageModeling)
         ):
@@ -1240,8 +1278,7 @@ class SFTTrainer(_BaseTrainer):
         # Under DeepSpeed sequence parallelism (Ulysses/ALST), `Trainer` reduces the model's own loss across ranks,
         # which is the fused LM head's negative log-likelihood
         if (
-            Version(accelerate.__version__) >= Version("1.12.0")
-            and self.accelerator.parallelism_config is not None
+            self.accelerator.parallelism_config is not None
             and self.accelerator.parallelism_config.sp_backend == "deepspeed"
             and self.accelerator.parallelism_config.sp_enabled
             and (args.loss_type == "dft" or self.compute_loss_func is not None or args.label_smoothing_factor > 0)
@@ -1633,9 +1670,7 @@ class SFTTrainer(_BaseTrainer):
 
         weighted_aux_loss = None
         try:
-            parallelism_config = (
-                self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
-            )
+            parallelism_config = self.accelerator.parallelism_config
             if (
                 parallelism_config is not None
                 and parallelism_config.sp_backend == "deepspeed"

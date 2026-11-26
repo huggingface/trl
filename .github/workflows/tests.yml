@@ -262,7 +262,7 @@ jobs:
           # Oldest supported Python, so every pin is exactly the pyproject floor
           uv pip install \
             ".[dev]" \
-            "accelerate==1.11.0" \
+            "accelerate==1.12.0" \
             "bitsandbytes==0.45.2" \
             "datasets==4.7.0" \
             "deepspeed==0.18.6" \
