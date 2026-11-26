@@ -279,6 +279,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--capture-port", type=int, default=8300)
     p.add_argument("--vllm-port", type=int, default=8000)
     p.add_argument("--vllm-device", default="0")
+    p.add_argument("--vllm-lora", action="store_true", help="Serve and sync LoRA adapters in vLLM")
+    p.add_argument("--lora-r", type=int)
+    p.add_argument("--max-staleness", type=int)
     p.add_argument("--train-device", default="1")  # the trainer; NCCL weight sync needs the same host
     p.add_argument("--max-model-len", type=int, default=131072)
     p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3.5; use `hermes` for most others
@@ -287,7 +290,25 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--data-root", default=str(DATA_ROOT))
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--tunnel-check-s", type=float, default=60.0)  # 0 disables the supervisor
-    return p.parse_known_args()
+    args, forwarded = p.parse_known_args()
+    if args.vllm_lora:
+        if args.lora_r is None or args.lora_r <= 0:
+            p.error("--vllm-lora requires a positive --lora-r")
+        if args.max_staleness is None:
+            args.max_staleness = 4
+        if args.max_staleness < 0:
+            p.error("--max-staleness must be nonnegative")
+        from trl.trainer.async_grpo_trainer import round_lora_rank
+
+        try:
+            args.vllm_max_lora_rank = round_lora_rank(args.lora_r)
+        except ValueError as e:
+            p.error(str(e))
+    if args.lora_r is not None:
+        forwarded += ["--lora-r", str(args.lora_r)]
+    if args.max_staleness is not None:
+        forwarded += ["--max-staleness", str(args.max_staleness)]
+    return args, forwarded
 
 
 def main() -> None:
@@ -357,7 +378,7 @@ def main() -> None:
     vllm_log = logs / "vllm.log"
     vllm_cmd = [
         "vllm", "serve", args.model,
-        "--host", "0.0.0.0",
+        "--host", "127.0.0.1",
         "--port", str(args.vllm_port),
         "--trust-remote-code",
         "--max-model-len", str(args.max_model_len),
@@ -370,7 +391,15 @@ def main() -> None:
         "--gpu-memory-utilization", "0.9",
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
-    proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})
+    vllm_env = {"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"}
+    if args.vllm_lora:
+        vllm_cmd += [
+            "--enable-lora",
+            "--max-lora-rank", str(args.vllm_max_lora_rank),
+            "--max-loras", str(args.max_staleness + 2),
+        ]  # fmt: skip
+        vllm_env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "1"
+    proc = _spawn(vllm_cmd, vllm_log, env=vllm_env)
     wait_for_vllm(vllm_url, proc, vllm_log)
 
     if not args.skip_warm:

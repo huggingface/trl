@@ -44,6 +44,10 @@ HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every 
 python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Path(t.__file__); p.write_text(p.read_text().replace('tar -xzf ', 'tar --no-same-owner -xzf '))"
 ```
 
+For models and LoRA targets vLLM can serve, pass `--vllm-lora --lora-r 32` to sync only
+the adapter. The launcher sizes the serving cache from `--lora-r` and `--max-staleness`.
+By default, the trainer syncs merged weights.
+
 ## Capture contract
 
 - OpenEnv supplies a validated `TrainingTrace` with required masks. Prompt and completion IDs come
