@@ -1977,10 +1977,9 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
                 Version(transformers.__version__) < Version("5.23.0"),
                 reason="Inkling 2 models were introduced in transformers-5.23.0",
             ),
-            pytest.mark.xfail(
-                raises=AssertionError,
-                reason="Inkling 2's FP8 experts return NaN on float32 activations (huggingface/kernels-community#1372)",
-                strict=False,  # the backward check stays within tolerance on some GPUs (L40S)
+            pytest.mark.skip(
+                reason="The FP8 kernel accesses memory out of bounds on the tiny expert dims "
+                "(huggingface/kernels-community#1372)"
             ),
         ],
     ),
