@@ -57,6 +57,14 @@ DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepsee
 
 DeepSeek-V3.2-Exp chat template (as shipped by `deepseek-ai/DeepSeek-V3.2-Exp` and `deepseek-ai/DeepSeek-V3.2-Exp-Base`). Same as `deepseekv3_v5.jinja`, except for the conditions under which it opens an assistant turn and renders the generation prompt (also after a system-only prompt, and the generation prompt also after an assistant message that is not a prefix). Like it, trainers swap in `deepseekv3_v6_training.jinja` when tools are enabled, and response parsing uses `deepseekv3_v5_template`.
 
+### `deepseekv4_1_flash.jinja`
+
+DeepSeek-V4.1-Flash chat template (as shipped by `deepseek-ai/DeepSeek-V4.1-Flash`).
+
+### `deepseekv4_1_flash_1017.jinja`
+
+DeepSeek-V4.1-Flash-1017 chat template (as shipped by `deepseek-ai/DeepSeek-V4.1-Flash-1017`). Same as `deepseekv4_1_flash.jinja`, plus `thinking=` and more `reasoning_effort` values as aliases, `content_blocks` messages, a user message holding only tool results no longer counted as a new user turn, and tool call arguments required to be dicts.
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -453,6 +461,14 @@ Patched DeepSeek-V3.1 template. Same diff as `deepseekv3_v2_training.jinja`, app
 ### `deepseekv3_v6_training.jinja`
 
 Patched DeepSeek-V3.2-Exp template. Same diff as `deepseekv3_v5_training.jinja`, applied to `deepseekv3_v6.jinja`.
+
+### `deepseekv4_1_flash_training.jinja`
+
+Patched DeepSeek-V4.1-Flash template. Diff vs `deepseekv4_1_flash.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`, and, as `deepseekv4_1_flash_1017.jinja` does, don't count a user message holding only tool results as a new user turn: in the original, appending a tool result re-renders the earlier assistant turn without its thinking block when `drop_thinking` is on, which breaks prefix-preservation.
+
+### `deepseekv4_1_flash_1017_training.jinja`
+
+Patched DeepSeek-V4.1-Flash-1017 template. Diff vs `deepseekv4_1_flash_1017.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`.
 
 ### `diffusion_gemma_training.jinja`
 

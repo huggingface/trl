@@ -54,6 +54,8 @@ REPOS = [
     "deepseek-ai/DeepSeek-V3-0324",
     "deepseek-ai/DeepSeek-V3.1",
     "deepseek-ai/DeepSeek-V3.2-Exp",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017",
     "google/diffusiongemma-26B-A4B-it",
     "google/gemma-2-2b-it",
     "google/gemma-3-4b-it",

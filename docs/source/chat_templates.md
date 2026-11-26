@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324, DeepSeek-V3.1 and DeepSeek-V3.2-Exp), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, Inkling (including Inkling-Small), LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, OLMo 3 Instruct (including the SFT, DPO and 3.1 checkpoints), OLMo 3 Think (including the SFT, DPO and 32B checkpoints), Phi-3, Phi-3.5, Phi-4, Phi-4-mini (including Phi-4-mini-flash-reasoning), Phi-4-mini-reasoning, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528, DeepSeek-V3-0324, DeepSeek-V3.1 and DeepSeek-V3.2-Exp), DeepSeek-V4.1-Flash (including DeepSeek-V4.1-Flash-1017), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4 (including Gemma-4-12B, Gemma-4-26B-A4B and Gemma-4-31B), GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, Inkling (including Inkling-Small), LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Muse Spark Open, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, OLMo 3 Instruct (including the SFT, DPO and 3.1 checkpoints), OLMo 3 Think (including the SFT, DPO and 32B checkpoints), Phi-3, Phi-3.5, Phi-4, Phi-4-mini (including Phi-4-mini-flash-reasoning), Phi-4-mini-reasoning, Qwen2-VL, Qwen2.5 (including the base checkpoints), Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolLM2, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -80,6 +80,14 @@ Patched DeepSeek-V3.1 template (used by `deepseek-ai/DeepSeek-V3.1` and `deepsee
 ### `deepseekv3_v6_training.jinja`
 
 Patched DeepSeek-V3.2-Exp template (used by `deepseek-ai/DeepSeek-V3.2-Exp` and `deepseek-ai/DeepSeek-V3.2-Exp-Base`). Same diff as `deepseekv3_v5_training.jinja`, applied to `deepseekv3_v6.jinja`.
+
+### `deepseekv4_1_flash_training.jinja`
+
+Patched DeepSeek-V4.1-Flash template (used by `deepseek-ai/DeepSeek-V4.1-Flash`). Diff vs `deepseekv4_1_flash.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`, and, as `deepseekv4_1_flash_1017.jinja` does, don't count a user message holding only tool results as a new user turn: in the original, appending a tool result re-renders the earlier assistant turn without its thinking block when `drop_thinking` is on, which breaks prefix-preservation.
+
+### `deepseekv4_1_flash_1017_training.jinja`
+
+Patched DeepSeek-V4.1-Flash-1017 template (used by `deepseek-ai/DeepSeek-V4.1-Flash-1017`). Diff vs `deepseekv4_1_flash_1017.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`.
 
 ### `diffusion_gemma_training.jinja`
 
