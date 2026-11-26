@@ -17,9 +17,10 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "openenv[harbor]==0.7.0",
-#     "vllm>=0.22,<0.26",
+#     "vllm>=0.29,<0.30",
 #     "datasets>=3.2",
 #     "trackio",
+#     "peft",
 #     "kernels",
 #     "transformers>=5.2",
 #     "huggingface_hub>=1.22",
@@ -268,6 +269,14 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
         print(f"[launcher] template warm after {took:.0f}s", flush=True)
 
 
+def patch_harbor_untar() -> None:
+    """HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every verifier upload fails."""
+    import harbor.environments.tar_transfer as tar_transfer
+
+    path = pathlib.Path(tar_transfer.__file__)
+    path.write_text(path.read_text().replace("tar -xzf ", "tar --no-same-owner -xzf "))
+
+
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default="Qwen/Qwen3.5-2B")
@@ -348,6 +357,8 @@ def main() -> None:
     if os.environ.get("PYTHONPATH"):
         env_path += os.pathsep + os.environ["PYTHONPATH"]
 
+    if args.sandbox == "hf-sandbox":
+        patch_harbor_untar()
     server_log = logs / "openenv-server.log"
     public_proxy = start_harbor_server(args, server_log)
     if args.tunnel_check_s > 0:
@@ -368,6 +379,7 @@ def main() -> None:
         "--return-tokens-as-token-ids",
         "--logprobs-mode", "processed_logprobs",
         "--gpu-memory-utilization", "0.9",
+        "--limit-mm-per-prompt", '{"image": 0, "video": 0}',  # text only, skips the vision encoder profiling
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
     proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})
