@@ -2733,6 +2733,40 @@ class TestGlm4MoeTrainingChatTemplate:
         assert trained.strip() == "It is blue.<|user|>"
 
 
+@require_vision
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.11.0"),
+    reason="DiffusionGemma was introduced in transformers 5.11.0",
+)
+class TestDiffusionGemmaTrainingChatTemplate:
+    @pytest.mark.parametrize("with_tool_response", [False, True])
+    def test_assistant_masks_tool_call_trains_stop_token(self, with_tool_response):
+        # The model ends a tool call with `<|tool_response>`, a stop token of the checkpoint: it must be trained (#8567)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion")
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "Multiply 3 by 4."},
+            {"role": "assistant", "tool_calls": tool_calls},
+        ]
+        if with_tool_response:
+            messages += [
+                {"role": "tool", "name": "multiply", "content": "12"},
+                {"role": "assistant", "content": "It is 12."},
+            ]
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=get_training_chat_template(tokenizer),
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+        )
+        trained = tokenizer.decode(
+            [t for t, m in zip(result["input_ids"], result["assistant_masks"], strict=True) if m]
+        )
+        assert trained.startswith("<|tool_call>call:multiply{a:3,b:4}<tool_call|><|tool_response>")
+        assert "response:multiply" not in trained
+
+
 class TestNamedChatTemplateVariants:
     # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
     def test_has_generation_markers(self):
