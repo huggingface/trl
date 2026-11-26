@@ -58,9 +58,9 @@ Add a bucket so checkpoints and the model cache outlive the container, which is 
 ```sh
 hf jobs uv run --flavor h200x2 --image huggingface/trl \
     --secrets HF_TOKEN --secrets E2B_API_KEY --timeout 7200s \
-    --volume type=bucket,source=<user>/<bucket>,mount_path=/data \
+    -v hf://buckets/ORG/BUCKET:/training-outputs \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/launcher.py \
-    -- --max-steps 20
+    -- --data-root /training-outputs --max-steps 20
 ```
 
 Anything after `--` is forwarded to the training script, so its full argument surface is available:
@@ -88,7 +88,6 @@ import uuid
 TRAIN_SCRIPT_URL = (
     "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py"
 )
-DATA_ROOT = pathlib.Path(os.environ.get("DATA_ROOT", "/data"))
 OPENENV_REVISION = "v0.7.0"
 
 _children: list[subprocess.Popen] = []
@@ -284,7 +283,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3.5; use `hermes` for most others
     p.add_argument("--reasoning-parser", default="qwen3")
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
-    p.add_argument("--data-root", default=str(DATA_ROOT))
+    p.add_argument("--data-root", type=pathlib.Path, default=os.environ.get("DATA_ROOT") or None)
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--tunnel-check-s", type=float, default=60.0)  # 0 disables the supervisor
     return p.parse_known_args()
@@ -295,16 +294,16 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    data_root = pathlib.Path(args.data_root)
-    mounted = data_root.is_dir()
-    if not mounted:
-        print(f"[launcher] WARNING {data_root} is not a directory, so no bucket is mounted: checkpoints", flush=True)
-        print("[launcher] WARNING and the model cache will NOT survive this job.", flush=True)
+    data_root = args.data_root
+    if data_root is None:
         data_root = pathlib.Path("./out")
+        print("[launcher] using ./out for ephemeral logs and checkpoints", flush=True)
+    elif not data_root.is_dir():
+        raise RuntimeError(f"--data-root {data_root} is not a directory. Check the Job volume mount.")
+    else:
+        os.environ.setdefault("HF_HOME", str(data_root / "hf-cache"))
     logs = data_root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
-    if mounted:
-        os.environ.setdefault("HF_HOME", str(data_root / "hf-cache"))
 
     for tool in ("openenv", "vllm", "git"):
         if shutil.which(tool) is None:
