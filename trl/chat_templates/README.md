@@ -163,7 +163,7 @@ Original Inkling chat template (as shipped by `thinkingmachines/Inkling`, `think
 
 ### `laguna.jinja`
 
-Original Laguna chat template (as shipped by `poolside/Laguna-XS.2`). Wraps turns in `<user>` / `<assistant>` tags and writes tool calls in the same format as `glm4moe.jinja` (`<tool_call>name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>`). The generation prompt pre-fills `<think>` with `enable_thinking=True` and `</think>` otherwise. The template already has `{% generation %}` markers and is prefix-preserving, so it needs no training template. Response parsing uses `laguna_template`.
+Original Laguna chat template (as shipped by `poolside/Laguna-XS.2`). Wraps turns in `<user>` / `<assistant>` tags and writes tool calls in the same format as `glm4moe.jinja` (`<tool_call>name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>`). The generation prompt pre-fills `<think>` with `enable_thinking=True` and `</think>` otherwise. Response parsing uses `laguna_template`.
 
 ### `laguna_v2.jinja`
 
