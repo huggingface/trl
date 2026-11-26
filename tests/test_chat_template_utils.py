@@ -70,6 +70,9 @@ from trl.chat_template_utils import (
     muse_glimmer_v2_chat_template,
     muse_spark_v2_chat_template,
     muse_spark_v3_chat_template,
+    olmo3_instruct_chat_template,
+    olmo3_instruct_v2_chat_template,
+    olmo3_instruct_v3_chat_template,
     olmo3_think_chat_template,
     olmo3_think_v2_chat_template,
     olmo3_think_v3_chat_template,
@@ -1869,6 +1872,30 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ),
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            id="olmo3-instruct",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            id="olmo3-instruct-v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+            id="olmo3-instruct-v3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 was introduced in transformers>=4.57.0",
+            ),
+        ),
+        pytest.param(
             ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_think_chat_template),
             id="olmo3-think",
             marks=pytest.mark.skipif(
@@ -2139,6 +2166,14 @@ class TestGetTrainingChatTemplate:
             # These Gemma 4 revisions pre-fill an empty thought channel in the generation prompt when thinking is off.
             # The training template renders it in the final model turn too, so that the turn continues the prompt.
             assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -2169,6 +2204,13 @@ class TestGetTrainingChatTemplate:
         elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
             # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # Same terminator as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -2197,6 +2239,14 @@ class TestGetTrainingChatTemplate:
             # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content.
             # gemma4_v10 renders the reasoning of the final model turn instead, so it has none.
             assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -2240,6 +2290,14 @@ class TestGetTrainingChatTemplate:
         elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
             # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
@@ -2276,6 +2334,14 @@ class TestGetTrainingChatTemplate:
         elif tokenizer_name in _GEMMA4_EMPTY_THOUGHT:
             # Same empty thought channel as in test_behavior_unchanged_single_user_and_final_assistant_plain_content
             assert after == before.replace("<|turn>model\n", "<|turn>model\n<|channel>thought\n<channel|>")
+        elif tokenizer_name in (
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v2_chat_template),
+            ("trl-internal-testing/tiny-Olmo3ForCausalLM", olmo3_instruct_v3_chat_template),
+        ):
+            # OLMo 3 Instruct closes the last assistant turn with the EOS token instead of `<|im_end|>`. The training
+            # template closes every assistant turn with `<|im_end|>\n`, so that it is prefix-preserving.
+            assert after == before.removesuffix("<|endoftext|>") + "<|im_end|>\n"
         else:
             assert before == after
 
