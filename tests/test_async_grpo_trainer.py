@@ -4396,7 +4396,7 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
 
 
 _INKLING2_BEFORE_5_24 = pytest.mark.skipif(
-    Version(transformers.__version__) < Version("5.24.0"),
+    Version(transformers.__version__) < Version("5.24.0.dev0"),
     reason="Tree packing Inkling 2 needs get_relative_distance, introduced in transformers-5.24.0",
 )
 
