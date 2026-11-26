@@ -182,6 +182,14 @@ class TestDPOTrainer(TrlTestCase):
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                id="glm-moe-dsa",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
