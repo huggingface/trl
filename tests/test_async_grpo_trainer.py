@@ -76,6 +76,9 @@ from trl.trainer.async_grpo_trainer import (
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
+    tree_maps,
+    tree_ngram_shift_right,
+    tree_ple_short_conv,
     validate_lora_for_vllm_sync,
 )
 from trl.trainer.base_trainer import _BaseTrainer
@@ -4628,6 +4631,91 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
             )
+
+
+def _tree_kwargs(packed):
+    """The `tree_*` tensors of a packed row, as the model receives them."""
+    return {key: value for key, value in packed.items() if key.startswith("tree_")}
+
+
+class TestTreeQwen4Exp(TrlTestCase):
+    """
+    Tree packing stores the tokens that samples share once, then each sample continues on its own branch. The n-gram
+    shift and the short conv must read earlier tokens along that branch, as if the sample ran alone.
+
+    The four samples (0 is EOS) form this tree:
+
+        101 → 102 ┬→ 103 → 201 ┬→ 202            A
+                  │            └→ 202 → 401      C
+                  └→ 103 → 301 → 302             B
+        500 → 0 → 501                            D
+
+    laid out as one row:
+
+        position  0    1    2    3    4    5    6    7    8    9    10   11   12
+        token     101  102  103  201  202  202  401  103  301  302  500  0    501
+
+    A position predicts the next token, so it is shared only if the next token is too: 103 and 202 appear twice.
+    """
+
+    SAMPLES = [
+        _tree_sample([101, 102, 103, 201, 202], n_prompt=3),  # sample A: prompt 101 102 103, answer 201 202
+        _tree_sample([101, 102, 103, 301, 302], n_prompt=3),  # sample B: same prompt, other answer
+        _tree_sample([101, 102, 103, 201, 202, 401], n_prompt=3),  # sample C: like A, then continues with 401
+        _tree_sample([500, 0, 501], n_prompt=1),  # sample D: unrelated, and 0 is EOS
+    ]
+    PATHS = [[0, 1, 2, 3, 4], [0, 1, 7, 8, 9], [0, 1, 2, 3, 5, 6], [10, 11, 12]]  # each sample's row positions
+
+    def test_prev_follows_each_sample(self):
+        packed = _tree_row(self.SAMPLES).pack()
+
+        prev = tree_maps(_tree_kwargs(packed))["prev"]
+
+        assert packed["input_ids"].tolist() == [101, 102, 103, 201, 202, 202, 401, 103, 301, 302, 500, 0, 501]
+        for path in self.PATHS:
+            assert prev[path].tolist() == [-1] + path[:-1]
+
+    def test_ngram_shift_matches_each_sample_alone(self):
+        """
+        Each token becomes the token `shift` steps back in its own sample, or EOS (0) at the start or past an EOS. With
+        the row of the class docstring:
+
+            shift 1, position 5 (C):   5 → 3 = 201     not 4 = 202 (A)
+            shift 1, position 7 (B):   7 → 1 = 102     not 6 = 401 (C)
+            shift 2, position 12 (D):  12 → 11 = EOS, so 0
+        """
+        modeling = pytest.importorskip("transformers.models.qwen4_exp.modeling_qwen4_exp")
+        model_shift = modeling.Qwen4ExpTextNGramEmbedding._shift_right_ignore_eos
+        layer = SimpleNamespace(eos_token_id=0)  # the model's shift only reads `eos_token_id` from its layer
+        packed = _tree_row(self.SAMPLES).pack()
+        row = packed["input_ids"].unsqueeze(0)
+
+        for shift in (1, 2):
+            shifted = tree_ngram_shift_right(row, shift, 0, _tree_kwargs(packed))
+
+            for path in self.PATHS:
+                assert shifted[:, path].tolist() == model_shift(layer, row[:, path], shift).tolist()
+
+    def test_short_conv_matches_each_sample_alone(self):
+        """
+        With 3 taps and dilation 2, each position reads itself and the positions 2 and 4 steps back in its own sample,
+        or zeros before the start of the sample. With the row of the class docstring:
+
+            position 6 (C):   6 → 3 → 1       not 6 → 4 → 2 (4 is A's)
+            position 9 (B):   9 → 7 → 0       not 9 → 7 → 5 (5 is C's)
+            position 12 (D):  12 → 10 → zero  (D starts at 10)
+        """
+        packed = _tree_row(self.SAMPLES).pack()
+        torch.manual_seed(0)
+        conv1d = torch.nn.Conv1d(4, 4, kernel_size=3, dilation=2, groups=4)  # depthwise and dilated, like the model's
+        hidden_states = torch.randn(1, 4, len(packed["input_ids"]))
+
+        output = tree_ple_short_conv(hidden_states, conv1d, _tree_kwargs(packed))
+
+        for path in self.PATHS:
+            # The model pads one sequence on the left with (kernel_size - 1) * dilation zeros
+            alone = torch.nn.functional.silu(conv1d(torch.nn.functional.pad(hidden_states[..., path], (4, 0))))
+            torch.testing.assert_close(output[..., path], alone)
 
 
 def _finalize(turns, rollout_id="r0"):

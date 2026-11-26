@@ -48,6 +48,7 @@ from typing import Any, Protocol, TypeAlias
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -353,6 +354,86 @@ def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
 
 
 TREE_ATTENTION = "tree_fa3"
+
+
+# (the last row's `tree_cu_seqlens_q`, its maps): every layer asks for the maps of the same row, and building them
+# costs a host sync
+_MAPS = None
+
+
+def tree_maps(tree):
+    """
+    The row's maps, by row position:
+    - `prev`: the position just before it on its own path, or `-1` at the start of a path.
+
+    Example: segments `[0, 1]` (a root), `[2, 3]` and `[4]` (both children of the first) give `prev = [-1, 0, 1, 2, 1]`.
+    """
+    global _MAPS
+    if _MAPS is not None and _MAPS[0] is tree["tree_cu_seqlens_q"]:
+        return _MAPS[1]
+    cu_seqlens_q = tree["tree_cu_seqlens_q"].long()
+    starts, ends = cu_seqlens_q[:-1], cu_seqlens_q[1:]  # each segment's first position, and one past its last
+    parents = tree["tree_segment_parents"].long()  # each segment's parent segment, -1 at a root
+
+    prev = torch.arange(int(ends[-1]), device=starts.device) - 1  # inside a segment: the position to the left
+    prev[starts] = torch.where(parents >= 0, ends[parents] - 1, -1)  # at a segment start: the parent's last position
+
+    _MAPS = (tree["tree_cu_seqlens_q"], {"prev": prev})
+    return _MAPS[1]
+
+
+def _step_back(prev: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    """Each position moved one step back along its path; `-1` (already past the start) stays `-1`."""
+    return torch.where(positions >= 0, prev[positions.clamp_min(0)], -1)
+
+
+def tree_ngram_shift_right(token_ids: torch.Tensor, shift: int, eos_token_id: int, tree) -> torch.Tensor:
+    """
+    The token `shift` steps back on each position's own path, or EOS where the walk passes the start of the path or
+    meets an EOS: the model's `_shift_right_ignore_eos`, along paths instead of along the row.
+
+    `token_ids` is `(batch, context + n)`: the model puts `context` EOS columns before the row's `n` tokens.
+    """
+    if shift == 0:
+        return token_ids
+    prev = tree_maps(tree)["prev"]
+    n = prev.numel()
+    tokens = token_ids[:, -n:]  # (batch, n)
+    is_eos = tokens == eos_token_id
+
+    source = torch.arange(n, device=prev.device)  # where each position's walk is
+    valid = torch.ones_like(is_eos)
+    for _ in range(shift):
+        source = _step_back(prev, source)
+        valid &= (source >= 0) & ~is_eos[:, source.clamp_min(0)]
+    shifted = torch.where(valid, tokens[:, source.clamp_min(0)], eos_token_id)
+
+    output = torch.full_like(token_ids, eos_token_id)  # the context columns stay EOS
+    output[:, -n:] = shifted
+    return output
+
+
+def tree_ple_short_conv(hidden_states: torch.Tensor, conv1d: torch.nn.Conv1d, tree) -> torch.Tensor:
+    """
+    `silu(conv1d(hidden_states))` for the model's dilated depthwise `conv1d`, along paths instead of along the row.
+
+    With 3 taps and dilation 3, a position reads itself, the position 3 steps back on its path and the one 6 steps
+    back. A step past the start of the path reads zeros, as the left padding does for one plain sequence.
+    `hidden_states` is `(batch, channels, n)`.
+    """
+    prev = tree_maps(tree)["prev"]
+    weight = conv1d.weight[:, 0, :]  # (channels, taps): depthwise, so one filter per channel
+
+    output = torch.zeros_like(hidden_states)
+    source = torch.arange(prev.numel(), device=prev.device)  # the last tap reads the position itself
+    for tap in reversed(range(weight.shape[-1])):
+        tap_input = hidden_states[..., source.clamp_min(0)].masked_fill(source < 0, 0)
+        output += tap_input * weight[:, tap].view(1, -1, 1)
+        for _ in range(conv1d.dilation[0]):  # the tap before reads `dilation` steps further back
+            source = _step_back(prev, source)
+    if conv1d.bias is not None:
+        output += conv1d.bias.view(1, -1, 1)
+    return F.silu(output)
 
 
 @cache
