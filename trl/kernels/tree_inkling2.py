@@ -14,29 +14,37 @@
 
 from contextvars import ContextVar
 from functools import cache, wraps
-from itertools import pairwise
 
 import torch
-from torch.utils.checkpoint import checkpoint
+from torch.nn.attention.flex_attention import and_masks, create_block_mask
+from transformers.integrations.flex_attention import compile_friendly_flex_attention, get_flex_attention_lse_kwargs
+from transformers.utils import is_torch_greater_or_equal
 
 from .tree_paths import tree_path_sources
 
 
 _packed_forward = ContextVar("inkling2_packed_forward", default=False)
+_compiled_create_block_mask = torch.compile(create_block_mask)
 
 
 class Inkling2Tree:
-    def __init__(self, n_tokens, cu_q, cu_k, kv_index, parents, conv_width):
-        q_offsets, k_offsets = torch.stack((cu_q, cu_k)).tolist()
-        self.segments = list(zip(pairwise(q_offsets), pairwise(k_offsets), strict=True))
-        self.kv_index = kv_index
+    def __init__(self, cu_q, parents, depths, position_ids, conv_width):
+        n_tokens = position_ids.numel()
+        tokens = torch.arange(n_tokens, device=cu_q.device)
+        segments = torch.arange(len(parents), device=cu_q.device)
+        segment = segments.repeat_interleave(cu_q.diff(), output_size=n_tokens)
+
+        # A segment's descendants follow it contiguously in depth-first order, up to the next segment no deeper than
+        # it. A key is then seen by the queries from itself to the end of its segment's subtree.
+        stop = (segments[None] > segments[:, None]) & (depths[None] <= depths[:, None])
+        subtree_end = cu_q[torch.where(stop.any(1), stop.int().argmax(1), len(parents))]
+        self.reach = subtree_end[segment].int()
+        self.position = position_ids.view(-1).int()
+        self.block_masks = {}
 
         # Prefix each segment with its convolution history: the tokens before its first one on its path, oldest
         # first. Past the root they read a zero entry, at `n_tokens`.
         history = conv_width - 1
-        tokens = torch.arange(n_tokens, device=cu_q.device)
-        segments = torch.arange(len(parents), device=cu_q.device)
-        segment = segments.repeat_interleave(cu_q.diff(), output_size=n_tokens)
         self.conv_keep = tokens + (segment + 1) * history
         sources = tree_path_sources(cu_q, parents, n_tokens, conv_width)
         before = sources[cu_q[:-1].long(), 1:].flip(1)
@@ -45,56 +53,55 @@ class Inkling2Tree:
         history_slots = (cu_q[:-1] + segments * history)[:, None] + torch.arange(history, device=cu_q.device)
         self.conv_gather[history_slots] = before.masked_fill(before < 0, n_tokens)
 
-    def attention(self, eager_attention, module, query, key, value, scaling, bias, sinks, sliding_window):
-        def attend(query, key, value, bias, sinks, query_start, key_start):
-            q_positions = torch.arange(query.size(2), device=query.device) + query_start
-            k_positions = torch.arange(key.size(2), device=query.device) + key_start
-            distance = q_positions[:, None] - k_positions
-            extent = bias.size(-1)
-            index = distance.clamp(0, extent - 1).expand(*bias.shape[:2], -1, -1)
-            position_bias = bias.gather(-1, index)
-            position_bias = position_bias.masked_fill((distance < 0) | (distance >= extent), 0)
-            visible = distance >= 0
-            if sliding_window is not None:
-                visible = visible & (distance < sliding_window)
-            mask = query.new_zeros(distance.shape).masked_fill(~visible, -torch.inf)
-            output, _ = eager_attention(
-                module, query, key, value, mask, scaling, position_bias=position_bias, sinks=sinks
+    def block_mask(self, sliding_window):
+        """The row's tree mask, built once and shared by every layer with the same window."""
+        if sliding_window not in self.block_masks:
+            reach, position = self.reach, self.position
+
+            def tree(b, h, q_idx, kv_idx):
+                return (kv_idx <= q_idx) & (q_idx < reach[kv_idx])
+
+            def window(b, h, q_idx, kv_idx):
+                return position[q_idx] - position[kv_idx] < sliding_window
+
+            mask_mod = tree if sliding_window is None else and_masks(tree, window)
+            n_tokens = position.numel()
+            self.block_masks[sliding_window] = _compiled_create_block_mask(
+                mask_mod, None, None, n_tokens, n_tokens, device=position.device
             )
-            return output
+        return self.block_masks[sliding_window]
 
-        # Bound the eager attention tile, and recompute large segments instead of retaining their scores.
-        outputs = []
-        chunk_size = 128
-        bias = bias.transpose(1, 2)
-        for (q_start, q_end), (k_start, k_end) in self.segments:
-            path_index = self.kv_index[k_start:k_end]
-            path_key = key.index_select(2, path_index)
-            path_value = value.index_select(2, path_index)
-            prefix = len(path_index) - (q_end - q_start)
-            window = sliding_window if sliding_window is not None else len(path_index)
-            recompute = len(path_index) * (q_end - q_start) > chunk_size**2
+    def attention(self, module, query, key, value, scaling, relative_logits, sinks, sliding_window):
+        """
+        Inkling 2's attention over the tree in one FlexAttention call: the relative bias is a `score_mod` reading the
+        `(batch, heads, tokens, extent)` profiles at each pair's distance along its path, and the sinks rescale the
+        output by the mass they leave to the keys.
+        """
+        position, extent = self.position, relative_logits.size(-1)
 
-            for start in range(q_start, q_end, chunk_size):
-                end = min(start + chunk_size, q_end)
-                path_start = max(0, prefix + start - q_start - window + 1)
-                path_end = prefix + end - q_start
-                args = (
-                    query[:, :, start:end],
-                    path_key[:, :, path_start:path_end],
-                    path_value[:, :, path_start:path_end],
-                    bias[:, :, start:end],
-                    sinks[:, :, start:end],
-                    prefix + start - q_start,
-                    path_start,
-                )
-                outputs.append(
-                    checkpoint(attend, *args, use_reentrant=False, preserve_rng_state=False)
-                    if recompute
-                    else attend(*args)
-                )
+        def relative_bias(score, b, h, q_idx, kv_idx):
+            distance = position[q_idx] - position[kv_idx]
+            bias = relative_logits[b, h, q_idx, distance.clamp(0, extent - 1)]
+            return score + torch.where(distance < extent, bias, 0)
 
-        return torch.cat(outputs, dim=1), None
+        # FlexAttention's kernels need a head dim of at least 16: zero columns change neither the scores nor the output
+        head_dim = value.size(-1)
+        pad = max(16 - head_dim, 0)
+        query, key, value = (torch.nn.functional.pad(x, (0, pad)) for x in (query, key, value))
+        output, aux = compile_friendly_flex_attention(
+            query,
+            key,
+            value,
+            training=module.training,
+            score_mod=relative_bias,
+            block_mask=self.block_mask(sliding_window),
+            scale=scaling,
+            enable_gqa=True,
+            **get_flex_attention_lse_kwargs(True),
+        )
+        lse = aux.lse if is_torch_greater_or_equal("2.9.0") else aux
+        output = output[..., :head_dim] * torch.sigmoid(lse - sinks.squeeze(-1)).unsqueeze(-1).to(output.dtype)
+        return output.transpose(1, 2), None
 
 
 def _patch_convolution(cls):
@@ -161,11 +168,10 @@ def patch_tree_inkling2(model_type):
         packed = "tree_kv_index" in kwargs
         if packed:
             kwargs["tree_inkling2"] = Inkling2Tree(
-                kwargs["position_ids"].size(-1),
                 kwargs["tree_cu_seqlens_q"],
-                kwargs["tree_cu_seqlens_k"],
-                kwargs["tree_kv_index"],
                 kwargs["tree_segment_parents"],
+                kwargs["tree_segment_depths"],
+                kwargs["position_ids"],
                 self.config.conv_kernel_size,
             )
             kwargs["attention_mask"] = dict(full_attention=None, sliding_attention=None, linear_attention=None)
@@ -186,14 +192,13 @@ def patch_tree_inkling2(model_type):
         if relative_distance is not None:
             return bias_forward(self, hidden_states, relative_distance, position_ids)
         relative_states = self.linear(hidden_states).view(*hidden_states.shape[:-1], self.num_heads, -1)
-        return self.norm(relative_states, position_ids) @ self.proj
+        return (self.norm(relative_states, position_ids) @ self.proj).transpose(1, 2)
 
     @wraps(eager_attention)
     def tree_attention(module, query, key, value, attention_mask, scaling, tree_inkling2=None, **kwargs):
         if tree_inkling2 is None:
             return eager_attention(module, query, key, value, attention_mask, scaling, **kwargs)
         return tree_inkling2.attention(
-            eager_attention,
             module,
             query,
             key,
