@@ -373,7 +373,7 @@ def main() -> None:
     proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})
     wait_for_vllm(vllm_url, proc, vllm_log)
 
-    if not args.skip_warm:
+    if args.sandbox != "hf-sandbox" and not args.skip_warm:
         warm_sandbox_template(args, vllm_url, logs)
 
     script = pathlib.Path("async_grpo_harbor.py")

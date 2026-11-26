@@ -100,6 +100,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import pathlib
 import uuid
@@ -204,6 +205,52 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def check_task_images(split: str, rows: list[dict]) -> None:
+    import tomllib
+
+    from openenv.harbor.tasks import resolve_task_dirs
+
+    task_dirs = resolve_task_dirs(split)
+    for row in rows:
+        task_dir = task_dirs[row["task_index"]]
+        with (task_dir / "task.toml").open("rb") as config:
+            image = tomllib.load(config).get("environment", {}).get("docker_image")
+        if not image:
+            raise RuntimeError(
+                f"HF Sandbox task {task_dir.name!r} in {split!r} is missing [environment].docker_image in task.toml"
+            )
+
+
+def check_hf_sandbox_rollout(factory: HarborSessionFactory, row: dict) -> None:
+    task = f"{row['task_name']} (index {row['task_index']})"
+    print(f"Checking HF Sandbox rollout for {task} ...", flush=True)
+    session = factory.create(row["prompt"], seed=0)
+    try:
+        timed_out = False
+        try:
+            status = session.wait_for_completion()
+        except TimeoutError:
+            status = 0
+            timed_out = True
+        result = session.result
+        if result is None:
+            raise RuntimeError(f"HF Sandbox preflight failed for {task}: no rollout result")
+        timed_out = timed_out or getattr(result, "exception_type", None) == "AgentTimeoutError"
+        if (status and not timed_out) or result.reward is None or not math.isfinite(result.reward):
+            detail = result.error or " | ".join(result.findings)
+            detail = detail or (f"rollout exited with status {status}" if status else "no finite verifier reward")
+            raise RuntimeError(f"HF Sandbox preflight failed for {task}: {detail}")
+        if not result.trainable or result.n_trainable_tokens <= 0:
+            raise RuntimeError(f"HF Sandbox preflight failed for {task}: no trainable tokens")
+        try:
+            session.fetch_training_trace()
+        except ValueError as exc:
+            raise RuntimeError(f"HF Sandbox preflight failed for {task}: {exc}") from exc
+        print(f"HF Sandbox preflight passed: reward={result.reward:g}, tokens={result.n_trainable_tokens}", flush=True)
+    finally:
+        session.close()
+
+
 def main() -> None:
     args = parse_args()
     stamp = os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
@@ -225,9 +272,18 @@ def main() -> None:
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
-    metadata_factory = factory()
+    metadata_factory = factory(sampling={"temperature": args.temperature})
     try:
-        dataset = Dataset.from_list(metadata_factory.prompt_rows())
+        rows = metadata_factory.prompt_rows()
+        if not rows:
+            raise RuntimeError(f"No training tasks selected from {args.split!r}")
+        if args.sandbox == "hf-sandbox":
+            from urllib.parse import urlparse
+
+            if urlparse(args.server).hostname in {"127.0.0.1", "localhost", "::1"}:
+                check_task_images(args.split, rows)
+            check_hf_sandbox_rollout(metadata_factory, rows[0])
+        dataset = Dataset.from_list(rows)
     finally:
         # The pinned OpenEnv factory has no public close method.
         if metadata_factory._env is not None:
