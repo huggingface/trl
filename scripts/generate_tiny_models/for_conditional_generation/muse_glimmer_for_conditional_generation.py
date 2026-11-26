@@ -50,7 +50,7 @@ text_config = {
 vision_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
-    "num_attention_heads": 4,
+    "num_attention_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "intermediate_size": 32,
     # Same idea on the vision side, where the window/full alternation plays the role of the sliding/full one.
     "layer_types": ["window_attention", "full_attention"],

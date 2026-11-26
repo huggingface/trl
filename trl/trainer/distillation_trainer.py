@@ -24,7 +24,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -75,6 +75,7 @@ from .utils import (
     get_config_model_id,
     identity,
     model_accepts_images,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -104,6 +105,13 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
+
+
+class _SupportsReset(Protocol):
+    def reset(self, **kwargs) -> str | None: ...
+
+
+EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 def _chunked_divergence_loss(
@@ -305,6 +313,22 @@ class DistillationTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. Tool-result tokens are excluded from the loss, but they count toward
+            `max_completion_length`, which is the budget for the whole episode. If the environment defines a
+            `get_reward` method taking no argument and returning a `float`, it is called once per rollout and only
+            logged, never used in the loss, so an expensive `get_reward` adds to the time of every step.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     loss_is_scaled_for_ga = True
@@ -339,6 +363,7 @@ class DistillationTrainer(_BaseTrainer):
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -456,6 +481,15 @@ class DistillationTrainer(_BaseTrainer):
             if tid != self._tokenizer.unk_token_id:
                 self._video_pad_token_id = tid
 
+        if environment_factory is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are using 'environment_factory', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Tools
         if tools:
             if not Version(transformers.__version__) >= Version("5.0.0"):
@@ -463,6 +497,13 @@ class DistillationTrainer(_BaseTrainer):
                     "Using tools with DistillationTrainer requires transformers version 5.0.0 or higher. Please "
                     "upgrade transformers with `pip install --upgrade transformers` to use this feature."
                 )
+        if environment_factory:
+            if not Version(transformers.__version__) >= Version("5.2.0"):
+                raise ImportError(
+                    "Using `environment_factory` with DistillationTrainer requires transformers version 5.2.0 or "
+                    "higher. Please upgrade transformers with `pip install --upgrade transformers` to use this feature."
+                )
+        if tools or environment_factory:
             # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
             # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
             if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
@@ -476,12 +517,75 @@ class DistillationTrainer(_BaseTrainer):
                     "The provided chat template does not support tool calling. The template must be able to render a "
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
-            # Async tools are deferred to a future PR; reject them now rather than fail cryptically in the tool loop.
-            if any(inspect.iscoroutinefunction(tool) for tool in tools):
-                raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
-        self.tools = tools or []
-        # Tools are constant across examples, so the tool dict is built once here.
-        self._tool_dict = {tool.__name__: tool for tool in self.tools}
+
+        # Set up the environments and extract their methods to be used as tools.
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to an environment
+
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
+
+        # Environment classes that define `get_reward`, only logged after each rollout
+        self._env_reward_types = []
+        if self.environment_factories is not None:
+            # The environment an example uses is only known at batch time (it depends on the data). Here we just probe
+            # one instance of each environment to validate its `reset` method and extract its tool methods, used to
+            # render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across batches;
+            # the probe seeds the pool so it is not wasted. The pool grows only when a batch needs more concurrent
+            # instances of an environment than have been created so far, preserving the "construct once, reset often"
+            # contract even when batches mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used where only the presence of a tool matters (chat template validation, async check, tool metrics);
+            # the per-example schema is rendered in `_tokenize_prompts`.
+            self.tools = list(tools)
+            for name, factory in self.environment_factories.items():
+                instance = factory()
+                has_reset = False
+                has_reward = False
+                methods = []
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
+                    if member_name == "reset":
+                        has_reset = True
+                    elif member_name == "get_reward":
+                        has_reward = True
+                    elif not member_name.startswith("_"):
+                        methods.append(getattr(instance, member_name))
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                    )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+                # One entry per env class, since a dict factory may map several names to the same class
+                if has_reward and type(instance) not in self._env_reward_types:
+                    if inspect.iscoroutinefunction(instance.get_reward):
+                        raise ValueError(
+                            "Async `get_reward` is not yet supported by `DistillationTrainer`. Define a synchronous "
+                            "`get_reward`."
+                        )
+                    self._env_reward_types.append(type(instance))
+        else:
+            self.tools = tools
+
+        # Async tools are deferred to a future PR; reject them now rather than fail cryptically in the tool loop.
+        if any(inspect.iscoroutinefunction(tool) for tool in self.tools):
+            raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
+
+        # The per-rollout environment instances and tool dicts both depend on the batch (which environment each example
+        # selects), so they are built in `_generate_and_score_completions`, right before generation.
+        self.environments = None
 
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
@@ -931,7 +1035,7 @@ class DistillationTrainer(_BaseTrainer):
         # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
         # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images", "teacher_id"]
+            self._signature_columns = ["prompt", "image", "images", "teacher_id", "environment"]
 
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
@@ -1073,6 +1177,34 @@ class DistillationTrainer(_BaseTrainer):
                                 has_images = True
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
+
+            if self.environment_factories is not None:
+                # Tools differ per example across environments, so render each prompt with its own tool schema.
+                prompt_ids = []
+                multimodal_fields = {}
+                for prompt, name in zip(prompts, self._batch_environments, strict=True):
+                    tokenized = self.processing_class.apply_chat_template(
+                        conversation=[prompt],
+                        tools=self._env_tools[name] or None,  # `or None`: Llama bug: tool boilerplate for tools=[]
+                        chat_template=self.chat_template,
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        **self.chat_template_kwargs,
+                    )
+                    prompt_ids.append(tokenized["input_ids"][0])
+                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+                    for k, v in tokenized.items():
+                        if k not in ("input_ids", "attention_mask"):
+                            multimodal_fields.setdefault(k, []).append(v)
+                # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
+                # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
+                # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
+                multimodal_fields = {
+                    k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                    for k, v in multimodal_fields.items()
+                }
+                return prompt_ids, images, multimodal_fields
 
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
@@ -1256,7 +1388,12 @@ class DistillationTrainer(_BaseTrainer):
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
             raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -1282,6 +1419,7 @@ class DistillationTrainer(_BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
+                tool_dict = self._tool_dicts[idx_with_tool]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 tool_call_results = []
@@ -1291,8 +1429,8 @@ class DistillationTrainer(_BaseTrainer):
                         function = tool_call["function"]
                         name = function["name"]
                         try:
-                            if name in self._tool_dict:
-                                tool_call_results.append((name, self._tool_dict[name](**function["arguments"])))
+                            if name in tool_dict:
+                                tool_call_results.append((name, tool_dict[name](**function["arguments"])))
                             else:
                                 raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
@@ -1450,9 +1588,15 @@ class DistillationTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions
+            # Decode post-tool completions, each with the tools its prompt was rendered with
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[self._batch_environments[i]] for i in idxs_with_tool]
+            else:
+                per_prompt_tools = [self.tools] * len(idxs_with_tool)
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=self.tools)
+                parse_response(
+                    self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=per_prompt_tools[idx]
+                )
                 if ids
                 else {}
                 for idx, ids in enumerate(post_tool_ids)
@@ -1491,8 +1635,13 @@ class DistillationTrainer(_BaseTrainer):
                     getattr(self._tokenizer, "response_template", None) is not None  # new-style
                     or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
                 ):
+                    # Parse each completion with the tools its prompt was rendered with
+                    if self.environment_factories is not None:
+                        per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+                    else:
+                        per_prompt_tools = [self.tools] * len(prompts)
                     completions = [
-                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=self.tools)]
+                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=per_prompt_tools[i])]
                         for i, ids in enumerate(completion_ids)
                     ]
                 else:
@@ -1638,6 +1787,7 @@ class DistillationTrainer(_BaseTrainer):
     # Name kept aligned with GRPO/RLOO for consistency; distillation has no rewards, so nothing is actually scored.
     def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, Any]:
         device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
 
@@ -1650,6 +1800,61 @@ class DistillationTrainer(_BaseTrainer):
                         f"Example has `teacher_id={teacher_id!r}`, which is not among the teachers passed to "
                         f"`teacher_model`. Expected one of: {list(self.teacher_models)}."
                     )
+
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+            self.environments = []
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because each example's environment, hence its tools, is data-dependent.
+        if self.tools:
+            self._tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    environment = self.environments[i]
+                    methods = [
+                        getattr(environment, member_name)
+                        for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                    ]
+                self._tool_dicts.append({tool.__name__: tool for tool in self._standalone_tools + methods})
+
+        if self.environments:
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
+                # `teacher_id` is a control field in multi-teacher mode, so it is not forwarded to `reset` either.
+                if self._multi_teacher:
+                    reset_kwargs = {k: v for k, v in reset_kwargs.items() if k != "teacher_id"}
+                observation = environment.reset(**reset_kwargs)
+                if observation is None:
+                    continue
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
+                    observation = [{"type": "text", "text": observation}]
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -1678,6 +1883,16 @@ class DistillationTrainer(_BaseTrainer):
             ]
 
         prompt_ids_list, completion_ids_list, tool_mask_list, images, tool_images = self._generate(prompts)
+
+        # Distillation has no reward: `get_reward` is logged under the environment's class name, never used in the loss
+        for env_type in self._env_reward_types:
+            env_rewards = [e.get_reward() if type(e) is env_type else None for e in self.environments]
+            env_rewards = torch.tensor(
+                [torch.nan if r is None else r for r in env_rewards], dtype=torch.float32, device=device
+            )
+            env_rewards = self.accelerator.gather(env_rewards)
+            self._metrics[mode][f"rewards/{env_type.__name__}/mean"].append(torch.nanmean(env_rewards).item())
+            self._metrics[mode][f"rewards/{env_type.__name__}/std"].append(nanstd(env_rewards).item())
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1725,11 +1940,15 @@ class DistillationTrainer(_BaseTrainer):
             image_inputs = super()._prepare_inputs(image_inputs)
             forward_kwargs = dict(image_inputs)
         elif images is not None:
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+            else:
+                per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=tools or None, **self.chat_template_kwargs
                 )["prompt"]
-                for prompt in prompts
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)

@@ -603,7 +603,6 @@ class GRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
-        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
@@ -611,9 +610,10 @@ class GRPOTrainer(_BaseTrainer):
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-                reward_model_revisions[i] = model_init_kwargs.get("revision")
+                # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+                reward_model_init_kwargs = {k: v for k, v in model_init_kwargs.items() if k != "revision"}
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func, num_labels=1, **model_init_kwargs
+                    reward_func, num_labels=1, **reward_model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
@@ -650,7 +650,6 @@ class GRPOTrainer(_BaseTrainer):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(
                         get_config_model_id(reward_func.config),
-                        revision=reward_model_revisions[i],
                         trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class.pad_token_id is None:
@@ -692,8 +691,7 @@ class GRPOTrainer(_BaseTrainer):
             if not Version(transformers.__version__) >= Version("5.2.0"):
                 raise ImportError(
                     "Using `environment_factory` with GRPOTrainer requires transformers version 5.2.0 or higher. "
-                    "Please install transformers from the main branch with `pip install "
-                    "git+https://github.com/huggingface/transformers.git@main` to use this feature."
+                    "Please upgrade transformers with `pip install --upgrade transformers` to use this feature."
                 )
         if tools or environment_factory:
             # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
@@ -2063,7 +2061,12 @@ class GRPOTrainer(_BaseTrainer):
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
             raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(
         self, prompts, prompt_ids, completion_ids, completions, logprobs, sampling_mask, images, multimodal_fields

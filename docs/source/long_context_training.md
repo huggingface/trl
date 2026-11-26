@@ -178,7 +178,6 @@ There are two ways to run that exchange, context parallelism (CP) and Ulysses se
 | What gets split | the tokens | the attention heads |
 | How far it scales | any number of GPUs | up to the number of KV heads, 8 here |
 | Attention | SDPA, causal only | SDPA or FlashAttention |
-| Requires | accelerate 1.11 | accelerate 1.12, DeepSpeed 0.18.1 |
 
 **On FSDP2, use CP.** Each GPU keeps its own slice, and the other slices come to it in turn, so every token eventually sees every earlier token.
 
