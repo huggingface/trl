@@ -4976,7 +4976,7 @@ class TestGenerateOneTurn(TrlTestCase):
                 if url.endswith("/version"):
                     body = {"version": version}
                 elif url.endswith("/server_info"):
-                    body = {"vllm_config": {"model_config": model_config}}
+                    body = {"vllm_config": {"model_config": {"logprobs_mode": "processed_logprobs", **model_config}}}
                 else:
                     body = {"paths": paths}
 
