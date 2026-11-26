@@ -102,13 +102,15 @@ import argparse
 import logging
 import os
 import pathlib
+import sys
 import uuid
 from functools import partial
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
 from peft import LoraConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, TrainerCallback
+from transformers.trainer_callback import PrinterCallback
 
 from trl import AsyncGRPOConfig
 from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer, HarnessRolloutOutcome
@@ -119,6 +121,17 @@ logger = logging.getLogger(__name__)
 
 W_TOOL_EFFICIENCY = 0.3
 TOOL_BUDGET = 15.0
+
+
+class StepLogCallback(TrainerCallback):
+    """Keep optimizer progress readable in non-interactive logs."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not state.is_world_process_zero or not logs or "loss" not in logs:
+            return
+        fields = ("loss", "grad_norm", "reward", "batch/trained_tokens_per_step", "frac_zero_std_groups")
+        metrics = " ".join(f"{key}={logs[key]:.4g}" for key in fields if logs.get(key) is not None)
+        print(f"step {state.global_step}/{state.max_steps} {metrics}", flush=True)
 
 
 def tool_efficiency(n_tool_calls: int | None) -> float | None:
@@ -241,6 +254,7 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
 
+    non_interactive = not sys.stdout.isatty()
     config = AsyncGRPOConfig(
         output_dir=output_dir,
         save_strategy="steps",
@@ -272,6 +286,7 @@ def main() -> None:
         log_completions=True,
         num_completions_to_print=2,
         logging_steps=1,
+        disable_tqdm=non_interactive,
         seed=0,
     )
 
@@ -294,6 +309,9 @@ def main() -> None:
         rollout_reward_fn=harbor_reward,
         peft_config=peft_config,
     )
+    if non_interactive:
+        trainer.remove_callback(PrinterCallback)
+        trainer.add_callback(StepLogCallback())
     trainer.train()
     trainer.save_model()
 
