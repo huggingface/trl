@@ -57,10 +57,12 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, and `"teacher_id"`.
+            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, `"teacher_id"`, and
+            `"environment"`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation. With `tools`, it caps the
-            whole multi-turn completion after the prompt (all model turns plus tool results).
+            Maximum number of tokens to generate per completion during on-policy generation. With `tools` or
+            `environment_factory`, it caps the whole multi-turn completion after the prompt (all model turns plus tool
+            results).
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -145,7 +147,9 @@ class DistillationConfig(_BaseConfig):
             stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
             results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
             length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
-            otherwise).
+            otherwise). When the limit is reached, the tool calls of the last generated turn are not executed and the
+            completion ends with that turn, so a final tool call (for example one that submits an answer) is never
+            executed.
 
         > Parameters that control the logging
 
@@ -226,14 +230,15 @@ class DistillationConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', and 'teacher_id'."
+            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', 'teacher_id', and "
+            "'environment'."
         },
     )
     max_completion_length: int | None = field(
         default=512,
         metadata={
-            "help": "Maximum number of tokens to generate per completion. With `tools`, it caps the whole multi-turn "
-            "completion after the prompt (all model turns plus tool results)."
+            "help": "Maximum number of tokens to generate per completion. With `tools` or `environment_factory`, it "
+            "caps the whole multi-turn completion after the prompt (all model turns plus tool results)."
         },
     )
     ds3_gather_for_generation: bool = field(
@@ -383,7 +388,9 @@ class DistillationConfig(_BaseConfig):
             "generation stops when the model generates a response turn with no tool calls, when the completion "
             "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
             "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
-            "`max_position_embeddings` otherwise)."
+            "`max_position_embeddings` otherwise). When the limit is reached, the tool calls of the last generated "
+            "turn are not executed and the completion ends with that turn, so a final tool call (for example one "
+            "that submits an answer) is never executed."
         },
     )
 

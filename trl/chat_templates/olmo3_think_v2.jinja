@@ -1,0 +1,16 @@
+{% set has_system = messages|selectattr('role', 'equalto', 'system')|list|length > 0 %}{% if not has_system %}{{ '<|im_start|>system
+You are Olmo, a helpful AI assistant built by Ai2. Your date cutoff is December 2024, and your model weights are available at https://huggingface.co/allenai.<|im_end|>
+' }}{% endif %}{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system
+' + message['content'] }}{% if message.get('functions', none) is not none %}{{ ' <functions>' + message['functions'] + '</functions><|im_end|>
+' }}{% else %}{{ ' You do not currently have access to any functions. <functions></functions><|im_end|>
+' }}{% endif %}{% elif message['role'] == 'user' %}{% if message.get('functions', none) is not none %}{{ '<|im_start|>user
+' + message['content'] + '
+' + '<functions>' + message['functions'] + '</functions><|im_end|>
+' }}{% else %}{{ '<|im_start|>user
+' + message['content'] + '<|im_end|>
+' }}{% endif %}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant
+' }}{% if message.get('content', none) is not none %}{{ message['content'] }}{% endif %}{% if message.get('function_calls', none) is not none %}{{ '<function_calls>' + message['function_calls'] + '</function_calls>' }}{% endif %}{% if not loop.last %}{{ '<|im_end|>' + '
+' }}{% else %}{{ eos_token }}{% endif %}{% elif message['role'] == 'environment' %}{{ '<|im_start|>environment
+' + message['content'] + '<|im_end|>
+' }}{% endif %}{% if loop.last and add_generation_prompt %}{{ '<|im_start|>assistant
+<think>' }}{% endif %}{% endfor %}

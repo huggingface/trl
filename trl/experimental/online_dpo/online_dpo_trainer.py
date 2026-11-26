@@ -34,6 +34,7 @@ from torch.utils.data import IterableDataset
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     DataCollator,
     GenerationConfig,
@@ -59,7 +60,13 @@ from ...generation.vllm_client import VLLMClient
 from ...import_utils import is_vllm_available
 from ...models.utils import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, ensure_master_addr_port, get_callable_name, get_config_model_id
+from ...trainer.utils import (
+    disable_dropout_in_model,
+    ensure_master_addr_port,
+    get_callable_name,
+    get_config_model_id,
+    model_accepts_images,
+)
 from ..utils import DPODataCollatorWithPadding, create_reference_model, empty_cache, prepare_peft_model, truncate_right
 from .online_dpo_config import OnlineDPOConfig
 
@@ -73,7 +80,8 @@ if is_bitsandbytes_available():
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import LoraConfig, PeftConfig
+    from peft.tuners.lora import LoraLayer, ParamWrapper
 
 
 if is_vllm_available():
@@ -82,6 +90,33 @@ if is_vllm_available():
 
 
 logger = get_logger(__name__)
+
+
+@torch.no_grad()
+def _merge_lora(module: "LoraLayer", weight: torch.Tensor) -> torch.Tensor:
+    """
+    Merge the active adapters of a LoRA layer into the weight it adapts, out of place.
+
+    The training model is left untouched: merging into it and unmerging after the sync leaves rounding errors in the
+    frozen weight (#7423), and the unmerge can land before vLLM has read the merged weight (#8003).
+
+    Args:
+        module ([`~peft.tuners.lora.LoraLayer`]):
+            LoRA layer whose active adapters are merged.
+        weight (`torch.Tensor`):
+            Weight adapted by `module`, dequantized if it is quantized.
+
+    Returns:
+        `torch.Tensor`:
+            Merged weight, in the dtype of `weight`.
+    """
+    merged = weight
+    for adapter in module.active_adapters:
+        if adapter in module.lora_variant:  # e.g. DoRA
+            merged = module.lora_variant[adapter].merge_safe(module, adapter, merged)
+        elif adapter in module.lora_A or adapter in module.lora_embedding_A:
+            merged = merged + module.get_delta_weight(adapter)
+    return merged.to(weight.dtype)
 
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
@@ -128,7 +163,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
+            reuse the fine-tuned model. If `None`, the processing class is loaded from the model's name with
+            [`~transformers.AutoProcessor.from_pretrained`].
         reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
@@ -204,13 +240,13 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Process reward functions (convert strings to models, collect names)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 # Load model from string path
-                reward_model_revisions[i] = model_init_kwargs.get("revision")
+                # The policy's revision is a ref of the policy's repo, not of the reward model's (#8532)
+                reward_model_init_kwargs = {k: v for k, v in model_init_kwargs.items() if k != "revision"}
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func, num_labels=1, **model_init_kwargs
+                    reward_func, num_labels=1, **reward_model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
@@ -228,14 +264,11 @@ class OnlineDPOTrainer(_BaseTrainer):
                 raise ValueError("The number of reward processing classes must match the number of reward functions.")
 
         self.reward_processing_classes = []
-        for i, (reward_processing_class_i, reward_func) in enumerate(
-            zip(reward_processing_classes, reward_funcs, strict=True)
-        ):
+        for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs, strict=True):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class_i is None:
                     reward_processing_class_i = AutoTokenizer.from_pretrained(
                         reward_func.config._name_or_path,
-                        revision=reward_model_revisions[i],
                         trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class_i.pad_token_id is None:
@@ -258,10 +291,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the processing_class is provided
-        if processing_class is None:
-            raise ValueError("`processing_class` must be provided.")
-
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
@@ -283,9 +312,11 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 raise ValueError(
                     "You passed `model_init_kwargs` to the `OnlineDPOConfig`, but your model is already instantiated. "
@@ -293,6 +324,17 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
+
+        # Processing class
+        if processing_class is None:
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
+                get_config_model_id(model.config),
+                revision=model_revision,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
+            )
 
         # PEFT
         if peft_config is not None:
@@ -444,6 +486,16 @@ class OnlineDPOTrainer(_BaseTrainer):
                     "`pip install trl[vllm]` to use it."
                 )
 
+            # The weight sync sends vLLM the base weights with the LoRA deltas merged in, which other PEFT methods and
+            # LoRA biases don't fit
+            if is_peft_model(model) and any(
+                not isinstance(config, LoraConfig) or config.lora_bias for config in model.peft_config.values()
+            ):
+                raise ValueError(
+                    "vLLM generation with a PEFT model supports LoRA adapters without `lora_bias` only: the weight "
+                    "sync sends vLLM the base weights with the LoRA deltas merged in."
+                )
+
             if self.vllm_mode == "server":
                 if self.accelerator.is_main_process:
                     if args.vllm_server_base_url is not None:
@@ -467,13 +519,9 @@ class OnlineDPOTrainer(_BaseTrainer):
                 # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
                 # space for them.
                 # Configure vLLM parameters
-                vllm_quantization = None
                 if is_bitsandbytes_available():
                     for _, module in model.named_modules():
-                        if isinstance(module, bnb.nn.Linear4bit):
-                            vllm_quantization = "bitsandbytes"
-                            break
-                        elif isinstance(module, bnb.nn.Linear8bitLt):
+                        if isinstance(module, bnb.nn.Linear8bitLt):
                             raise ValueError("vLLM does not support in-flight 8-bit quantization.")
                 vllm_kwargs = {
                     "model": model.name_or_path,
@@ -488,7 +536,6 @@ class OnlineDPOTrainer(_BaseTrainer):
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
-                    "quantization": vllm_quantization,
                 }
                 # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap
                 # while asleep, so the colocated trainer could not use the memory that sleep frees.
@@ -782,12 +829,12 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         return completion_ids, prompt_ids
 
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module, lora_layers: dict):
         # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
         for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-            # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+            # Skip PEFT layers: they don’t exist in vLLM, and they are merged into the weights they adapt.
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
@@ -796,6 +843,8 @@ class OnlineDPOTrainer(_BaseTrainer):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
+            if param in lora_layers:
+                param = _merge_lora(lora_layers[param], param)
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
             param = param.full_tensor()
@@ -834,12 +883,15 @@ class OnlineDPOTrainer(_BaseTrainer):
             gather_if_zero3 = nullcontext
 
         if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
-            # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
+            # The weight each LoRA layer adapts, which vLLM receives with the adapters merged in
+            lora_layers = {
+                module.get_param() if isinstance(module, ParamWrapper) else module.get_base_layer().weight: module
+                for module in self.model.modules()
+                if isinstance(module, LoraLayer)
+            }
+            # With DeepSpeed ZeRO Stage 3, the full model is gathered at once, so that the adapters of each LoRA layer
+            # are gathered along with the weight they adapt.
             with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
-
                 # Update vLLM weights while parameters are gathered
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
@@ -851,13 +903,13 @@ class OnlineDPOTrainer(_BaseTrainer):
                             self.model
                         )  # use memory-efficient post-order traversal for FSDP
                     elif fsdp_version == 2:
-                        self._sync_fsdp2_params_to_vllm(self.model)
+                        self._sync_fsdp2_params_to_vllm(self.model, lora_layers)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
+                        # Skip PEFT layers: they don’t exist in vLLM, and they are merged into the weights they adapt.
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -868,13 +920,17 @@ class OnlineDPOTrainer(_BaseTrainer):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
+                        weight = param.data
+                        # vLLM holds the model unquantized, so bitsandbytes 4-bit weights are sent dequantized
+                        if is_bitsandbytes_available() and isinstance(param, bnb.nn.Params4bit):
+                            weight = bnb.functional.dequantize_4bit(param.data, param.quant_state)
+                        if param in lora_layers:
+                            weight = _merge_lora(lora_layers[param], weight)
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
+                            self.vllm_client.update_named_param(name, weight)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
+                            llm_model.load_weights([(name, weight)])
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
@@ -884,7 +940,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 if fsdp_version == 1:
                     self._sync_fsdp1_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
                 elif fsdp_version == 2:
-                    self._sync_fsdp2_params_to_vllm(self.model)
+                    self._sync_fsdp2_params_to_vllm(self.model, {})
             else:
                 for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
