@@ -19,30 +19,31 @@ from itertools import pairwise
 import torch
 from torch.utils.checkpoint import checkpoint
 
+from .tree_gated_delta_rule import tree_path_sources
+
 
 _packed_forward = ContextVar("inkling2_packed_forward", default=False)
 
 
 class Inkling2Tree:
-    def __init__(self, n_tokens, cu_q, cu_k, kv_index, conv_width):
+    def __init__(self, n_tokens, cu_q, cu_k, kv_index, parents, conv_width):
         q_offsets, k_offsets = torch.stack((cu_q, cu_k)).tolist()
         self.segments = list(zip(pairwise(q_offsets), pairwise(k_offsets), strict=True))
         self.kv_index = kv_index
 
-        tokens = torch.arange(n_tokens, device=cu_q.device)
-        lengths = cu_q.diff()
-        segments = torch.arange(len(lengths), device=cu_q.device)
-        segment = segments.repeat_interleave(lengths, output_size=n_tokens)
-
-        # Prefix each segment with its convolution history. Missing ancestors read a zero entry.
+        # Prefix each segment with its convolution history: the tokens before its first one on its path, oldest
+        # first. Past the root they read a zero entry, at `n_tokens`.
         history = conv_width - 1
-        expanded_segment = segments.repeat_interleave(lengths + history, output_size=n_tokens + len(lengths) * history)
+        tokens = torch.arange(n_tokens, device=cu_q.device)
+        segments = torch.arange(len(parents), device=cu_q.device)
+        segment = segments.repeat_interleave(cu_q.diff(), output_size=n_tokens)
         self.conv_keep = tokens + (segment + 1) * history
-        path_start = cu_k[1:] - lengths - history
-        offset = torch.arange(expanded_segment.numel(), device=cu_q.device)
-        offset = offset - (cu_q[:-1] + segments * history)[expanded_segment]
-        slots = path_start[expanded_segment] + offset
-        self.conv_gather = torch.where(slots >= cu_k[expanded_segment], kv_index[slots.clamp(min=0)], n_tokens)
+        sources = tree_path_sources(cu_q, parents, n_tokens, conv_width)
+        before = sources[cu_q[:-1].long(), 1:].flip(1)
+        self.conv_gather = tokens.new_empty(n_tokens + len(parents) * history)
+        self.conv_gather[self.conv_keep] = tokens
+        history_slots = (cu_q[:-1] + segments * history)[:, None] + torch.arange(history, device=cu_q.device)
+        self.conv_gather[history_slots] = before.masked_fill(before < 0, n_tokens)
 
     def attention(self, eager_attention, module, query, key, value, scaling, bias, sinks, sliding_window):
         def attend(query, key, value, bias, sinks, query_start, key_start):
@@ -164,6 +165,7 @@ def patch_tree_inkling2(model_type):
                 kwargs["tree_cu_seqlens_q"],
                 kwargs["tree_cu_seqlens_k"],
                 kwargs["tree_kv_index"],
+                kwargs["tree_segment_parents"],
                 self.config.conv_kernel_size,
             )
             kwargs["attention_mask"] = dict(full_attention=None, sliding_attention=None, linear_attention=None)

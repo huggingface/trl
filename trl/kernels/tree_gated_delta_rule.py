@@ -93,14 +93,16 @@ def tree_chunk_gated_delta_rule(chunk, query, key, value, g, beta, use_qk_l2norm
     return TreeGatedDeltaRule.apply(query, key, value, g, beta, plan, scale, use_qk_l2norm_in_kernel), None
 
 
-def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, **tree):
+def tree_path_sources(cu_seqlens, parents, n_tokens, width):
     """
-    Tree version of transformers' `causal_conv1d_fn` (`conv`, unused): depthwise causal convolution over a packed tree
-    `(1, channels, tokens)`. The window of a token runs back along its own root path, into its parent segments.
+    `(n_tokens, width)` indices: column `k` holds the token `k` steps back along each token's own root path, into its
+    parent segments, or `-1` once the walk passes the root. This is the window a causal convolution reads on a tree.
+
+    Example: segments `[0, 1]` (a root), `[2, 3]` and `[4]` (children of the first) give a second column
+    `[-1, 0, 1, 2, 1]`.
     """
-    cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
-    n_tokens, width = hidden_states.shape[-1], weight.shape[-1]
-    tokens = torch.arange(n_tokens, device=hidden_states.device)
+    parents = parents.long()
+    tokens = torch.arange(n_tokens, device=cu_seqlens.device)
     segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
         cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
     )
@@ -108,8 +110,17 @@ def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, 
     sources = [tokens]
     for _ in range(width - 1):
         sources.append(torch.where(sources[-1] >= 0, previous[sources[-1].clamp(min=0)], -1))
-    sources = torch.stack(sources, dim=1).int()
-    return TreeConv1d.apply(hidden_states, weight, bias, sources, cu_seqlens, activation in ("silu", "swish"))
+    return torch.stack(sources, dim=1)
+
+
+def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, **tree):
+    """
+    Tree version of transformers' `causal_conv1d_fn` (`conv`, unused): depthwise causal convolution over a packed tree
+    `(1, channels, tokens)`. The window of a token runs back along its own root path, into its parent segments.
+    """
+    cu_seqlens = tree["tree_cu_seqlens_q"]
+    sources = tree_path_sources(cu_seqlens, tree["tree_segment_parents"], hidden_states.shape[-1], weight.shape[-1])
+    return TreeConv1d.apply(hidden_states, weight, bias, sources.int(), cu_seqlens, activation in ("silu", "swish"))
 
 
 class TreeConv1d(torch.autograd.Function):
