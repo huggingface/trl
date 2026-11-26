@@ -1039,6 +1039,15 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            train_dataset=dataset,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+
     def _train_one_step_and_save(self, fsdp=False):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")

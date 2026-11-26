@@ -39,6 +39,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
+from ...chat_template_utils import get_chat_template_end_of_turn_token_id
 from ...data_utils import is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
@@ -330,6 +331,11 @@ class SDFTTrainer(_BaseTrainer):
             eos_token_ids = [eos_token_ids]
         if self._tokenizer.eos_token_id not in eos_token_ids:
             eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                eos_token_ids = [*eos_token_ids, end_of_turn_id]
         self.eos_token_ids = eos_token_ids
 
         self.max_prompt_length = args.max_prompt_length
@@ -428,7 +434,7 @@ class SDFTTrainer(_BaseTrainer):
                 min_p=args.min_p,
                 max_completion_length=self.max_completion_length,
                 logprobs=None,
-                generation_kwargs=args.generation_kwargs,
+                generation_kwargs={"stop_token_ids": self.eos_token_ids, **(args.generation_kwargs or {})},
             )
 
         # Per-rank read-only client to the same generation server for teacher scoring (weights are synced there by
