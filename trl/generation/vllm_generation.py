@@ -429,7 +429,10 @@ class VLLMGeneration:
                 # Feed identical seed for tp groups to ensure sampling results are the same across workers
                 seed=accelerator.process_index // self.tensor_parallel_size,
                 # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
-                max_num_batched_tokens=4096,
+                # vLLM < 0.35 crashes at warmup if this exceeds max_num_seqs * max_model_len (#8601)
+                max_num_batched_tokens=min(4096, self.max_num_seqs * self.max_model_length)
+                if self.max_model_length is not None
+                else 4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
                 trust_remote_code=self.trust_remote_code,
