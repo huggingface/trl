@@ -37,7 +37,7 @@ Generate traces with a teacher (no GPU, the teacher runs on Inference Providers)
 ```sh
 hf jobs uv run --flavor cpu-upgrade --timeout 4h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
-    --model qwen/qwen3.5-397b-a17b --llm-url https://router.huggingface.co/novita/v3/openai \
+    --model Qwen/Qwen3.5-397B-A17B \
     --dataset FineEnvs/SmolDataEnvs-harbor-train --exclude-datasets-of FineEnvs/SmolDataEnvs-harbor-eval \
     --num-tasks 640 --workers 12 --push-to <you>/smoldataenvs-rollouts --private --run-name teacher-397b
 ```
@@ -229,10 +229,20 @@ def main():
     api = HfApi()
     api.create_repo(args.push_to, repo_type="dataset", private=args.private, exist_ok=True)
 
+    # Real key lengths, so identifiers like `hf_hub_download` survive (`sk-` also needs a word start or an escaped
+    # newline before it, or a long hyphenated name would match), and a private key only within one JSON string, so a truncated one can't swallow
+    # the JSON around it.
+    secret = re.compile(
+        r"hf_[A-Za-z0-9]{30,}|(?:\b|(?<=\\[nrt]))sk-[A-Za-z0-9_\-]{20,}|ghp_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{16}"
+        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[^\"]*?-----END [A-Z ]*PRIVATE KEY-----"
+    )
+
     def upload(path: pathlib.Path):
+        # Results hold the agent's output, which can echo its environment: redact secrets before they leave the job.
+        text = secret.sub("<REDACTED>", path.read_text(errors="replace"))
         try:
             api.upload_file(
-                path_or_fileobj=path, path_in_repo=f"{run_name}/{path.name}", repo_id=args.push_to,
+                path_or_fileobj=text.encode(), path_in_repo=f"{run_name}/{path.name}", repo_id=args.push_to,
                 repo_type="dataset", commit_message=f"{run_name}: {path.name}",
             )  # fmt: skip
         except Exception as e:  # one failed upload shouldn't stop the run, the file is still on disk
@@ -252,7 +262,8 @@ def main():
     env = {
         **os.environ,
         "PYTHONPATH": f"{patch_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
-        "OPENENV_LLM_API_KEY": os.environ.get("HF_TOKEN", ""),
+        # A local vLLM needs no key, so the token only goes to the router when it is the endpoint.
+        "OPENENV_LLM_API_KEY": "EMPTY" if args.serve else os.environ.get("HF_TOKEN", ""),
         "PYTHONUNBUFFERED": "1",
     }
 
