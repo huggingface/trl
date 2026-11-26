@@ -57,6 +57,8 @@ import triton
 import triton.language as tl
 from packaging.version import Version
 
+from .tree_paths import tree_path_sources
+
 
 def tree_plan(tree):
     """
@@ -91,26 +93,6 @@ def tree_chunk_gated_delta_rule(chunk, query, key, value, g, beta, use_qk_l2norm
     scale = query.shape[-1] ** -0.5
     plan = tree_plan(tree)
     return TreeGatedDeltaRule.apply(query, key, value, g, beta, plan, scale, use_qk_l2norm_in_kernel), None
-
-
-def tree_path_sources(cu_seqlens, parents, n_tokens, width):
-    """
-    `(n_tokens, width)` indices: column `k` holds the token `k` steps back along each token's own root path, into its
-    parent segments, or `-1` once the walk passes the root. This is the window a causal convolution reads on a tree.
-
-    Example: segments `[0, 1]` (a root), `[2, 3]` and `[4]` (children of the first) give a second column
-    `[-1, 0, 1, 2, 1]`.
-    """
-    parents = parents.long()
-    tokens = torch.arange(n_tokens, device=cu_seqlens.device)
-    segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
-        cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
-    )
-    previous = torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
-    sources = [tokens]
-    for _ in range(width - 1):
-        sources.append(torch.where(sources[-1] >= 0, previous[sources[-1].clamp(min=0)], -1))
-    return torch.stack(sources, dim=1)
 
 
 def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, **tree):

@@ -19,7 +19,7 @@ from itertools import pairwise
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from .tree_gated_delta_rule import tree_path_sources
+from .tree_paths import tree_path_sources
 
 
 _packed_forward = ContextVar("inkling2_packed_forward", default=False)
