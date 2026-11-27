@@ -86,6 +86,7 @@ from trl.chat_template_utils import (
     phi4_mini_reasoning_chat_template,
     qwen2_5_base_chat_template,
     qwen2_5_v2_chat_template,
+    qwen3_6_chat_template,
     qwen3_6_v2_chat_template,
     qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
@@ -2014,8 +2015,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ],
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", qwen3_6_v2_chat_template),
-            id="qwen3.6-v2",
+            ("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", qwen3_6_chat_template),
+            id="qwen3.6-v1",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -2036,8 +2037,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ],
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_v2_chat_template),
-            id="qwen3.8-v2",
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", qwen3_8_chat_template),
+            id="qwen3.8-v1",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
