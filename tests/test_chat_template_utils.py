@@ -1968,6 +1968,9 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             id="qwen3-thinking-2507",
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", id="qwen3-coder"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template), id="qwen3-coder-v2"
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", id="qwen3-coder-next"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",

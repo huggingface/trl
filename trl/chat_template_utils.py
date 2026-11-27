@@ -1035,6 +1035,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_coder_chat_template,
         qwen3_coder_v2_chat_template,
         qwen3_coder_training_chat_template,
+        qwen3_coder_v2_training_chat_template,
         qwen3_coder_next_chat_template,
         qwen3_coder_next_training_chat_template,
     ]:
@@ -1556,6 +1557,10 @@ qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja"
 
 qwen3_coder_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_training.jinja").read_text(encoding="utf-8")
 
+qwen3_coder_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 qwen3_coder_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_next_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1887,6 +1892,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_coder_chat_template:
         return qwen3_coder_training_chat_template
+
+    if chat_template == qwen3_coder_v2_chat_template:
+        return qwen3_coder_v2_training_chat_template
 
     if chat_template == qwen3_coder_next_chat_template:
         return qwen3_coder_next_training_chat_template

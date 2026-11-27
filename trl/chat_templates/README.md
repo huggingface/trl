@@ -773,6 +773,10 @@ Patched Qwen3-Coder template. Diff vs `qwen3_coder.jinja`:
 
 Wrap assistant message output, including tool calls, with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `\n` after `<|im_start|>assistant` stays outside the markers, since the generation prompt already ends with it.
 
+### `qwen3_coder_v2_training.jinja`
+
+Patched original Qwen3-Coder template. Same diff as `qwen3_coder_training.jinja`, applied to `qwen3_coder_v2.jinja`.
+
 ### `qwen3_coder_next_training.jinja`
 
 Patched Qwen3-Coder-Next template. Same diff as `qwen3_coder_training.jinja`, applied to `qwen3_coder_next.jinja`.
