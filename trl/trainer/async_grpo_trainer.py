@@ -2935,14 +2935,15 @@ def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncGRPOCo
     # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
     # adapters can be named by in-flight requests at once. Each sync loads the new version before unloading the one
     # that just fell out of that window, so the server briefly holds one more — and vLLM does not reject the extra
-    # load, it silently evicts the oldest still-servable adapter.
-    min_loras = args.max_staleness + 2
+    # load, it silently evicts the oldest still-servable adapter. Even at `max_staleness=0` a request that started
+    # under the previous policy can still be in flight when it is retired, so at least two versions stay servable.
+    min_loras = max(args.max_staleness, 1) + 2
     if server_lora_config["max_loras"] < min_loras:
         raise ValueError(
             f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
             f"`max_staleness={args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
             f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
-            f"`--max-loras {min_loras}`, or lower `max_staleness`."
+            f"`--max-loras {min_loras}`."
         )
     return True
 
@@ -3997,7 +3998,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # adapter it requests from `model_version`, so bumping first would name one that is not loaded yet.
             self.vllm_client.load_lora_adapter(f"{self._lora_name}-v{version}", adapter_dir)
             self.vllm_client.resume()
-            stale_version = version - (self.args.max_staleness + 1)
+            # Move new requests to the new adapter before retiring any: at `max_staleness=0` the version that falls
+            # out of the window is the one the rollout worker names until it is told about the new one.
+            self.model_version = version
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
+            stale_version = version - (max(self.args.max_staleness, 1) + 1)
             if stale_version > 0:
                 self.vllm_client.unload_lora_adapter(f"{self._lora_name}-v{stale_version}")
             # The files outlive the unload by one sync: vLLM resolves `lora_path` lazily inside the engine, where
@@ -4005,9 +4011,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if stale_version > 1:
                 stale_dir = f"{self._lora_name}-v{stale_version - 1}"
                 shutil.rmtree(os.path.join(self._lora_dir, stale_dir), ignore_errors=True)
-            self.model_version = version
-            if self.rollout_worker:
-                self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
     def _save(self, output_dir=None, state_dict=None):

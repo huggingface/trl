@@ -590,6 +590,9 @@ class TransformersVLLMServer:
         on_load (`Callable[[str, str], None]`, *optional*):
             Called as `on_load(name, path)` the moment a load is accepted, before the response is returned: the one
             place a test can observe the trainer's state at load time.
+        on_unload (`Callable[[str], None]`, *optional*):
+            Called as `on_unload(name)` when an unload arrives, before the adapter is dropped: the one place a test can
+            observe the trainer's state at unload time.
     """
 
     def __init__(self, model_id: str, logprobs_mode: str = "processed_logprobs"):
@@ -605,6 +608,7 @@ class TransformersVLLMServer:
         self.evicted: list[str] = []
         self.paused = False
         self.on_load = None
+        self.on_unload = None
         # As `vllm serve --max-model-len 512`. The trainer sizes its micro-batches from it, and at the model's context
         # length, one would wait for about a thousand samples
         self.max_model_len = 512
@@ -712,6 +716,8 @@ class TransformersVLLMServer:
         if path == "/v1/load_lora_adapter" and self.lora_config is not None:
             return self.load_lora_adapter(body["lora_name"], body["lora_path"], body.get("load_inplace", False))
         if path == "/v1/unload_lora_adapter" and self.lora_config is not None:
+            if self.on_unload is not None:
+                self.on_unload(body["lora_name"])
             self.loaded.pop(body["lora_name"], None)
             return 200, "Success"
         return 404, {"detail": "Not Found"}
@@ -5841,12 +5847,16 @@ class TestSelectAdapterSync(TrlTestCase):
                 _server_info(SERVER_LORA_CONFIG), self._peft_model(r=8, rank_pattern={"q_proj": 64}), self._args()
             )
 
-    def test_too_few_adapter_slots_for_max_staleness_raises(self):
-        # `max_staleness + 1` versions stay servable and the next one is loaded before the oldest is unloaded, so the
-        # server has to hold `max_staleness + 2`. One fewer and vLLM evicts a servable policy silently, every sync.
+    @pytest.mark.parametrize("max_staleness", [0, 1])
+    def test_too_few_adapter_slots_for_max_staleness_raises(self, max_staleness):
+        # `max_staleness + 1` versions stay servable (at least 2) and the next one is loaded before the oldest is
+        # unloaded, so the server has to hold `max_staleness + 2` (3 at `max_staleness=0`). One fewer and vLLM evicts a
+        # servable policy silently, every sync.
         with pytest.raises(ValueError, match="--max-loras 3"):
             select_adapter_sync(
-                _server_info({"max_lora_rank": 32, "max_loras": 2}), self._peft_model(), self._args(max_staleness=1)
+                _server_info({"max_lora_rank": 32, "max_loras": 2}),
+                self._peft_model(),
+                self._args(max_staleness=max_staleness),
             )
 
     # --- behaviour changes proposed after the DP=2 runs; strict xfail so flipping the code flips these ------------
@@ -5982,7 +5992,11 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     @pytest.mark.parametrize(
         ("max_staleness", "max_loras", "servable_after_five"),
-        [(1, 3, ["trl-policy-v4", "trl-policy-v5"]), (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)])],
+        [
+            (0, 3, ["trl-policy-v4", "trl-policy-v5"]),
+            (1, 3, ["trl-policy-v4", "trl-policy-v5"]),
+            (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)]),
+        ],
     )
     def test_adapter_sync_keeps_max_staleness_plus_one_versions_servable(
         self, server, max_staleness, max_loras, servable_after_five
@@ -5990,7 +6004,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # Regression: an early version evicted `v{N-2}` regardless of `max_staleness`, deleting an adapter that
         # in-flight requests could still name; vLLM resolves `lora_path` lazily inside the engine, so the missing
         # directory killed the engine with an `HFValidationError` rather than 404ing. `N-2` happens to equal
-        # `N-(max_staleness+1)` at `max_staleness=1`, which is why the second row exists.
+        # `N-(max_staleness+1)` at `max_staleness=1`, which is why the `max_staleness=4` row exists.
         trainer = self._build(
             server,
             self._lora_config(),
@@ -6005,10 +6019,29 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # The server never had to evict one itself: the `--max-loras` bound left room for the load-then-unload.
         assert server.evicted == []
         # The files lag the unload by one sync, so one more directory than the servable set survives on disk.
-        newest_deleted = 5 - (max_staleness + 1) - 1
+        newest_deleted = 5 - len(servable_after_five) - 1
         for version in range(1, 6):
             exists = os.path.isdir(os.path.join(trainer._lora_dir, f"trl-policy-v{version}"))
             assert exists is (version > newest_deleted), f"trl-policy-v{version}"
+
+    def test_adapter_sync_at_max_staleness_0_never_unloads_the_adapter_rollouts_name(self, server):
+        # Regression: at `max_staleness=0` a sync unloaded the version the rollout worker was still naming, before
+        # moving it to the new one, so the next rollout request got a 404 ("The model `trl-policy-vN` does not
+        # exist") and the run stopped.
+        trainer = self._build(
+            server, self._lora_config(), lora_config={"max_lora_rank": 32, "max_loras": 3}, max_staleness=0
+        )
+        named_at_unload = []
+        server.on_unload = lambda name: named_at_unload.append(
+            (name, f"trl-policy-v{trainer.rollout_worker._model_version}")
+        )
+        for _ in range(4):
+            trainer._sync_weight()
+
+        assert named_at_unload, "no version was retired"
+        for unloaded, named in named_at_unload:
+            assert unloaded != named
+            assert named in server.loaded
 
     # --- merged fallback ---------------------------------------------------------------------------------------
 

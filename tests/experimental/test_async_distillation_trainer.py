@@ -1577,7 +1577,11 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
 
     @pytest.mark.parametrize(
         ("max_staleness", "max_loras", "servable_after_five"),
-        [(1, 3, ["trl-policy-v4", "trl-policy-v5"]), (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)])],
+        [
+            (0, 3, ["trl-policy-v4", "trl-policy-v5"]),
+            (1, 3, ["trl-policy-v4", "trl-policy-v5"]),
+            (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)]),
+        ],
     )
     def test_adapter_sync_keeps_max_staleness_plus_one_versions_servable(
         self, fake_vllm, max_staleness, max_loras, servable_after_five
@@ -1599,7 +1603,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         # The server never had to evict one itself: the `--max-loras` bound left room for the load-then-unload.
         assert fake_vllm.evicted == []
         # The files lag the unload by one sync, so one more directory than the servable set survives on disk.
-        newest_deleted = 5 - (max_staleness + 1) - 1
+        newest_deleted = 5 - len(servable_after_five) - 1
         for version in range(1, 6):
             exists = os.path.isdir(os.path.join(trainer._lora_dir, f"trl-policy-v{version}"))
             assert exists is (version > newest_deleted), f"trl-policy-v{version}"
