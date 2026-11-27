@@ -302,8 +302,11 @@ def main():
         finally:
             ports.put(port)
         if not result.exists():
-            fatal = [line.strip() for line in output.splitlines() if "FATAL" in line or "Error" in line]
-            print(f"[{name}] no result (exit {proc.returncode}): {' | '.join(fatal[-3:])}", flush=True)
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            errors = [i for i, line in enumerate(lines) if "FATAL" in line or "Error" in line]
+            # The lines after the last error hold its reason, e.g. the findings of OpenEnv's endpoint check.
+            shown = lines[errors[-1] : errors[-1] + 3] if errors else lines[-3:]
+            print(f"[{name}] no result (exit {proc.returncode}): {' | '.join(shown)}", flush=True)
             return
         upload(result)
         # OpenEnv labels most OpenCode rollouts FAILED, since OpenCode exits with code 1 even when it finishes
