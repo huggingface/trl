@@ -4710,9 +4710,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # The sparse attention indexer only picks which tokens attention reads, so the loss sends it no gradient.
             # Assert it stays frozen.
-            elif model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
+            elif ".indexer." in n:
                 assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

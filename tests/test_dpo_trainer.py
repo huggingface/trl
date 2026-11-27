@@ -518,9 +518,9 @@ class TestDPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # The sparse attention indexer only picks which tokens attention reads, so the loss sends it no gradient.
             # Assert it stays frozen.
-            if model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
+            if ".indexer." in n:
                 assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -1878,9 +1878,9 @@ class TestDPOTrainerVLM(TrlTestCase):
             # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
             elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
-            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # The sparse attention indexer only picks which tokens attention reads, so the loss sends it no gradient.
             # Assert it stays frozen.
-            elif model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
+            elif ".indexer." in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
