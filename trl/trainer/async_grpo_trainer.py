@@ -48,6 +48,7 @@ from typing import Any, Protocol, TypeAlias
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -57,7 +58,14 @@ from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.distributed.tensor.experimental import implicit_replication
 from torch.utils.data import DataLoader
-from transformers import AttentionInterface, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    AttentionInterface,
+    AutoConfig,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
@@ -353,6 +361,197 @@ def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
 
 
 TREE_ATTENTION = "tree_fa3"
+
+
+def tree_attn_implementation(config) -> str:
+    """`sdpa` for models whose attention selects its own keys (Qwen4-Exp), tree attention otherwise."""
+    layer_types = getattr(config.get_text_config(), "layer_types", None) or []
+    return "sdpa" if "indexed_attention" in layer_types else TREE_ATTENTION
+
+
+# (the last row's `tree_cu_seqlens_q`, its maps): every layer asks for the maps of the same row, and building them
+# costs a host sync
+_MAPS = None
+
+
+def tree_maps(tree):
+    """
+    The row's maps, by row position:
+    - `prev`: the position just before it on its own path, or `-1` at the start of a path.
+    - `visible`: `visible[i, j]` is whether `j` is on the path of `i`, at or before `i`.
+    - `depth`: its position in its own sample.
+
+    Example: segments `[0, 1]` (a root), `[2, 3]` and `[4]` (children of the first) give `prev = [-1, 0, 1, 2, 1]`.
+    Position 4 sees positions 0, 1 and 4, so its depth is 2.
+    """
+    global _MAPS
+    if _MAPS is not None and _MAPS[0] is tree["tree_cu_seqlens_q"]:
+        return _MAPS[1]
+    from ..kernels.tree_gated_delta_rule import tree_previous
+
+    cu_seqlens_q = tree["tree_cu_seqlens_q"].long()
+    starts, ends = cu_seqlens_q[:-1], cu_seqlens_q[1:]  # each segment's first position, and one past its last
+    prev = tree_previous(tree, int(ends[-1]))
+
+    # Each segment's path (its earlier segments, then itself) in ascending row positions: a position sees the
+    # positions of its segment's path up to itself
+    visible = torch.zeros(len(prev), len(prev), dtype=torch.bool, device=prev.device)
+    paths = tree["tree_kv_index"].long().split(tree["tree_cu_seqlens_k"].diff().tolist())
+    for start, end, path in zip(starts.tolist(), ends.tolist(), paths, strict=True):
+        positions = torch.arange(start, end, device=prev.device)
+        visible[start:end, path] = path <= positions[:, None]
+    depth = visible.sum(dim=1) - 1  # a position sees itself and the `depth` positions before it on its path
+
+    _MAPS = (tree["tree_cu_seqlens_q"], {"prev": prev, "visible": visible, "depth": depth})
+    return _MAPS[1]
+
+
+def _step_back(prev: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    """Each position moved one step back along its path; `-1` (already past the start) stays `-1`."""
+    return torch.where(positions >= 0, prev[positions.clamp_min(0)], -1)
+
+
+def tree_ngram_shift_right(token_ids: torch.Tensor, shift: int, eos_token_id: int, tree) -> torch.Tensor:
+    """
+    The token `shift` steps back on each position's own path, or EOS where the walk passes the start of the path or
+    meets an EOS: the model's `_shift_right_ignore_eos`, along paths instead of along the row.
+
+    `token_ids` is `(batch, context + n)`: the model puts `context` EOS columns before the row's `n` tokens.
+    """
+    if shift == 0:
+        return token_ids
+    prev = tree_maps(tree)["prev"]
+    n = prev.numel()
+    tokens = token_ids[:, -n:]  # (batch, n)
+    is_eos = tokens == eos_token_id
+
+    source = torch.arange(n, device=prev.device)  # where each position's walk is
+    valid = torch.ones_like(is_eos)
+    for _ in range(shift):
+        source = _step_back(prev, source)
+        valid &= (source >= 0) & ~is_eos[:, source.clamp_min(0)]
+    shifted = torch.where(valid, tokens[:, source.clamp_min(0)], eos_token_id)
+
+    output = torch.full_like(token_ids, eos_token_id)  # the context columns stay EOS
+    output[:, -n:] = shifted
+    return output
+
+
+def tree_ple_short_conv(hidden_states: torch.Tensor, conv1d: torch.nn.Conv1d, tree) -> torch.Tensor:
+    """
+    `silu(conv1d(hidden_states))` for the model's dilated depthwise `conv1d`, along paths instead of along the row.
+
+    With 3 taps and dilation 3, a position reads itself, the position 3 steps back on its path and the one 6 steps
+    back. A step past the start of the path reads zeros, as the left padding does for one plain sequence.
+    `hidden_states` is `(batch, channels, n)`.
+    """
+    prev = tree_maps(tree)["prev"]
+    weight = conv1d.weight[:, 0, :]  # (channels, taps): depthwise, so one filter per channel
+
+    output = torch.zeros_like(hidden_states)
+    source = torch.arange(prev.numel(), device=prev.device)  # the last tap reads the position itself
+    for tap in reversed(range(weight.shape[-1])):
+        tap_input = hidden_states[..., source.clamp_min(0)].masked_fill(source < 0, 0)
+        output += tap_input * weight[:, tap].view(1, -1, 1)
+        for _ in range(conv1d.dilation[0]):  # the tap before reads `dilation` steps further back
+            source = _step_back(prev, source)
+    if conv1d.bias is not None:
+        output += conv1d.bias.view(1, -1, 1)
+    return F.silu(output)
+
+
+def tree_qsa_select_tokens(q, raw_keys, full_cos, full_sin, k_layernorm, block_topk, compress_ratio, tree):
+    """
+    The model's `_select_tokens` along paths, as a bool mask `(1, 1, n, n)`: each query keeps the `block_topk` best
+    blocks of `compress_ratio` consecutive depths on its path, and the tail after its last full block. A block is named
+    by its last position, which fixes its path, so a block shared by several paths is pooled and scored once.
+    """
+    # Imported here: only Qwen4-Exp calls this, and not every transformers version has its modeling file
+    from transformers.models.qwen4_exp.modeling_qwen4_exp import apply_rotary_pos_emb
+
+    maps = tree_maps(tree)
+    prev, depth, visible = maps["prev"], maps["depth"], maps["visible"]
+    n = prev.numel()
+
+    # The blocks, as (num_blocks, compress_ratio) row positions by increasing depth. A block's last position is at
+    # depth >= compress_ratio - 1, so walking back from it never leaves the path.
+    block_last = torch.nonzero(depth % compress_ratio == compress_ratio - 1).flatten()
+    members = [block_last]
+    for _ in range(compress_ratio - 1):
+        members.insert(0, prev[members[0]])
+    members = torch.stack(members, dim=1)
+
+    # One key per block, as the model builds it: the mean of its raw keys, normalized, rotated at its first position
+    pooled = raw_keys[0][members].float().mean(dim=1).to(raw_keys.dtype)  # (num_blocks, head_dim)
+    block_keys = apply_rotary_pos_emb(
+        k_layernorm(pooled).unsqueeze(1), cos=full_cos[0][members[:, 0]], sin=full_sin[0][members[:, 0]]
+    ).squeeze(1)
+
+    queries = q[0].float()  # (n, heads, head_dim)
+    num_picked = min(block_topk, len(block_last))
+    selected = torch.zeros(n, n + 1, dtype=torch.bool, device=prev.device)  # column n is a bin, dropped at the end
+    chunk = max(1, 2**24 // max(len(block_last) * queries.shape[1], 1))  # bounds the (chunk, blocks, heads) scores
+    for start in range(0, n, chunk):
+        stop = min(start + chunk, n)
+        scores = torch.einsum("qhd,bd->qbh", queries[start:stop], block_keys.float())
+        scores = scores.relu().sum(dim=-1) / math.sqrt(q.shape[-1])  # (chunk, num_blocks)
+        scores = scores.masked_fill(~visible[start:stop, block_last], float("-inf"))  # only blocks on its path
+
+        top = scores.topk(num_picked, dim=-1)
+        picked = members[top.indices]  # (chunk, num_picked, compress_ratio)
+        # A query that sees fewer than `num_picked` blocks gets -inf picks: send them to the bin column
+        picked = torch.where(top.values.unsqueeze(-1) > float("-inf"), picked, n)
+        selected[start:stop].scatter_(1, picked.flatten(1), True)
+
+        tail_start = (depth[start:stop] + 1) // compress_ratio * compress_ratio  # depth after its last full block
+        selected[start:stop, :n] |= visible[start:stop] & (depth >= tail_start.unsqueeze(1))
+
+    return selected[:, :n].contiguous().view(1, 1, n, n)
+
+
+_QWEN4_PATCHED = set()
+
+
+def patch_tree_qwen4_exp(model) -> bool:
+    """
+    Wrap Qwen4-Exp's `_shift_right_ignore_eos`, `_short_conv` and `_select_tokens`: given the tree of [`TreeRow.pack`]
+    in their kwargs they follow it, otherwise they run unchanged. Returns whether they exist.
+    """
+    # The modeling file; unlike type(model).__module__, also right when FSDP2 swaps the class
+    modeling = sys.modules[type(model).forward.__module__]
+    names = ("Qwen4ExpTextNGramEmbedding", "Qwen4ExpTextPLELayer", "Qwen4ExpTextQSAIndexer")
+    ngram, ple, indexer = (vars(modeling).get(name) for name in names)
+    if not all(
+        hasattr(cls, name)
+        for cls, name in ((ngram, "_shift_right_ignore_eos"), (ple, "_short_conv"), (indexer, "_select_tokens"))
+    ):
+        return False
+    if modeling in _QWEN4_PATCHED:
+        return True
+    shift_right, short_conv, select_tokens = ngram._shift_right_ignore_eos, ple._short_conv, indexer._select_tokens
+
+    def _shift_right_ignore_eos(self, token_ids, shift, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return shift_right(self, token_ids, shift, **kwargs)
+        return tree_ngram_shift_right(token_ids, shift, self.eos_token_id, kwargs)
+
+    def _short_conv(self, hidden_states, cache, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return short_conv(self, hidden_states, cache, **kwargs)
+        return tree_ple_short_conv(hidden_states.transpose(1, 2), self.conv1d, kwargs).transpose(1, 2)
+
+    def _select_tokens(self, hidden_states, q, raw_keys, full_cos, full_sin, attention_mask, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return select_tokens(self, hidden_states, q, raw_keys, full_cos, full_sin, attention_mask, **kwargs)
+        return tree_qsa_select_tokens(
+            q, raw_keys, full_cos, full_sin, self.k_layernorm, self.block_topk, self.compress_ratio, kwargs
+        )
+
+    ngram._shift_right_ignore_eos = _shift_right_ignore_eos
+    ple._short_conv = _short_conv
+    indexer._select_tokens = _select_tokens
+    _QWEN4_PATCHED.add(modeling)
+    return True
 
 
 @cache
@@ -3125,15 +3324,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
             model_revision = model_init_kwargs.get("revision")
+            config = AutoConfig.from_pretrained(
+                model, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
             model = create_model_from_path(
                 model,
                 device_map=None,
-                attn_implementation=TREE_ATTENTION,
+                attn_implementation=tree_attn_implementation(config),
                 **model_init_kwargs,
             )
         else:
             model_revision = None
-            model.set_attn_implementation(TREE_ATTENTION)
+            model.set_attn_implementation(tree_attn_implementation(model.config))
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
@@ -3151,13 +3353,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "mlp",
         }
         # Check tree attention compat
-        if layer_types not in (set(), {"linear_attention"}, {"conv"}):
+        if layer_types not in (set(), {"linear_attention"}, {"conv"}, {"linear_attention", "indexed_attention"}):
             raise ValueError(
                 f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
-                "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
-                "path; any other recurrent or convolutional layer would scan across samples."
+                "transformers' gated DeltaNet and Mamba2 layers, LFM2's short convolutions and Qwen4-Exp's indexed "
+                "attention along each sample's own path; any other recurrent or convolutional layer would scan across "
+                "samples."
             )
-        if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
+        if "linear_attention" in layer_types and Version(transformers.__version__) < Version("5.15.0"):
             raise ValueError(
                 f"Tree packing of {type(model).__name__}'s linear attention layers requires transformers>=5.15.0: "
                 "before it, these layers do not call the module-level functions tree packing patches, so they would "
@@ -3169,12 +3372,27 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "before it, these layers do not pass the forward's keyword arguments down to the module-level "
                 "function tree packing patches, so they would scan across samples."
             )
-        if layer_types and not patch_tree_recurrent(model, *layer_types):
+        if "indexed_attention" in layer_types and Version(transformers.__version__) < Version("5.25.0.dev0"):
             raise ValueError(
-                f"{type(model).__name__}'s {sorted(layer_types)} layers don't run through the functions tree packing "
-                "patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan across "
-                "samples."
+                f"Tree packing of {type(model).__name__}'s indexed attention layers requires transformers>=5.25.0.dev0: "
+                "before it, Qwen4-Exp lacks the `_select_tokens`, `_shift_right_ignore_eos` and `_short_conv` methods "
+                "tree packing patches, so these steps would read across samples."
             )
+        recurrent_types = layer_types - {"indexed_attention"}
+        if recurrent_types and not patch_tree_recurrent(model, *recurrent_types):
+            raise ValueError(
+                f"{type(model).__name__}'s {sorted(recurrent_types)} layers don't run through the functions tree "
+                "packing patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan "
+                "across samples."
+            )
+        if "indexed_attention" in layer_types and not patch_tree_qwen4_exp(model):
+            raise ValueError(
+                f"Tree packing of {type(model).__name__} patches its `_select_tokens`, `_shift_right_ignore_eos` "
+                "and `_short_conv` methods, which its modeling module lacks."
+            )
+        # Under `sdpa` the model infers a missing mask from the position ids, which are depths: it would cut each path
+        # off from its earlier segments. An all-ones mask keeps it plain causal, and the tree-aware selection decides.
+        self.explicit_attention_mask = tree_attn_implementation(model.config) == "sdpa"
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
@@ -3615,6 +3833,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
         router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
+        mask_kwargs = {"attention_mask": torch.ones_like(input_ids)} if self.explicit_attention_mask else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -3623,6 +3842,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             score_ids=sampler_ids,
             fused_lm_head=True,
             **router_kwargs,
+            **mask_kwargs,
             **unpad_tree(inputs),
         )
         log_probs = outputs.log_probs.flatten()[token_index]
