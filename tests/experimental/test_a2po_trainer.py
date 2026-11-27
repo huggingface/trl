@@ -58,6 +58,7 @@ class TestA2POTrainer(TrlTestCase):
         )
         assert trainer.eos_token_ids == [1, 107]
         assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     def test_train(self):
         # Main two-stage smoke test: Stage 1 estimates V*, Stage 2 regresses on a single on-policy generation.

@@ -1047,6 +1047,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         assert trainer.eos_token_ids == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     def _train_one_step_and_save(self, fsdp=False):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

@@ -135,6 +135,17 @@ class A2POTrainer(_BaseTrainer):
                 model_id, revision=model_revision, padding_side="left", trust_remote_code=args.trust_remote_code
             )
 
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if train_dataset is not None and is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
         # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
         eos_token_ids = model.generation_config.eos_token_id
         if eos_token_ids is None:
@@ -143,11 +154,6 @@ class A2POTrainer(_BaseTrainer):
             eos_token_ids = [eos_token_ids]
         if processing_class.eos_token_id not in eos_token_ids:
             eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
-        # The chat template's end-of-turn token also ends a completion (#8566)
-        if train_dataset is not None and is_conversational(next(iter(train_dataset))):
-            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
-            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
-                eos_token_ids = [*eos_token_ids, end_of_turn_id]
         self.eos_token_ids = eos_token_ids
 
         # Reward functions

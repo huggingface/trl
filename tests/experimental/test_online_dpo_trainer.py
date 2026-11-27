@@ -129,6 +129,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         )
         assert trainer.eos_token_ids == [1, 107]
         assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

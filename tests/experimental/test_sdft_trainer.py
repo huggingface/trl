@@ -113,6 +113,7 @@ class TestSDFTTrainer(TrlTestCase):
         )
         assert trainer.eos_token_ids == [1, 107]
         assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     def test_train(self):
         dataset = Dataset.from_dict(
