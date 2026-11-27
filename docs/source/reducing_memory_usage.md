@@ -209,6 +209,14 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTor
 > [!WARNING]
 > With vLLM sleep mode (`vllm_enable_sleep_mode=True`), vLLM only reads `PYTORCH_CUDA_ALLOC_CONF` to work around this setting, so don't set only `PYTORCH_ALLOC_CONF`.
 
+## cuDNN attention on H100 and B200 GPUs
+
+On GPUs with compute capability 9.x or 10.x (H100, H200, B200, B300), PyTorch runs `attn_implementation="sdpa"` with cuDNN by default. cuDNN keeps a few megabytes of host memory for every new sequence length and never frees them ([pytorch/pytorch#202607](https://github.com/pytorch/pytorch/issues/202607)), so host memory keeps growing when sequence lengths vary. In training, the default [`pad_to_multiple_of="auto"`](#padding-sequences-to-a-multiple) pads to a multiple of 128 on these GPUs, which bounds the number of lengths. Generation with transformers still sees a new length at every step: make PyTorch prefer another attention backend:
+
+```bash
+export TORCH_CUDNN_SDPA_DEPRIORITIZED=1
+```
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
