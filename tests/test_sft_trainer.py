@@ -2530,13 +2530,10 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
                 id="qwen3.6-moe",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
