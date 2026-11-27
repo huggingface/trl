@@ -426,7 +426,7 @@ def main() -> None:
     proc = _spawn(vllm_cmd, vllm_log, env=vllm_env)
     wait_for_vllm(vllm_url, proc, vllm_log)
 
-    if not args.skip_warm:
+    if args.sandbox != "hf-sandbox" and not args.skip_warm:
         warm_sandbox_template(args, vllm_url, logs)
 
     script = pathlib.Path("async_grpo_harbor.py")
