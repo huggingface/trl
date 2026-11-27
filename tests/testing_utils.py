@@ -89,6 +89,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
     "trl-internal-testing/tiny-InklingForConditionalGeneration": "0e2558582d4c6c8538d178db0c2df065ac5a9ac5",
     "trl-internal-testing/tiny-InternVLForConditionalGeneration": "99c02d42d51fd4f83e12f19850a126627d473109",
+    "trl-internal-testing/tiny-LagunaForCausalLM": "5dfdec6ad858de57297e5b94aa0b4a4b225fb155",
     "trl-internal-testing/tiny-Lfm2ForCausalLM": "a8b729ddf80657a21272c71d36a7edc2be1bf6b4",
     "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5": "1e9ac722a12cea565443504973060b960a328c37",
     "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5": "af6b0e20385279de1530104e215a3a2f5155d182",
