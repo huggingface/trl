@@ -61,6 +61,9 @@ from trl.chat_template_utils import (
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    laguna_v2_chat_template,
+    laguna_v3_chat_template,
+    laguna_v4_chat_template,
     lfm2_2_5_chat_template,
     lfm2_2_5_v2_chat_template,
     lfm2_2_5_v4_chat_template,
@@ -1769,6 +1772,38 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
                     reason="Inkling was introduced in transformers-5.14.0",
                 ),
             ],
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-LagunaForCausalLM",
+            id="laguna",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.9.0"),
+                reason="Loading the Laguna config requires transformers>=5.9.0 (see transformers#45887)",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-LagunaForCausalLM", laguna_v2_chat_template),
+            id="laguna-v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.9.0"),
+                reason="Loading the Laguna config requires transformers>=5.9.0 (see transformers#45887)",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-LagunaForCausalLM", laguna_v3_chat_template),
+            id="laguna-v3",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.9.0"),
+                reason="Loading the Laguna config requires transformers>=5.9.0 (see transformers#45887)",
+            ),
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-LagunaForCausalLM", laguna_v4_chat_template),
+            id="laguna-v4",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.9.0"),
+                reason="Loading the Laguna config requires transformers>=5.9.0 (see transformers#45887)",
+            ),
         ),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
