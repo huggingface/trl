@@ -449,6 +449,21 @@ class DistillationTrainer(_BaseTrainer):
         ):
             args.ddp_find_unused_parameters = True
 
+        # Flash Attention drops the bidirectional attention mask over image tokens of these models (#8325); from
+        # transformers 5.24.0 on, loading them with Flash Attention raises
+        if (
+            self._is_vlm
+            and Version(transformers.__version__) < Version("5.24.0")
+            and model.config.model_type
+            in ("gemma3", "gemma4", "gemma4_unified", "paligemma", "molmo2", "diffusion_gemma", "pi0")
+            and "flash" in model.config.get_text_config()._attn_implementation
+        ):
+            raise ValueError(
+                "Flash Attention does not support the bidirectional attention over image tokens of "
+                f"{model.__class__.__name__}, so image tokens would be trained with causal attention. Please set "
+                "`attn_implementation` to 'sdpa', 'eager' or 'flex_attention' instead."
+            )
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -898,6 +913,21 @@ class DistillationTrainer(_BaseTrainer):
                     f"{'' if teacher_id is None else f'{teacher_id!r} '}has vocab_size {teacher_vocab_size}. "
                     f"Distillation compares the teacher's full next-token distribution, which requires a shared "
                     f"vocabulary. Use a teacher with the same vocab_size, or GOLD for cross-tokenizer distillation."
+                )
+            # Flash Attention drops the bidirectional attention mask over image tokens of these models (#8325); from
+            # transformers 5.24.0 on, loading them with Flash Attention raises
+            if (
+                self._is_vlm
+                and Version(transformers.__version__) < Version("5.24.0")
+                and teacher.config.model_type
+                in ("gemma3", "gemma4", "gemma4_unified", "paligemma", "molmo2", "diffusion_gemma", "pi0")
+                and "flash" in teacher.config.get_text_config()._attn_implementation
+            ):
+                raise ValueError(
+                    "Flash Attention does not support the bidirectional attention over image tokens of the teacher "
+                    f"{teacher.__class__.__name__}, so the teacher would score image tokens with causal attention. "
+                    "Please set `attn_implementation` to 'sdpa', 'eager' or 'flex_attention' in "
+                    "`teacher_model_init_kwargs` instead."
                 )
             if self.is_deepspeed_enabled:
                 self.teacher_models[teacher_id] = prepare_deepspeed(teacher, self.accelerator)

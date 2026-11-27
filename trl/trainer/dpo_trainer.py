@@ -861,6 +861,20 @@ class DPOTrainer(_BaseTrainer):
                 "forward pass of the reference model over the entire dataset is not supported for large "
                 "multimodal models. Set `precompute_ref_log_probs=False`."
             )
+        # Flash Attention drops the bidirectional attention mask over image tokens of these models (#8325); from
+        # transformers 5.24.0 on, loading them with Flash Attention raises
+        if (
+            self._is_vision_dataset
+            and Version(transformers.__version__) < Version("5.24.0")
+            and model.config.model_type
+            in ("gemma3", "gemma4", "gemma4_unified", "paligemma", "molmo2", "diffusion_gemma", "pi0")
+            and "flash" in model.config.get_text_config()._attn_implementation
+        ):
+            raise ValueError(
+                "Flash Attention does not support the bidirectional attention over image tokens of "
+                f"{model.__class__.__name__}, so image tokens would be trained with causal attention. Please set "
+                "`attn_implementation` to 'sdpa', 'eager' or 'flex_attention' instead."
+            )
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
