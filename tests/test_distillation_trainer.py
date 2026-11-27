@@ -35,8 +35,10 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 
 from .testing_utils import (
     TrlTestCase,
+    is_ampere_or_newer,
     require_bitsandbytes,
     require_cudnn_sdpa,
+    require_kernels,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -2650,6 +2652,37 @@ class TestDistillationTrainerVLM(TrlTestCase):
         train_loss = trainer.state.log_history[-1]["train_loss"]
         assert train_loss is not None
         assert torch.isfinite(torch.tensor(train_loss))
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.24.0"),
+        reason="From transformers 5.24.0 on, transformers raises when loading these models with Flash Attention",
+    )
+    @require_vision
+    @require_kernels
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+    )
+    def test_train_vlm_flash_attention_image_mask_raises(self):
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"attn_implementation": attn_implementation},
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="Flash Attention"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                teacher_model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_generation_suppresses_image_token(self):
         # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's

@@ -449,6 +449,21 @@ class DistillationTrainer(_BaseTrainer):
         ):
             args.ddp_find_unused_parameters = True
 
+        # Flash Attention drops the bidirectional attention mask over image tokens of these models (#8325); from
+        # transformers 5.24.0 on, loading them with Flash Attention raises
+        if (
+            self._is_vlm
+            and Version(transformers.__version__) < Version("5.24.0")
+            and model.config.model_type
+            in ("gemma3", "gemma4", "gemma4_unified", "paligemma", "molmo2", "diffusion_gemma", "pi0")
+            and "flash" in model.config.get_text_config()._attn_implementation
+        ):
+            raise ValueError(
+                "Flash Attention does not support the bidirectional attention over image tokens of "
+                f"{model.__class__.__name__}, so image tokens would be trained with causal attention. Please set "
+                "`attn_implementation` to 'sdpa', 'eager' or 'flex_attention' instead."
+            )
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 

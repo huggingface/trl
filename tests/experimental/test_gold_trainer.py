@@ -61,7 +61,13 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_torch_accelerator
+from ..testing_utils import (
+    TrlTestCase,
+    is_ampere_or_newer,
+    require_kernels,
+    require_torch_accelerator,
+    require_vision,
+)
 
 
 @pytest.fixture(scope="module")
@@ -3359,3 +3365,34 @@ def test_xtoken_accumulation_matches_full_batch_update(tmp_path, loss_type):
     assert any(update.abs().sum() > 0 for update in updates[0].values())
     for name in updates[0]:
         torch.testing.assert_close(updates[0][name], updates[1][name], atol=1e-7, rtol=1e-4)
+
+
+@pytest.mark.skipif(
+    Version(transformers.__version__) >= Version("5.24.0"),
+    reason="From transformers 5.24.0 on, transformers raises when loading these models with Flash Attention",
+)
+@require_vision
+@require_kernels
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+)
+def test_train_vlm_flash_attention_image_mask_raises(tmp_path, vlm_dataset):
+    if torch.version.hip:
+        attn_implementation = "kernels-community/aiter-flash-attn@v2"
+    elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+        attn_implementation = "kernels-community/flash-attn4"
+    else:
+        attn_implementation = "kernels-community/flash-attn3"
+    training_args = GOLDConfig(
+        output_dir=str(tmp_path),
+        model_init_kwargs={"attn_implementation": attn_implementation},
+        report_to="none",
+    )
+    with pytest.raises(ValueError, match="Flash Attention"):
+        GOLDTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            teacher_model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            args=training_args,
+            train_dataset=vlm_dataset,
+        )

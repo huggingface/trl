@@ -1860,6 +1860,36 @@ class TestDPOTrainerVLM(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.24.0"),
+        reason="From transformers 5.24.0 on, transformers raises when loading these models with Flash Attention",
+    )
+    @require_vision
+    @require_kernels
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+    )
+    def test_train_vlm_flash_attention_image_mask_raises(self):
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"attn_implementation": attn_implementation},
+            report_to="none",
+        )
+        with pytest.raises(ValueError, match="Flash Attention"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @pytest.mark.parametrize(
         "model_id",
         [

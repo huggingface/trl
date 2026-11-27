@@ -2597,6 +2597,10 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.24.0"),
+        reason="From transformers 5.24.0 on, transformers raises when loading these models with Flash Attention",
+    )
     @require_vision
     @require_kernels
     @pytest.mark.skipif(
@@ -2616,7 +2620,6 @@ class TestSFTTrainer(TrlTestCase):
             model_init_kwargs={"attn_implementation": attn_implementation},
             report_to="none",
         )
-        # Raised by TRL before transformers 5.24.0, by transformers from then on
         with pytest.raises(ValueError, match="Flash Attention"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
