@@ -15,6 +15,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import torch
+
 from .base_config import _BaseConfig
 
 
@@ -57,10 +59,12 @@ class DistillationConfig(_BaseConfig):
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, and `"teacher_id"`.
+            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, `"teacher_id"`, and
+            `"environment"`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation. With `tools`, it caps the
-            whole multi-turn completion after the prompt (all model turns plus tool results).
+            Maximum number of tokens to generate per completion during on-policy generation. With `tools` or
+            `environment_factory`, it caps the whole multi-turn completion after the prompt (all model turns plus tool
+            results).
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -70,7 +74,9 @@ class DistillationConfig(_BaseConfig):
             Whether to shuffle the training dataset.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
-            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on
+            NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in
+            host memory. It does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -228,14 +234,15 @@ class DistillationConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', and 'teacher_id'."
+            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', 'teacher_id', and "
+            "'environment'."
         },
     )
     max_completion_length: int | None = field(
         default=512,
         metadata={
-            "help": "Maximum number of tokens to generate per completion. With `tools`, it caps the whole multi-turn "
-            "completion after the prompt (all model turns plus tool results)."
+            "help": "Maximum number of tokens to generate per completion. With `tools` or `environment_factory`, it "
+            "caps the whole multi-turn completion after the prompt (all model turns plus tool results)."
         },
     )
     ds3_gather_for_generation: bool = field(
@@ -254,9 +261,10 @@ class DistillationConfig(_BaseConfig):
     pad_to_multiple_of: int | str | None = field(
         default="auto",
         metadata={
-            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
-            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
-            "pad elsewhere."
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. "
+            "`'auto'` pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and "
+            "with SDPA attention on NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a "
+            "graph per input shape in host memory. It does not pad elsewhere."
         },
     )
 
@@ -419,8 +427,14 @@ class DistillationConfig(_BaseConfig):
             self.pad_to_multiple_of = (
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
-        if self.pad_to_multiple_of == "auto":
-            # Neuron compiles once per input shape, so padding bounds the number of compilations
+        # Neuron compiles once per input shape, so padding bounds the number of compilations. On GPUs where SDPA uses
+        # cuDNN, the trainer resolves "auto" once it knows the model's attention implementation (#8439)
+        cudnn_sdpa_gpu = (
+            torch.version.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+        )
+        if self.pad_to_multiple_of == "auto" and not cudnn_sdpa_gpu:
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.beta < 0.0 or self.beta > 1.0:

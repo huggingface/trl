@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import bisect
 import contextvars
 import copy
 import functools
@@ -125,55 +126,91 @@ class TreeRow:
     it. The trie therefore forks one token before the samples diverge, and every node has a single next-token label: a
     branch costs one extra token per extra branch, and the loss can go through plain per-position labels. A sample's
     last token is keyed on `None`, which no other sample extends, so every sample ends on a leaf.
+
+    The trie is stored as chains: the tokens a sample adds, from where it leaves the trie to its end, form one chain,
+    laid out in `tokens` after the previous ones, and the chain hangs off the last node the sample shares:
+
+    ```
+    S0 = 10 20 30 40 50                       node     0  1  2  3  4    5  6  7    8  9
+    S1 = 10 20 30 60 70                       token   10 20 30 40 50   30 60 70   60 80
+    S2 = 10 20 30 60 80                       chain   └───── 0 ────┘   └── 1 ─┘   └ 2 ┘
+
+                  ┌── 30  40  50              chain_offsets = [0, 5, 8, 10]
+    10 ── 20 ─────┤                           chain_parents = [-1, 1, 5]   node each chain hangs off
+                  └── 30 ──┬── 60  70         chain_depths  = [0, 2, 3]    depth of its first token
+                           └── 60  80
+    ```
     """
 
     def __init__(self):
         self.samples: list[dict[str, Any]] = []
-        self.sample_nodes: list[list[int]] = []  # sample -> trie node of each of its tokens
-        self.tokens: list[int] = []  # node -> its token
-        self.children: list[dict[tuple[int, int | None], int]] = []  # node -> {(token, next token): child node}
-        self.roots: dict[tuple[int, int | None], int] = {}  # {(token, next token): root node}
+        self.sample_ends: list[int] = []  # sample -> node of its last token
+        self.tokens = np.zeros(0, dtype=np.int64)  # node -> its token
+        self.chain_offsets: list[int] = [0]  # chain c holds the nodes chain_offsets[c] to chain_offsets[c + 1] - 1
+        self.chain_parents: list[int] = []  # chain -> node it hangs off, -1 for a root
+        self.chain_depths: list[int] = []  # chain -> depth of its first node
         self.groups: set[Any] = set()
         self.trained = 0
         self.load = 0
 
+    def _walk(self, input_ids: np.ndarray) -> tuple[int, int]:
+        """
+        How many leading tokens of `input_ids` the trie holds, and the node of the last one, `-1` if none.
+
+        The walk compares whole chains. Since a node is also keyed on the next token, the sample shares a chain's nodes
+        up to one before the first token that differs, then goes on along the chains hanging off the last one:
+
+        ```
+        chain    30 60 70
+        sample   30 60 80     same = 2 tokens, so 1 node shared (the 30); then the chains hanging off that 30
+        ```
+        """
+        depth, node = 0, -1
+        while True:
+            for c in np.flatnonzero(np.asarray(self.chain_parents) == node):  # the chains hanging off `node`
+                start, end = self.chain_offsets[c], self.chain_offsets[c + 1]
+                ids = input_ids[depth : depth + end - start]
+                match = ids == self.tokens[start : start + len(ids)]
+                same = len(ids) if match.all() else int(match.argmin())
+                if same == end - start and depth + same == len(input_ids):
+                    return len(input_ids), end - 1  # a copy of the sample that added this chain
+                if same >= 2:
+                    depth, node = depth + same - 1, start + same - 2
+                    break
+            else:
+                return depth, node
+
+    def _nodes(self, end: int) -> np.ndarray:
+        """Node of each token of the sample ending at `end`: the chains from the root down to it."""
+        runs = []
+        while end != -1:
+            c = bisect.bisect_right(self.chain_offsets, end) - 1  # the chain holding `end`
+            runs.append(np.arange(self.chain_offsets[c], end + 1))
+            end = self.chain_parents[c]
+        return np.concatenate(runs[::-1])
+
     def fits(self, sample: dict[str, Any], budget: int) -> bool:
         """Whether the row stays within `budget` unique tokens and `budget` trained tokens with `sample` added."""
-        input_ids = sample["input_ids"].tolist()
-        children, shared = self.roots, 0
-        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
-            if key not in children:
-                break
-            children = self.children[children[key]]
-            shared += 1
-        novel = len(input_ids) - shared
+        novel = len(sample["input_ids"]) - self._walk(sample["input_ids"])[0]
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
     def cost(self, sample: dict[str, Any]) -> int:
         """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
-        input_ids = sample["input_ids"].tolist()
-        children, shared = self.roots, 0
-        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
-            if key not in children:
-                break
-            children = self.children[children[key]]
-            shared += 1
-        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+        n, shared = len(sample["input_ids"]), self._walk(sample["input_ids"])[0]
+        return (n * (n + 1) - shared * (shared + 1)) // 2  # sum of depth + 1 over depths shared..n - 1
 
     def add(self, sample: dict[str, Any]) -> None:
-        input_ids = sample["input_ids"].tolist()
-        children = self.roots
-        nodes = []
-        for depth, key in enumerate(zip(input_ids, [*input_ids[1:], None], strict=True)):
-            if key not in children:
-                children[key] = len(self.tokens)
-                self.tokens.append(key[0])
-                self.children.append({})
-                self.load += depth + 1
-            nodes.append(children[key])
-            children = self.children[nodes[-1]]
+        input_ids = sample["input_ids"]
+        self.load += self.cost(sample)
+        shared, node = self._walk(input_ids)
+        if shared < len(input_ids):  # a copy of a sample already in the row adds no chain
+            self.chain_parents.append(node)
+            self.chain_depths.append(shared)
+            self.tokens = np.concatenate([self.tokens, input_ids[shared:]])
+            self.chain_offsets.append(len(self.tokens))
+            node = len(self.tokens) - 1
         self.samples.append(sample)
-        self.sample_nodes.append(nodes)
+        self.sample_ends.append(node)
         self.groups.add(sample["group_id"])
         self.trained += int(sample["completion_mask"].sum())
 
@@ -208,59 +245,74 @@ class TreeRow:
                 - `old_log_probs` (`M`), `advantages` (`M`): generator log-probability and advantage of each target.
                 - `segment_id` (`M`): index of the sample each target came from.
         """
-        input_ids, position_ids, offsets, paths, kv_index, cu_seqlens_k = [], [], [0], [], [], [0]
+        # Chains are laid out depth-first, each one whole. A chain is cut into segments after each node other chains
+        # hang off; those chains follow the whole chain, the ones hanging off its last segments first:
+        #
+        #            ┌── 30  40  50          packed   10 20 | 30 40 50 | 30 | 60 70 | 60 80
+        #  10 ── 20 ─┤                       segment  └ 0 ┘   └── 1 ─┘   └2┘  └ 3 ─┘  └ 4 ┘
+        #            └── 30 ──┬── 60  70     parent    -1       0        0      2      2
+        #                     └── 60  80
+        children = defaultdict(list)  # node -> the chains hanging off it, in the order they were added
+        for c, parent in enumerate(self.chain_parents):
+            children[parent].append(c)
+        is_branch = np.zeros(len(self.tokens), dtype=bool)
+        is_branch[[node for node in children if node != -1]] = True
+        packed = np.empty(len(self.tokens), dtype=np.int64)  # node -> its packed position
+        input_ids, position_ids, offsets, paths, cu_seqlens_k = [], [], [0], [], [0]
         parents, depths = [], []
-        packed = [0] * len(self.tokens)
-        stack = [(node, None, 0) for node in reversed(self.roots.values())]
+        stack = [(c, -1) for c in reversed(children[-1])]  # (chain, segment it follows)
         while stack:
-            node, parent, depth = stack.pop()
-            segment = len(paths)
-            start = len(input_ids)
-            parents.append(-1 if parent is None else parent)
-            depths.append(0 if parent is None else depths[parent] + 1)
-            while True:
-                packed[node] = len(input_ids)
-                input_ids.append(self.tokens[node])
-                position_ids.append(depth)
-                depth += 1
-                if len(self.children[node]) != 1:
-                    break
-                node = next(iter(self.children[node].values()))
-            offsets.append(len(input_ids))
-            paths.append((paths[parent] if parent is not None else []) + list(range(start, len(input_ids))))
-            kv_index.extend(paths[-1])
-            cu_seqlens_k.append(len(kv_index))
-            stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
+            c, parent = stack.pop()
+            start, end, depth = self.chain_offsets[c], self.chain_offsets[c + 1], self.chain_depths[c]
+            packed[start:end] = np.arange(offsets[-1], offsets[-1] + end - start)
+            input_ids.append(self.tokens[start:end])
+            position_ids.append(np.arange(depth, depth + end - start))
+            for last in [*(start + np.flatnonzero(is_branch[start : end - 1])).tolist(), end - 1]:
+                segment = len(paths)
+                parents.append(parent)
+                depths.append(0 if parent == -1 else depths[parent] + 1)
+                positions = np.arange(offsets[-1], packed[last] + 1)
+                paths.append(positions if parent == -1 else np.concatenate([paths[parent], positions]))
+                offsets.append(int(packed[last]) + 1)
+                cu_seqlens_k.append(cu_seqlens_k[-1] + len(paths[-1]))
+                stack.extend((child, segment) for child in reversed(children.get(last, [])))
+                parent = segment
 
         lengths = [end - start for start, end in zip(offsets[:-1], offsets[1:], strict=True)]
-        shift_labels = [-100] * len(input_ids)
-        sampling_mask = [[] for _ in input_ids]
+        shift_labels = np.full(len(packed), -100)
+        # A position shared by several samples takes the candidate set of the last one, like its label
+        owner = np.zeros(len(packed), dtype=np.int64)  # position -> sample that labels it
+        owner_token = np.zeros(len(packed), dtype=np.int64)  # position -> that sample's token it predicts
+        counts = np.zeros(len(packed), dtype=np.int64)  # position -> size of its candidate set
         num_logprobs = max(sample["sampler_ids"].shape[1] for sample in self.samples)
-        sampler_ids = np.full((len(input_ids), num_logprobs), -1, dtype=np.int64)
-        sampler_log_probs = np.full((len(input_ids), num_logprobs), -math.inf, dtype=np.float32)
+        sampler_ids = np.full((len(packed), num_logprobs), -1, dtype=np.int64)
+        sampler_log_probs = np.full((len(packed), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
-        for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
-            ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
-            first = len(token_index)
-            for p in range(1, len(nodes)):
-                if mask[p]:
-                    shift_labels[packed[nodes[p - 1]]] = ids[p]
-                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
-                    token_index.append(packed[nodes[p - 1]])
-                    old_log_probs.append(logps[p])
-                    advantages.append(sample["advantage"])
-                    segment_id.append(i)
+        for i, (sample, end) in enumerate(zip(self.samples, self.sample_ends, strict=True)):
             trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
-            sampler_ids[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
-            sampler_log_probs[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][
-                trained
-            ]
+            index = packed[self._nodes(end)[trained - 1]]
+            shift_labels[index] = sample["input_ids"][trained]
+            owner[index], owner_token[index] = i, trained
+            sizes = np.fromiter(map(len, sample["sampling_mask"]), dtype=np.int64, count=len(sample["sampling_mask"]))
+            counts[index] = sizes[trained]
+            sampler_ids[index, : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
+            sampler_log_probs[index, : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][trained]
+            token_index.append(index)
+            old_log_probs.append(sample["old_log_probs"][trained])
+            advantages.append(np.full(len(trained), sample["advantage"]))
+            segment_id.append(np.full(len(trained), i))
+        kv_index = np.concatenate(paths)
+        sampled = np.flatnonzero(counts)
+        candidates = (
+            self.samples[i]["sampling_mask"][p]
+            for i, p in zip(owner[sampled].tolist(), owner_token[sampled].tolist(), strict=True)
+        )
         return {
-            "input_ids": torch.tensor(input_ids),
-            "position_ids": torch.tensor(position_ids),
+            "input_ids": torch.tensor(np.concatenate(input_ids)),
+            "position_ids": torch.tensor(np.concatenate(position_ids)),
             "shift_labels": torch.tensor(shift_labels),
-            "sampling_mask": torch.tensor(list(chain.from_iterable(sampling_mask)), dtype=torch.long),
-            "sampling_mask_counts": torch.tensor(list(map(len, sampling_mask))),
+            "sampling_mask": torch.tensor(list(chain.from_iterable(candidates)), dtype=torch.long),
+            "sampling_mask_counts": torch.from_numpy(counts),
             "sampler_ids": torch.from_numpy(sampler_ids),
             "sampler_log_probs": torch.from_numpy(sampler_log_probs),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
@@ -272,10 +324,10 @@ class TreeRow:
                 [max(lengths), max(map(len, paths)), len(kv_index), sum(-(-length // 64) for length in lengths)]
                 + [depths.count(depth) for depth in range(max(depths) + 1)]
             ),
-            "token_index": torch.tensor(token_index, dtype=torch.long),
-            "old_log_probs": torch.tensor(old_log_probs, dtype=torch.float32),
-            "advantages": torch.tensor(advantages, dtype=torch.float32),
-            "segment_id": torch.tensor(segment_id, dtype=torch.long),
+            "token_index": torch.tensor(np.concatenate(token_index), dtype=torch.long),
+            "old_log_probs": torch.tensor(np.concatenate(old_log_probs), dtype=torch.float32),
+            "advantages": torch.tensor(np.concatenate(advantages), dtype=torch.float32),
+            "segment_id": torch.tensor(np.concatenate(segment_id), dtype=torch.long),
         }
 
 
@@ -446,6 +498,23 @@ RolloutId: TypeAlias = str
 def _by_token_id(top_logprobs: list[dict[str, float]]) -> list[dict[int, float]]:
     """Key each token's top log-probs by token id, which vLLM spells `token_id:<id>` when asked for ids."""
     return [{int(token.removeprefix("token_id:")): logprob for token, logprob in top.items()} for top in top_logprobs]
+
+
+def _generate_top_logprobs(content: list[dict]) -> list[dict[int, float]]:
+    """
+    Key each token's top log-probs from a `/inference/v1/generate` response by token id.
+
+    vLLM 0.32.0 (vllm-project/vllm#58181) changed the entries of this endpoint from `{"token": "token_id:<id>", ...}`
+    to `{"token_id": <id>, ...}`. The shape is read from each entry, not from the installed vLLM, because the server
+    can run another version.
+    """
+    return [
+        {
+            (top["token_id"] if "token_id" in top else int(top["token"].removeprefix("token_id:"))): top["logprob"]
+            for top in token["top_logprobs"]
+        }
+        for token in content
+    ]
 
 
 @dataclass(frozen=True)
@@ -1001,24 +1070,23 @@ class AsyncRolloutLoop:
     async def _check_sampling_replay(self) -> None:
         """Check that the server reports the sampling distribution and supports candidate-set replay.
 
-        With temperature scaling or top-k/top-p filtering, score centering needs processed log-probabilities: raw
-        log-probabilities describe the unmodified policy, so they give the wrong importance ratios and centering
-        weights.
+        With temperature scaling or top-k/top-p filtering, the importance sampling ratio and score centering need
+        processed log-probabilities: raw log-probabilities describe the unmodified policy, so they give the wrong
+        importance ratios and centering weights.
 
         With top-k/top-p, replay takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and
         `--enable-scale-out` (the endpoint that returns the set). Checked once up front: without them the first rollout
         would fail on a route that does not exist, after retrying it for minutes. An older vLLM cannot return the set
         at all, so it keeps the full-vocabulary normalization, with a warning about the bias.
         """
-        if self.config.score_centering and (self.config.temperature != 1.0 or self.sampling_replay):
+        if self.config.temperature != 1.0 or self.sampling_replay:
             async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
                 r.raise_for_status()
                 model_config = (await r.json())["vllm_config"]["model_config"]
             if model_config["logprobs_mode"] != "processed_logprobs":
                 raise RuntimeError(
-                    "Score centering with temperature scaling or top-k/top-p filtering requires sampler "
-                    "log-probabilities after those transformations. Start the vLLM server with "
-                    "`--logprobs-mode processed_logprobs`."
+                    "Temperature scaling or top-k/top-p filtering requires sampler log-probabilities after those "
+                    "transformations. Start the vLLM server with `--logprobs-mode processed_logprobs`."
                 )
         if not self.sampling_replay:
             return
@@ -1767,11 +1835,7 @@ class AsyncRolloutLoop:
         choice = output["choices"][0]
         content = choice["logprobs"]["content"]
         logprobs = [token["logprob"] for token in content]
-        sampler_logprobs = None
-        if self.num_sampler_logprobs:
-            sampler_logprobs = _by_token_id(
-                [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
-            )
+        sampler_logprobs = _generate_top_logprobs(content) if self.num_sampler_logprobs else None
         return TurnRecord(
             prompt_ids,
             choice["token_ids"],

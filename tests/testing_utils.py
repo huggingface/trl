@@ -80,11 +80,13 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-GemmaForCausalLM": "08058fb469384b006af92d452849b0371f593a9a",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM": "9c73ba05132e99afd6e5bc13468e1f72c10c7c1a",
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration": "9339c1e41517bf775383d28e286be70bcaef8334",
+    "trl-internal-testing/tiny-GlmMoeDsaForCausalLM": "63e79bf555786c95017516674a6a8f9a49c02ad5",
     "trl-internal-testing/tiny-GptOssForCausalLM": "cb95c03d6ab62791e09ef922fc28856d18b45909",
     "trl-internal-testing/tiny-GraniteMoeForCausalLM": "76b45c5376916fcc17bdeb598df3337cd14a4f5e",
     "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM": "0ea8ef8b1cb6b15f9d47860269de792c96e69d23",
     "trl-internal-testing/tiny-Idefics2ForConditionalGeneration": "05488b3ae9bb1815d8bc16019d3a60f5387e3f54",
     "trl-internal-testing/tiny-Idefics3ForConditionalGeneration": "ae70d0c8b17b38347e1f7d15d064efc077048781",
+    "trl-internal-testing/tiny-Inkling2ForConditionalGeneration": "03440e4f995792e355ee918423da6e1714fa12e5",
     "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
     "trl-internal-testing/tiny-InklingForConditionalGeneration": "0e2558582d4c6c8538d178db0c2df065ac5a9ac5",
     "trl-internal-testing/tiny-InternVLForConditionalGeneration": "99c02d42d51fd4f83e12f19850a126627d473109",
@@ -166,6 +168,15 @@ require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requ
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
 require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
+_cudnn_sdpa = (
+    torch.version.cuda is not None and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in (9, 10)
+)
+require_cudnn_sdpa = pytest.mark.skipif(
+    not _cudnn_sdpa, reason="test requires an NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
+require_no_cudnn_sdpa = pytest.mark.skipif(
+    _cudnn_sdpa, reason="test requires no NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",

@@ -57,6 +57,14 @@ DeepSeek-V3.1 chat template (as shipped by `deepseek-ai/DeepSeek-V3.1`, `deepsee
 
 DeepSeek-V3.2-Exp chat template (as shipped by `deepseek-ai/DeepSeek-V3.2-Exp` and `deepseek-ai/DeepSeek-V3.2-Exp-Base`). Same as `deepseekv3_v5.jinja`, except for the conditions under which it opens an assistant turn and renders the generation prompt (also after a system-only prompt, and the generation prompt also after an assistant message that is not a prefix). Like it, trainers swap in `deepseekv3_v6_training.jinja` when tools are enabled, and response parsing uses `deepseekv3_v5_template`.
 
+### `deepseekv4_1_flash.jinja`
+
+DeepSeek-V4.1-Flash chat template (as shipped by `deepseek-ai/DeepSeek-V4.1-Flash`).
+
+### `deepseekv4_1_flash_1017.jinja`
+
+DeepSeek-V4.1-Flash-1017 chat template (as shipped by `deepseek-ai/DeepSeek-V4.1-Flash-1017`). Same as `deepseekv4_1_flash.jinja`, plus `thinking=` and more `reasoning_effort` values as aliases, `content_blocks` messages, a user message holding only tool results no longer counted as a new user turn, and tool call arguments required to be dicts.
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -261,6 +269,18 @@ Original Nemotron Ultra chat template (as shipped by `nvidia/NVIDIA-Nemotron-3-U
 
 Original Nemotron 3.5 Lightning chat template (as shipped by `nvidia/NVIDIA-Nemotron-3.5-Lightning-*` checkpoints). Same as `nemotron_3_ultra.jinja` except it drops the `medium_effort` flag. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `olmo3_instruct.jinja`
+
+OLMo 3 Instruct chat template (as shipped by `allenai/Olmo-3-7B-Instruct`). Supports tool calling: tool calls render as Python-style calls in `<function_calls>`, tool results as the `environment` role. Closes the last assistant turn with the EOS token instead of `<|im_end|>`.
+
+### `olmo3_instruct_v2.jinja`
+
+OLMo 3 Instruct chat template (as shipped by `allenai/Olmo-3-7B-Instruct-SFT`, `allenai/Olmo-3-7B-Instruct-DPO`, `allenai/Olmo-3.1-32B-Instruct-SFT` and `allenai/Olmo-3.1-32B-Instruct-DPO`). Same as `olmo3_instruct.jinja`, except that an empty `tools` list renders like no tools.
+
+### `olmo3_instruct_v3.jinja`
+
+OLMo 3.1 Instruct chat template (as shipped by `allenai/Olmo-3.1-32B-Instruct`). Same as `olmo3_instruct_v2.jinja`, with a different default system prompt.
+
 ### `olmo3_think.jinja`
 
 OLMo 3 Think chat template (as shipped by `allenai/Olmo-3-7B-Think` and `allenai/Olmo-3-7B-Think-DPO`). Its generation prompt pre-fills `<think>`, and the reasoning is read inline in the assistant content. Does not support tool calling.
@@ -442,11 +462,19 @@ Patched DeepSeek-V3.1 template. Same diff as `deepseekv3_v2_training.jinja`, app
 
 Patched DeepSeek-V3.2-Exp template. Same diff as `deepseekv3_v5_training.jinja`, applied to `deepseekv3_v6.jinja`.
 
+### `deepseekv4_1_flash_training.jinja`
+
+Patched DeepSeek-V4.1-Flash template. Diff vs `deepseekv4_1_flash.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`, and, as `deepseekv4_1_flash_1017.jinja` does, don't count a user message holding only tool results as a new user turn: in the original, appending a tool result re-renders the earlier assistant turn without its thinking block when `drop_thinking` is on, which breaks prefix-preservation.
+
+### `deepseekv4_1_flash_1017_training.jinja`
+
+Patched DeepSeek-V4.1-Flash-1017 template. Diff vs `deepseekv4_1_flash_1017.jinja`: wrap the assistant output (reasoning and `</think>`, content, tool calls and `<｜end▁of▁sentence｜>`) with `{% generation %}` / `{% endgeneration %}`.
+
 ### `diffusion_gemma_training.jinja`
 
 Patched DiffusionGemma template. Diff vs `diffusion_gemma.jinja`:
 
-Wrap the parts of a model turn that the model emits (thinking channel, tool calls, content, and the closing `<turn|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Tool responses embedded in the turn come from the environment and stay outside the generation block.
+Wrap the parts of a model turn that the model emits (thinking channel, tool calls with the `<|tool_response>` that follows them, content, and the closing `<turn|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Tool responses embedded in the turn come from the environment and stay outside the generation block.
 
 ### `gemma_training.jinja`
 
@@ -607,6 +635,18 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n`, or `<think></think>` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it.
+
+### `olmo3_instruct_training.jinja`
+
+Patched OLMo 3 Instruct template. Diff vs `olmo3_instruct.jinja`: close every assistant turn with `<|im_end|>\n`, where the original closes the last one with the EOS token (which breaks prefix-preservation), and wrap the assistant output with `{% generation %}` / `{% endgeneration %}`.
+
+### `olmo3_instruct_v2_training.jinja`
+
+Patched OLMo 3 Instruct template. Same diff as `olmo3_instruct_training.jinja`, applied to `olmo3_instruct_v2.jinja`.
+
+### `olmo3_instruct_v3_training.jinja`
+
+Patched OLMo 3 Instruct template. Same diff as `olmo3_instruct_training.jinja`, applied to `olmo3_instruct_v3.jinja`.
 
 ### `olmo3_think_training.jinja`
 

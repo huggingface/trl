@@ -47,6 +47,7 @@ from transformers.utils import is_peft_available
 
 from ..chat_template_utils import (
     clone_chat_template,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_stop_token_trained,
 )
@@ -1003,6 +1004,10 @@ class SFTTrainer(_BaseTrainer):
                 if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
+
         # Data collator
         # Recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as they are to varlen kernels
         # that only take a single row, so BFD-packed batches are flattened for these models
@@ -1053,6 +1058,19 @@ class SFTTrainer(_BaseTrainer):
                 "or edit the chat template so the end-of-turn token falls inside "
                 "`{% generation %}...{% endgeneration %}`."
             )
+
+        # Stop generation on the chat template's end-of-turn token (#8564)
+        if (is_conversational(dataset_sample) or is_conversational_from_value(dataset_sample)) and (
+            self.chat_template or processing_class.chat_template
+        ):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class, chat_template=self.chat_template)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
 
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.

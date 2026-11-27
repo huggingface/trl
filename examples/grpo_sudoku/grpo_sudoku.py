@@ -27,7 +27,7 @@ GRPO training with OpenEnv's Sudoku environment and vLLM.
 The model starts from an SFT warmup of Qwen3-1.7B on solver-played games
 ([`openenv/Qwen3-1.7B-Sudoku-SFT`](https://huggingface.co/openenv/Qwen3-1.7B-Sudoku-SFT)): the base model solves no
 puzzle, which leaves GRPO little to learn from. The OpenEnv Sudoku tutorial covers the whole pipeline (data, SFT, GRPO
-and evaluation): https://huggingface.co/docs/openenv/tutorials/sudoku-grpo
+and evaluation): https://openenv.github.io/OpenEnv/main/tutorials/sudoku-grpo
 
 Each step plays 64 games, one environment session each. Duplicate the `openenv/sudoku` Space and set these variables on
 your copy: `TEXTARENA_KW_CLUES=55` (about 26 empty cells, the Space default is 60 clues, about 21) and

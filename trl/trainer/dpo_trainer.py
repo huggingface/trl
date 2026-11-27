@@ -817,6 +817,10 @@ class DPOTrainer(_BaseTrainer):
                 if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
+
         # Data collator
         self.padding_free = args.padding_free
         if self.padding_free:

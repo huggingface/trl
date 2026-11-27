@@ -2,7 +2,7 @@
 
 [OpenEnv](https://github.com/openenv/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
-This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
+This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://openenv.github.io/OpenEnv/).
 
 > [!NOTE]
 > Ready-to-use OpenEnv examples: [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) (minimal), [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch), [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle), [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env), [`grpo_browsergym`](https://github.com/huggingface/trl/tree/main/examples/grpo_browsergym), [`grpo_carla`](https://github.com/huggingface/trl/tree/main/examples/grpo_carla), and [`async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) (local and HF Jobs).
@@ -57,7 +57,7 @@ pip install -e .
 
 ## Quick start
 
-The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/grpo_echo/grpo_echo.py) script trains a model with the [Echo environment](https://huggingface.co/docs/openenv/environments/echo), which rewards completions based on their text length:
+The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/grpo_echo/grpo_echo.py) script trains a model with the [Echo environment](https://openenv.github.io/OpenEnv/main/environments/echo), which rewards completions based on their text length:
 
 ```python
 from datasets import Dataset
@@ -227,10 +227,10 @@ def reset(self, **kwargs) -> str | None:
 
 ## Advanced example: Wordle
 
-Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, a reward split into several terms, and episode termination via exceptions.
+Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://openenv.github.io/OpenEnv/main/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, a reward split into several terms, and episode termination via exceptions.
 
 > [!NOTE]
-> The [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo) covers the whole pipeline: the SFT data, the SFT warmup, this GRPO step and the evaluation, with hardware and costs. The notebook version of this example is [`grpo_wordle.ipynb`](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
+> The [OpenEnv Wordle tutorial](https://openenv.github.io/OpenEnv/main/tutorials/wordle-grpo) covers the whole pipeline: the SFT data, the SFT warmup, this GRPO step and the evaluation, with hardware and costs. The notebook version of this example is [`grpo_wordle.ipynb`](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
 
 ### The TextArena Environment
 
@@ -605,7 +605,7 @@ Then connect:
 env = EchoEnv(base_url="http://0.0.0.0:8001")
 ```
 
-For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/environments).
+For more details, see the [OpenEnv catalog](https://openenv.github.io/OpenEnv/main/environments).
 
 </hfoption>
 
@@ -615,7 +615,7 @@ For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/
 
 The best way to explore the current catalog of maintained environments is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
-To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://huggingface.co/docs/openenv/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
+To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://openenv.github.io/OpenEnv/main/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
 
 ## Server concurrency
 
@@ -663,7 +663,7 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black-box (loop-owning)** path built on [`AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://openenv.github.io/OpenEnv/main/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
 > [!NOTE]
 > This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.
