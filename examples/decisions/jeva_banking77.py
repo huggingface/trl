@@ -34,106 +34,16 @@ torchrun --nproc_per_node=2 \
 
 import json
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import torch
 from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer, set_seed
 
 from trl import ModelConfig, ScriptArguments, TrlParser, get_peft_config
 from trl.experimental.decision import DataCollatorForDecision, DecisionConfig, DecisionTrainer
-
-
-@dataclass
-class DataCollatorForJeva(DataCollatorForDecision):
-    """
-    Batch typed decisions with separate state and option tokenization.
-
-    Each example contains a `request` (a dictionary or JSON string), or `state` and `questions`, with one question.
-    Supply one of `target_index`, `target_probs`, `p_true`, or `score` as the target. The collator returns padded state
-    inputs, flattened option inputs, an option mask, and target distributions with null probability first.
-
-    For repeated training or evaluation, preprocess once with `dataset.map(collator.tokenize)`. The collator also
-    accepts these prepared examples and only pads them when building batches.
-
-    Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            Tokenizer used by the shared encoder. Padding is applied on the right.
-        decision_config ([`~transformers.DecisionConfig`]):
-            Decision settings and template from the model.
-        max_state_length (`int`, *optional*, defaults to `9000`):
-            Maximum length of the state and question text.
-        max_option_length (`int`, *optional*, defaults to `8192`):
-            Maximum length of each option text.
-        truncation (`str`, *optional*, defaults to `"error"`):
-            Reject overflowing text (`"error"`) or truncate it (`"truncate"`).
-        option_chunk_size (`int`, *optional*):
-            Number of options encoded in one forward pass.
-        return_tensors (`str`, *optional*, defaults to `"pt"`):
-            Type of tensor to return. Only `"pt"` is supported.
-    """
-
-    max_state_length: int = 9000
-    max_option_length: int = 8192
-    truncation: str = "error"
-    option_chunk_size: int | None = None
-    return_tensors: str = "pt"
-
-    def __post_init__(self):
-        if self.max_state_length < 1 or self.max_option_length < 1:
-            raise ValueError("max_state_length and max_option_length must be positive")
-        if self.option_chunk_size is not None and self.option_chunk_size < 1:
-            raise ValueError("option_chunk_size must be positive or None")
-        if self.truncation not in {"error", "truncate"}:
-            raise ValueError("truncation must be error or truncate")
-
-    def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
-        """Render and tokenize one decision with the native Transformers template."""
-        state_ids, option_ids, question, targets = self.tokenize_spans(
-            example,
-            max_state_length=self.max_state_length,
-            max_option_length=self.max_option_length,
-            truncation=self.truncation,
-        )
-
-        return {
-            "input_ids": state_ids,
-            "option_input_ids": option_ids,
-            "labels": list(targets),
-            "allow_null": asdict(question).get("allow_null", False),
-            "is_choice": question.type == "choice",
-        }
-
-    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        if "input_ids" not in features[0]:
-            features = [self.tokenize(example) for example in features]
-
-        states = [example["input_ids"] for example in features]
-        options = [option for example in features for option in example["option_input_ids"]]
-        encoded = [
-            dict(self.tokenizer.pad({"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"))
-            for sequences in (states, options)
-        ]
-
-        counts = torch.tensor([len(example["option_input_ids"]) for example in features])
-        option_mask = torch.arange(counts.max())[None, :] < counts[:, None]
-        labels = torch.zeros(len(features), option_mask.shape[1] + 1)
-        for index, example in enumerate(features):
-            labels[index, : len(example["labels"])] = torch.tensor(example["labels"])
-
-        return {
-            "option_chunk_size": self.option_chunk_size,
-            **encoded[0],
-            **{f"option_{key}": value for key, value in encoded[1].items()},
-            "num_options": counts,
-            "option_mask": option_mask,
-            "labels": labels,
-            "allow_null": torch.tensor([example["allow_null"] for example in features]),
-            "is_choice": torch.tensor([example["is_choice"] for example in features]),
-        }
 
 
 @dataclass
@@ -248,31 +158,33 @@ def main(script_args, training_args, model_args):
         train_dataset, eval_dataset = split["train"], split["test"]
     else:
         eval_dataset = dataset[script_args.dataset_test_split]
+
     if script_args.max_train_samples is not None:
         train_dataset = train_dataset.shuffle(seed=training_args.seed).select(range(script_args.max_train_samples))
     if script_args.max_eval_samples is not None:
         eval_dataset = eval_dataset.shuffle(seed=training_args.seed).select(range(script_args.max_eval_samples))
+
     train_dataset = prepare_dataset(
         train_dataset, script_args.num_options, script_args.null_fraction, training_args.seed
     )
     eval_dataset = prepare_dataset(
         eval_dataset, script_args.num_options, script_args.null_fraction, training_args.seed + 1
     )
-    collator = DataCollatorForJeva(
+
+    truncation = tokenizer.truncation_side if script_args.truncation == "truncate" else script_args.truncation
+    collator = DataCollatorForDecision(
         tokenizer,
         model.decision_config,
-        script_args.max_state_length,
-        script_args.max_option_length,
-        script_args.truncation,
-        script_args.option_chunk_size,
+        prepare_inputs_for_decision=partial(
+            model.prepare_inputs_for_decision,
+            max_state_length=script_args.max_state_length,
+            max_option_length=script_args.max_option_length,
+            truncation=truncation,
+            pad_token_id=tokenizer.pad_token_id,
+            option_chunk_size=script_args.option_chunk_size,
+        ),
     )
-    with training_args.main_process_first(desc="Tokenizing datasets"):
-        train_dataset = train_dataset.map(
-            collator.tokenize, remove_columns=train_dataset.column_names, desc="Tokenizing train dataset"
-        )
-        eval_dataset = eval_dataset.map(
-            collator.tokenize, remove_columns=eval_dataset.column_names, desc="Tokenizing eval dataset"
-        )
+
     trainer = DecisionTrainer(
         model=model,
         args=training_args,

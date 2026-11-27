@@ -35,24 +35,14 @@ trainer.save_model()
 trainer.end()
 ```
 
-The Jeva and CLM scripts below provide their own collators.
+The Jeva and CLM scripts use the same collator and pass model-specific options, such as span lengths, to their hooks.
 
 The trainer preserves which parameters are trainable. Freeze the backbone or prepare adapters before constructing it. Alternatively, pass `peft_config` to wrap the whole model through PEFT; configure `modules_to_save` for any head that should remain trainable. Resume with the same model and adapter setup. The Jeva example saves a native base checkpoint before wrapping it with PEFT, so the adapter can be reloaded with its decision head.
 
-## Jeva example
+## Dataset format
 
-The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/decisions) provides Jeva's model construction and a 1,000-step LoRA configuration with a stratified validation split:
-
-```bash
-python examples/decisions/jeva_banking77.py --config examples/decisions/jeva_banking77.yaml
-```
-
-> [!TIP]
-> This example currently requires [Transformers #50614](https://github.com/huggingface/transformers/pull/50614). CLM and JEV use their own Transformers PRs linked below.
-
-Jeva's `--mode` selects head, LoRA, or full training. Its token limits, truncation policy, and option chunk size are example arguments, rather than trainer settings.
-
-Requests use Transformers' `state` / `questions` schema, with one question per training row. The example stores requests as JSON strings to preserve candidate names and order in Arrow datasets. Targets are separate:
+Requests use Transformers' `state` / `questions` schema, with one question per training row. Store the request as a
+JSON string to preserve candidate names and order in Arrow datasets. Each row also supplies one target field.
 
 | Field | Meaning |
 |---|---|
@@ -64,26 +54,31 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 With named probabilities, omitted options receive zero mass. Use the list form to assign probability to null.
 For Arrow datasets with different option names across rows, store this column as `datasets.Json()`.
 
-Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and
-may supply numeric `values`. The [Jeva example collator](https://github.com/huggingface/trl/blob/main/examples/decisions/jeva_banking77.py)
-uses Transformers' template to prepare separate state and option spans. It subclasses `DataCollatorForDecision`,
-which delegates request rendering to `model.decision_config.prepare_inputs`. Pass raw rows and the example
-collator to `DecisionTrainer`, or cache tokenization with
-`dataset.map(collator.tokenize, remove_columns=dataset.column_names)`. Custom collators can reuse
-`tokenize_spans` for templates that mark the state and each option, then implement their model's batching.
+Choice questions use a `criteria` mapping and can set `allow_null=True` with a model that supports it. Score questions
+use a `criteria` list and can supply numeric `values` for the rubric.
 
+## Jeva example
+
+The [BANKING77 script](https://github.com/huggingface/trl/blob/main/examples/decisions/jeva_banking77.py) supports head,
+LoRA, and full training with a stratified validation split. It requires [Transformers #50614](https://github.com/huggingface/transformers/pull/50614).
+
+```bash
+python examples/decisions/jeva_banking77.py --config examples/decisions/jeva_banking77.yaml
+```
+
+Jeva's hook batches the states and options separately. The script exposes span lengths, truncation, and option chunk size.
 
 ## CLM example
 
-The [typed-decisions example](https://github.com/huggingface/trl/tree/main/examples/decisions) trains
+The [typed-decisions script](https://github.com/huggingface/trl/blob/main/examples/decisions/clm_typed_decisions.py) trains
 CLM projection heads on a frozen SmolLM2-135M encoder. It requires [Transformers #50649](https://github.com/huggingface/transformers/pull/50649).
 
 ```bash
 python examples/decisions/clm_typed_decisions.py --config examples/decisions/clm_typed_decisions.yaml
 ```
 
-The [CLM example collator](https://github.com/huggingface/trl/blob/main/examples/decisions/clm_typed_decisions.py) reuses the request schema above and packs each batch into one prompt with a pool of distinct
-candidates. Soft targets supervise a bidirectional contrastive loss. Validation holds out source-row IDs before
+CLM's hook packs each batch into one prompt with a pool of distinct candidates. Soft targets supervise a bidirectional
+contrastive loss. Validation holds out source-row IDs before
 expanding their questions. `eval_accuracy` uses each question's own candidates; contrastive negatives are local
 to each device's batch. Context parallelism is unsupported for this example.
 
@@ -135,5 +130,3 @@ answers = decide(request)
 ## DataCollatorForDecision
 
 [[autodoc]] experimental.decision.DataCollatorForDecision
-    - prepare_example
-    - tokenize_spans

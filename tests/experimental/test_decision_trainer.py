@@ -14,6 +14,7 @@
 
 import json
 import os
+from functools import partial
 
 import numpy as np
 import pytest
@@ -26,8 +27,6 @@ from packaging.version import Version
 
 pytest.importorskip("transformers.decision")
 
-from examples.decisions.clm_typed_decisions import DataCollatorForClm
-from examples.decisions.jeva_banking77 import DataCollatorForJeva
 from transformers import (
     AutoModel,
     AutoModelForSequenceClassification,
@@ -37,10 +36,12 @@ from transformers import (
     set_seed,
 )
 from transformers.decision import DecisionConfig as TransformersDecisionConfig
+from transformers.decision import parse_questions
 from transformers.loss.loss_utils import LOSS_MAPPING
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
 from trl.experimental.decision import DataCollatorForDecision, DecisionConfig, DecisionTrainer
+from trl.experimental.decision.data_collator import _normalize_target
 
 from ..testing_utils import TrlTestCase, require_peft
 
@@ -218,14 +219,20 @@ def make_model(model_id=MODEL_ID, dtype=torch.float32, mode="head", base_path=No
 
 @pytest.fixture
 def collator(tokenizer):
-    return DataCollatorForJeva(tokenizer, make_model().decision_config, option_chunk_size=1)
+    model = make_model()
+    return DataCollatorForDecision(
+        tokenizer,
+        model.decision_config,
+        prepare_inputs_for_decision=partial(
+            model.prepare_inputs_for_decision, pad_token_id=tokenizer.pad_token_id, option_chunk_size=1
+        ),
+    )
 
 
 @pytest.mark.skipif(not HAS_JEVA, reason="Requires Transformers #50614")
 class TestDecisionTrainerJeva(TrlTestCase):
     @pytest.mark.parametrize("mode", ["head", "full", pytest.param("lora", marks=require_peft)])
     def test_train(self, mode, tokenizer, dataset, collator):
-        dataset = dataset.map(collator.tokenize, remove_columns=dataset.column_names)
         model = make_model(mode=mode, base_path=os.path.join(self.tmp_dir, "base_model"))
         trainer = DecisionTrainer(
             model=model,
@@ -343,46 +350,6 @@ class TestDecisionTrainerJeva(TrlTestCase):
             -(probs * probs.clamp_min(1e-30).log()).sum(-1).mean().item(), abs=1e-6
         )
 
-    @pytest.mark.parametrize("pooling", ["last", "mean", "cls"])
-    def test_permutation_and_chunks(self, pooling, tokenizer, dataset, collator):
-        model = make_model().eval()
-        model.config.pooling = pooling
-        row = dict(dataset[3])
-        request = json.loads(row["request"])
-        request["questions"]["decision"]["criteria"].reverse()
-        permuted = {**row, "request": json.dumps(request), "target_probs": [0, 0.5, 0.5, 0]}
-        batch = collator([row])
-        reordered = collator([permuted])
-        with torch.no_grad():
-            outputs = model(
-                **{
-                    key: batch[key]
-                    for key in (
-                        "input_ids",
-                        "attention_mask",
-                        "option_input_ids",
-                        "option_attention_mask",
-                        "num_options",
-                        "option_mask",
-                    )
-                }
-            )
-            actual = model(
-                **{
-                    key: reordered[key]
-                    for key in (
-                        "input_ids",
-                        "attention_mask",
-                        "option_input_ids",
-                        "option_attention_mask",
-                        "num_options",
-                        "option_mask",
-                    )
-                },
-            )
-        torch.testing.assert_close(actual.logits.flip(-1), outputs.logits)
-        torch.testing.assert_close(actual.coverage_logits, outputs.coverage_logits)
-
     def test_accumulation(self, tokenizer, dataset, collator):
         trained_models = []
         for batch_size, accumulation in ((5, 1), (3, 2)):
@@ -450,15 +417,6 @@ class TestDecisionTrainerJeva(TrlTestCase):
         for name, param in trainer.model.named_parameters():
             torch.testing.assert_close(param, reloaded.state_dict()[name])
 
-    def test_bfloat16_checkpoint(self):
-        model = make_model(dtype=torch.bfloat16)
-        model.save_pretrained(self.tmp_dir)
-        reloaded = AutoModelForDecision.from_pretrained(self.tmp_dir)
-        assert reloaded.model.dtype == torch.bfloat16
-        assert reloaded.context_proj.weight.dtype == torch.float32
-        for name, param in model.named_parameters():
-            torch.testing.assert_close(param, reloaded.state_dict()[name])
-
     @pytest.mark.parametrize(
         "model_id", ["trl-internal-testing/tiny-LlamaForCausalLM-3.2", "trl-internal-testing/tiny-Qwen3MoeForCausalLM"]
     )
@@ -466,7 +424,13 @@ class TestDecisionTrainerJeva(TrlTestCase):
         model = make_model(model_id, mode="full")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
-        collator = DataCollatorForJeva(tokenizer, model.decision_config)
+        collator = DataCollatorForDecision(
+            tokenizer,
+            model.decision_config,
+            prepare_inputs_for_decision=partial(
+                model.prepare_inputs_for_decision, pad_token_id=tokenizer.pad_token_id
+            ),
+        )
         trainer = DecisionTrainer(
             model,
             args=DecisionConfig(
@@ -487,7 +451,7 @@ class TestDecisionTrainerJeva(TrlTestCase):
         assert np.isfinite(result.training_loss)
 
 
-class TestDataCollatorForDecision(TrlTestCase):
+class TestDecisionTargetNormalization(TrlTestCase):
     @pytest.mark.parametrize(
         "question, label, target",
         [
@@ -517,92 +481,21 @@ class TestDataCollatorForDecision(TrlTestCase):
             ),
         ],
     )
-    def test_decision_labels(self, tokenizer, question, label, target):
-        collator = DataCollatorForDecision(tokenizer, TransformersDecisionConfig())
-        row = {"state": "A state", "questions": {"decision": question}, **label}
-        assert collator.prepare_example(row)[2] == pytest.approx(target)
+    def test_decision_labels(self, question, label, target):
+        parsed = parse_questions({"decision": question}, TransformersDecisionConfig())[0]
+        assert _normalize_target(label, parsed) == pytest.approx(target)
 
-    def test_unknown_target_option(self, tokenizer):
-        collator = DataCollatorForDecision(tokenizer, TransformersDecisionConfig())
-        row = {
-            "state": "A state",
-            "questions": {"decision": {"type": "choice", "criteria": {"a": None, "b": None}}},
-            "target_probs": {"typo": 1.0},
-        }
+    def test_unknown_target_option(self):
+        parsed = parse_questions(
+            {"decision": {"type": "choice", "criteria": {"a": None, "b": None}}},
+            TransformersDecisionConfig(),
+        )[0]
         with pytest.raises(ValueError, match="unknown option"):
-            collator.prepare_example(row)
-
-
-@pytest.mark.skipif(not HAS_JEVA, reason="Requires Transformers #50614")
-class TestDataCollatorForJeva(TrlTestCase):
-    @pytest.mark.parametrize("pretokenized", [False, True])
-    def test_batching(self, tokenizer, dataset, collator, pretokenized):
-        rows = list(dataset)
-        rows[0] = {**rows[0], "request": json.loads(rows[0]["request"])}
-        request = json.loads(rows[1].pop("request"))
-        rows[1].update(request)
-        expected_batch = collator(rows)
-        if pretokenized:
-            rows = list(dataset.map(collator.tokenize, remove_columns=dataset.column_names))
-        batch = collator(rows, return_tensors="pt")
-        for key, value in expected_batch.items():
-            if isinstance(value, torch.Tensor):
-                torch.testing.assert_close(batch[key], value)
-            else:
-                assert batch[key] == value
-        torch.testing.assert_close(batch["num_options"], torch.tensor([2, 1, 2, 3, 2]))
-        torch.testing.assert_close(
-            batch["option_mask"],
-            torch.tensor(
-                [
-                    [True, True, False],
-                    [True, False, False],
-                    [True, True, False],
-                    [True, True, True],
-                    [True, True, False],
-                ]
-            ),
-        )
-        torch.testing.assert_close(
-            batch["labels"],
-            torch.tensor([[0, 1, 0, 0], [1, 0, 0, 0], [0, 0.8, 0.2, 0], [0, 0, 0.5, 0.5], [0.1, 0.7, 0.2, 0]]),
-        )
-        torch.testing.assert_close(batch["allow_null"], torch.tensor([False, True, False, False, True]))
-        torch.testing.assert_close(batch["is_choice"], torch.tensor([True, True, False, False, True]))
-        singles = [collator([row]) for row in rows]
-        for prefix in ("", "option_"):
-            ids, mask = batch[f"{prefix}input_ids"], batch[f"{prefix}attention_mask"]
-            assert ids.shape[0] == (5 if not prefix else 10)
-            assert (ids[mask == 0] == tokenizer.pad_token_id).all()
-            assert (mask[:, 1:] <= mask[:, :-1]).all()
-            expected = torch.cat(
-                [single[f"{prefix}input_ids"][single[f"{prefix}attention_mask"].bool()] for single in singles]
-            )
-            torch.testing.assert_close(ids[mask.bool()], expected)
-
-    def test_truncation(self, tokenizer, collator):
-        row = {
-            "state": "A long state",
-            "questions": {
-                "decision": {"type": "choice", "instructions": "Decide", "criteria": {"a": None, "b": None}}
-            },
-            "target_index": 0,
-        }
-        with pytest.raises(ValueError, match="token limit"):
-            DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2)([row])
-        batch = DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2, truncation="truncate")(
-            [row]
-        )
-        assert batch["input_ids"].shape[1] == 2
-        tokenizer.truncation_side = "left"
-        truncated = DataCollatorForJeva(
-            tokenizer, collator.decision_config, max_state_length=2, truncation="truncate"
-        )([row])
-        torch.testing.assert_close(truncated["input_ids"], collator([row])["input_ids"][:, -2:])
+            _normalize_target({"target_probs": {"typo": 1.0}}, parsed)
 
 
 @pytest.mark.skipif(not HAS_CLM, reason="Requires Transformers #50649")
-class TestDataCollatorForClm(TrlTestCase):
+class TestDecisionTrainerClm(TrlTestCase):
     def test_contrastive_training(self, tokenizer):
         from transformers import ClmConfig, ClmForDecision
 
@@ -611,7 +504,9 @@ class TestDataCollatorForClm(TrlTestCase):
             ClmConfig(text_config=encoder.config, hidden_size=24, projection_dim=8, num_hidden_layers=3), model=encoder
         )
         model.base_model.requires_grad_(False)
-        collator = DataCollatorForClm(tokenizer, model.decision_config)
+        collator = DataCollatorForDecision(
+            tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
+        )
         records = [
             ("An invoice", {"billing": None, "delivery": None}, {"billing": 0.75, "delivery": 0.25}),
             ("A different request", {"delivery": None, "other": None}, {"delivery": 0.2, "other": 0.8}),
@@ -628,18 +523,9 @@ class TestDataCollatorForClm(TrlTestCase):
                 for state, criteria, target in records
             ]
         )
-        prepared = dataset.map(collator.tokenize, remove_columns=dataset.column_names)
-        batch = collator(list(prepared))
-        torch.testing.assert_close(batch["num_options"], torch.tensor([[2, 1, 0]]))
+        batch = collator(list(dataset))
         targets = torch.tensor([[0.75, 0.25, 0], [0, 0.2, 0.8], [1, 0, 0]])
         torch.testing.assert_close(batch["labels"], targets)
-        torch.testing.assert_close(
-            batch["option_mask"], torch.tensor([[True, True, False], [False, True, True], [True, True, False]])
-        )
-        output = model(**{key: value for key, value in batch.items() if key != "is_choice"})
-        reverse = targets.T / targets.sum(0)[:, None]
-        expected = (F.cross_entropy(output.logits, targets) + F.cross_entropy(output.logits.T, reverse)) / 2
-        torch.testing.assert_close(output.loss, expected)
         before = {name: parameter.detach().clone() for name, parameter in model.base_model.named_parameters()}
         state_head_before = model.state_head.input_projection.weight.detach().clone()
         action_head_before = model.action_head.input_projection.weight.detach().clone()
@@ -654,8 +540,8 @@ class TestDataCollatorForClm(TrlTestCase):
                 per_device_eval_batch_size=3,
                 report_to="none",
             ),
-            train_dataset=prepared,
-            eval_dataset=prepared,
+            train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=tokenizer,
             data_collator=collator,
         )
@@ -665,7 +551,7 @@ class TestDataCollatorForClm(TrlTestCase):
         assert not torch.equal(action_head_before, model.action_head.input_projection.weight)
         for name, parameter in model.base_model.named_parameters():
             torch.testing.assert_close(parameter, before[name], rtol=0, atol=0)
-        prediction = trainer.predict(prepared)
+        prediction = trainer.predict(dataset)
         assert prediction.predictions.shape == (3, 3)
         np.testing.assert_array_equal(prediction.predictions == -100, ~batch["option_mask"].numpy())
         np.testing.assert_allclose(

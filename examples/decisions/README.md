@@ -1,8 +1,8 @@
 # Decision models
 
 These examples use Transformers' native decision models and losses with TRL's `DecisionTrainer`.
-Request preparation uses the shared `DataCollatorForDecision` base and `DecisionConfig.prepare_inputs`.
-Jeva and CLM define their model-specific collators inside their training scripts.
+The shared `DataCollatorForDecision` renders requests, normalizes targets, and calls each model's
+`prepare_inputs_for_decision` hook to build a batch.
 
 ## Jeva: BANKING77
 
@@ -24,7 +24,7 @@ Trains projection heads on a frozen SmolLM2-135M encoder using `LocalLLaMA/typed
 python examples/decisions/clm_typed_decisions.py --config examples/decisions/clm_typed_decisions.yaml
 ```
 
-The collator deduplicates candidates within each batch and builds soft targets for native bidirectional InfoNCE.
+CLM deduplicates candidates within each batch and builds soft targets for native bidirectional InfoNCE.
 Validation holds out source-row IDs before expanding their questions. Negatives remain local to each microbatch;
 gradient accumulation does not enlarge the pool.
 
@@ -34,7 +34,6 @@ Requires [Transformers #51382](https://github.com/huggingface/transformers/pull/
 Each dataset row contains one question in `request` (JSON), or `state` / `questions`, plus one of `target_index`,
 `target_probs`, `p_true`, or `score`. Supply `target_probs` by option name, or as a list starting with zero
 followed by the probabilities in option order.
-The shared `DataCollatorForDecision` normalizes targets and calls the model's `prepare_inputs_for_decision` hook.
 
 ```bash
 python examples/decisions/jev.py --model_name_or_path autotrust/JEV-9B \
