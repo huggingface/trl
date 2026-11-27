@@ -76,6 +76,7 @@ from trl.trainer.async_grpo_trainer import (
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
+    tree_attn_implementation,
     validate_lora_for_vllm_sync,
 )
 from trl.trainer.base_trainer import _BaseTrainer
@@ -4393,6 +4394,10 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
     Version(transformers.__version__) < Version("5.22.0"),
     reason="Tree packing of LFM2's short convolution layers requires transformers>=5.22.0",
 )
+_QWEN4_EXP_BEFORE_5_25 = pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.25.0.dev0"),
+    reason="Tree packing of Qwen4-Exp requires transformers>=5.25.0.dev0",
+)
 
 
 @require_torch_accelerator
@@ -4421,6 +4426,12 @@ _LFM2_CONV_BEFORE_5_22 = pytest.mark.skipif(
             {},
             id="qwen3.6-moe",
             marks=_GATED_DELTANET_BEFORE_5_15,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+            {},
+            id="qwen4-exp",
+            marks=_QWEN4_EXP_BEFORE_5_25,
         ),
         pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", {}, id="nemotron3-nano"),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2", marks=_LFM2_CONV_BEFORE_5_22),
@@ -4575,7 +4586,11 @@ class TestTreePackingParity(TrlTestCase):
             grads = {name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None}
             return loss.detach().float(), grads
 
-        model.set_attn_implementation(TREE_ATTENTION)
+        # Models whose attention selects its own keys (Qwen4-Exp) tree-pack under sdpa, and the reference is sdpa too
+        attn_implementation = tree_attn_implementation(model.config)
+        if attn_implementation == "sdpa":
+            reference = "sdpa"
+        model.set_attn_implementation(attn_implementation)
         packed_loss, packed_grads = run([packed])
         # Models that refuse Flash Attention take it on their language model (#8400)
         (model if model._supports_flash_attn else model.get_decoder()).set_attn_implementation(reference)

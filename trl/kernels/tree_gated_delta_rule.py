@@ -93,23 +93,33 @@ def tree_chunk_gated_delta_rule(chunk, query, key, value, g, beta, use_qk_l2norm
     return TreeGatedDeltaRule.apply(query, key, value, g, beta, plan, scale, use_qk_l2norm_in_kernel), None
 
 
+def tree_previous(tree, n_tokens):
+    """
+    Each token's predecessor on its own root path, over a packed tree of `n_tokens`: the token before it in its
+    segment, the last token of its parent segment at a segment start, or `-1` at the start of a root.
+    """
+    cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
+    tokens = torch.arange(n_tokens, device=cu_seqlens.device)
+    segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
+        cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
+    )
+    return torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
+
+
 def tree_causal_conv1d(conv, hidden_states, weight, bias=None, activation=None, **tree):
     """
     Tree version of transformers' `causal_conv1d_fn` (`conv`, unused): depthwise causal convolution over a packed tree
     `(1, channels, tokens)`. The window of a token runs back along its own root path, into its parent segments.
     """
-    cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
     n_tokens, width = hidden_states.shape[-1], weight.shape[-1]
-    tokens = torch.arange(n_tokens, device=hidden_states.device)
-    segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
-        cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
-    )
-    previous = torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
-    sources = [tokens]
+    previous = tree_previous(tree, n_tokens)
+    sources = [torch.arange(n_tokens, device=hidden_states.device)]
     for _ in range(width - 1):
         sources.append(torch.where(sources[-1] >= 0, previous[sources[-1].clamp(min=0)], -1))
     sources = torch.stack(sources, dim=1).int()
-    return TreeConv1d.apply(hidden_states, weight, bias, sources, cu_seqlens, activation in ("silu", "swish"))
+    return TreeConv1d.apply(
+        hidden_states, weight, bias, sources, tree["tree_cu_seqlens_q"], activation in ("silu", "swish")
+    )
 
 
 class TreeConv1d(torch.autograd.Function):
