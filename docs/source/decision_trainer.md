@@ -1,6 +1,6 @@
 # DecisionTrainer
 
-`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective; TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. Model-specific token layouts and batching live in example collators. The library provides `DataCollatorForDecision` for shared request preparation and target normalization.
+`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective. TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. `DataCollatorForDecision` renders requests, normalizes targets, and delegates batch preparation to the model's hook when supplied.
 
 ## Usage
 
@@ -73,11 +73,19 @@ to each device's batch. Context parallelism is unsupported for this example.
 
 ## JEV
 
-JEV uses [Transformers #50586](https://github.com/huggingface/transformers/pull/50586). Use the
+The shared collator uses the preparation hook from [Transformers #51382](https://github.com/huggingface/transformers/pull/51382). Use the
 [JEV training script](https://github.com/huggingface/trl/blob/main/examples/decisions/jev.py) with the model's tokenizer and `decision_config`, and set both `per_device_train_batch_size` and
-`per_device_eval_batch_size` to `1`. Disable gradient checkpointing for the current JEV implementation. Each row contains one question; use accumulation for more decisions per update.
-The script prepares packed option targets and uses Transformers' `default_data_collator` for JEV's native KL and ordinal RPS loss. Predictions are padded per-question
-probabilities, like the other collators. Nullable decisions are unsupported.
+`per_device_eval_batch_size` to `1`. Disable activation checkpointing for the current JEV implementation. Each row contains one question. Use gradient accumulation for more decisions per update.
+
+```python
+from trl.experimental.decision import DataCollatorForDecision
+
+collator = DataCollatorForDecision(
+    tokenizer, model.decision_config, prepare_decision_inputs=model.prepare_decision_inputs
+)
+```
+
+The collator prepares raw rows when building a batch. JEV computes its native KL and ordinal RPS loss.
 
 ## Labels and metrics
 

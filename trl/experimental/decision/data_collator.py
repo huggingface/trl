@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import math
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import torch
@@ -115,21 +115,34 @@ def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float,
 
 @dataclass
 class DataCollatorForDecision(DataCollatorMixin):
-    """Base for example collators that adapt Transformers decision inputs to a model's forward signature.
+    """Collate decision requests and normalized targets for a model's forward pass.
 
-    Subclasses implement `tokenize` and `torch_call` for their model's input layout. Request rendering and question
-    parsing are delegated to Transformers; targets are normalized independently of the model's loss.
+    Pass the model's preparation hook to batch raw requests. Example collators can override `torch_call` for models
+    with a custom input layout.
 
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             Tokenizer or processor used to render the decision request.
         decision_config ([`~transformers.DecisionConfig`]):
             Decision settings and template from the model.
+        prepare_decision_inputs (`Callable`, *optional*):
+            Model hook that receives rendered prompts and a `targets` keyword argument with one normalized distribution
+            per question. It returns the model's forward inputs, including labels.
     """
 
     tokenizer: PreTrainedTokenizerBase
     decision_config: TransformersDecisionConfig
+    prepare_decision_inputs: Callable[..., dict[str, Any]] | None = field(default=None, kw_only=True)
     return_tensors = "pt"
+
+    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.prepare_decision_inputs is None:
+            raise ValueError("Pass the model's prepare_decision_inputs hook or use a model-specific collator.")
+
+        inputs, questions, targets = zip(*(self.prepare_example(example) for example in features), strict=True)
+        prompts = [(prompt, [question]) for prompt, question in zip(inputs, questions, strict=True)]
+        batch = self.prepare_decision_inputs(prompts, targets=targets)
+        return {**batch, "is_choice": torch.tensor([question.type == "choice" for question in questions])}
 
     def prepare_example(self, example: dict[str, Any]):
         """Return native inputs, the question, and its normalized null-first target distribution."""

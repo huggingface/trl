@@ -14,7 +14,6 @@
 
 import json
 import os
-from functools import partial
 
 import numpy as np
 import pytest
@@ -28,14 +27,13 @@ from packaging.version import Version
 pytest.importorskip("transformers.decision")
 
 from examples.decisions.clm_typed_decisions import DataCollatorForClm
-from examples.decisions.jev import tokenize as tokenize_jev
 from examples.decisions.jeva_banking77 import DataCollatorForJeva
 from transformers import (
     AutoModel,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
-    default_data_collator,
+    JevForDecision,
     set_seed,
 )
 from transformers.decision import DecisionConfig as TransformersDecisionConfig
@@ -49,7 +47,7 @@ from ..testing_utils import TrlTestCase, require_peft
 
 HAS_JEVA = "jeva" in CONFIG_MAPPING
 HAS_CLM = "clm" in CONFIG_MAPPING
-HAS_JEV_LOSS = "JevForDecision" in LOSS_MAPPING
+HAS_JEV_PREPARATION = "JevForDecision" in LOSS_MAPPING and hasattr(JevForDecision, "prepare_decision_inputs")
 
 if HAS_JEVA:
     from transformers import AutoModelForDecision, JevaForDecision
@@ -675,15 +673,17 @@ class TestDataCollatorForClm(TrlTestCase):
         )
 
 
-@pytest.mark.skipif(not HAS_JEV_LOSS, reason="Requires Transformers #50586")
+@pytest.mark.skipif(not HAS_JEV_PREPARATION, reason="Requires Transformers #51382")
 class TestDecisionTrainerJev(TrlTestCase):
     def test_training_and_predictions(self, tokenizer):
-        from transformers import JevConfig, JevForDecision
+        from transformers import JevConfig
 
         encoder = AutoModel.from_pretrained(MODEL_ID, dtype=torch.float32)
         model = JevForDecision(JevConfig(text_config=encoder.config, hidden_size=encoder.config.hidden_size))
         model.model = encoder
-        collator = DataCollatorForDecision(tokenizer, model.decision_config)
+        collator = DataCollatorForDecision(
+            tokenizer, model.decision_config, prepare_decision_inputs=model.prepare_decision_inputs
+        )
         rows = [
             (
                 "An invoice",
@@ -705,8 +705,7 @@ class TestDecisionTrainerJev(TrlTestCase):
                 for state, question, target in rows
             ]
         )
-        prepared = dataset.map(partial(tokenize_jev, collator=collator), remove_columns=dataset.column_names)
-        batch = default_data_collator([prepared[0]])
+        batch = collator([dataset[0]])
         with torch.no_grad():
             expected = model(**{key: value for key, value in batch.items() if key != "is_choice"}).loss.item()
         trainer = DecisionTrainer(
@@ -721,17 +720,17 @@ class TestDecisionTrainerJev(TrlTestCase):
                 report_to="none",
                 **{CHECKPOINTING_ARG: False},
             ),
-            train_dataset=prepared,
-            eval_dataset=prepared,
+            train_dataset=dataset,
+            eval_dataset=dataset,
             processing_class=tokenizer,
-            data_collator=default_data_collator,
+            data_collator=collator,
         )
-        assert trainer.evaluate(prepared.select([0]))["eval_loss"] == pytest.approx(expected)
+        assert trainer.evaluate(dataset.select([0]))["eval_loss"] == pytest.approx(expected)
         before = model.proj.weight.detach().clone()
         result = trainer.train()
         assert np.isfinite(result.training_loss)
         assert not torch.equal(before, model.proj.weight)
-        prediction = trainer.predict(prepared)
+        prediction = trainer.predict(dataset)
         assert prediction.predictions.shape == (3, 3)
         np.testing.assert_allclose(
             np.where(prediction.predictions == -100, 0, prediction.predictions).sum(-1), 1, atol=1e-6

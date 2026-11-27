@@ -28,18 +28,18 @@ The collator deduplicates candidates within each batch and builds soft targets f
 Validation holds out source-row IDs before expanding their questions. Negatives remain local to each microbatch;
 gradient accumulation does not enlarge the pool.
 
-## JEV: prepared decision requests
+## JEV: typed decisions
 
-Requires [Transformers #50586](https://github.com/huggingface/transformers/pull/50586).
+Requires [Transformers #51382](https://github.com/huggingface/transformers/pull/51382).
 Each dataset row contains one question in `request` (JSON), or `state` / `questions`, plus one of `target_index`,
 `target_probs`, `p_true`, or `score`. Supply `target_probs` by option name, or as a list starting with zero
 followed by the probabilities in option order.
-The script prepares native model fields and uses Transformers' `default_data_collator`.
+The shared `DataCollatorForDecision` normalizes targets and calls the model's `prepare_decision_inputs` hook.
 
 ```bash
 python examples/decisions/jev.py --model_name_or_path autotrust/JEV-9B \
     --dataset_name your/decision-requests --output_dir output/jev \
-    --per_device_train_batch_size 1 --per_device_eval_batch_size 1 --gradient_checkpointing false
+    --per_device_train_batch_size 1 --per_device_eval_batch_size 1 --activation_checkpointing false
 ```
 
 Use batch size one and accumulation for more decisions per update. The model computes KL and ordinal RPS;
