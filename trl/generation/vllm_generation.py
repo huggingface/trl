@@ -49,6 +49,7 @@ if is_peft_available():
 
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
+    from vllm.model_executor.model_loader.reload import finalize_layerwise_reload, initialize_layerwise_reload
     from vllm.sampling_params import StructuredOutputsParams
 
 
@@ -597,8 +598,13 @@ class VLLMGeneration:
                 for _ in self._iter_named_params():  # take part in the gather collectives
                     pass
         elif self.mode == "colocate":
+            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+            # Some vLLM kernels repack the weights after loading them (e.g. FlashInfer TRT-LLM MoE on Blackwell). The
+            # layerwise reload redoes that processing once the new weights are in, as vLLM's own weight transfer does
+            initialize_layerwise_reload(llm_model)
             for name, param in self._iter_named_params():
-                self.llm.llm_engine.model_executor.driver_worker.model_runner.model.load_weights([(name, param)])
+                llm_model.load_weights([(name, param)])
+            finalize_layerwise_reload(llm_model, self.llm.llm_engine.model_config)
 
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
