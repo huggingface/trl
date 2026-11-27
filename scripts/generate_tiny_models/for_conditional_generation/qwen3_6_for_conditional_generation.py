@@ -58,7 +58,7 @@ text_config = {
 vision_config = {
     "hidden_size": 16,
     "depth": 2,
-    "num_heads": 4,
+    "num_heads": 2,  # head size 16 // 2 = 8, as Flash Attention requires
     "intermediate_size": 32,
     "out_hidden_size": 16,
 }
