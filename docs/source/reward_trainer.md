@@ -130,6 +130,21 @@ $$
 > [!TIP]
 > The Bradley-Terry model is underdetermined, meaning that adding a constant to all rewards does not change the preference probabilities. To address this, [Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking](https://huggingface.co/papers/2312.09244) proposes adding an auxiliary loss term that encourages the rewards to be centered around zero. This is controlled by the `center_rewards_coefficient` parameter in the [`RewardConfig`]. The recommended value is `1e-2`.
 
+#### Loss types
+
+Real-world preference datasets often contain flipped labels, which bias the reward model trained with the loss above. [Unbiased Alignment for Large Language Models with Noisy Preferences](https://huggingface.co/papers/2607.03248) proposes the Unbiased Reward Model (URM) loss, which corrects for labels flipped with probability  \\( \varepsilon \\). TRL implements its normalized form, called α-URM in the paper:
+
+$$
+\mathcal{L}_{\text{URM}}(\theta) = - \alpha \, \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \frac{e^{\Delta_\theta} + a}{e^{\Delta_\theta} + 1} \right], \quad \Delta_\theta = r_\theta(x, y^+) - r_\theta(x, y^-), \quad a = \frac{\varepsilon}{1 - \varepsilon}, \quad \alpha = \frac{1 + \sqrt{a}}{1 - \sqrt{a}},
+$$
+
+where the constant  \\( \alpha \\) keeps the maximum gradient magnitude at 1, as for the loss above.
+
+| `loss_type=` | Description |
+| --- | --- |
+| `"sigmoid"` (default) | Negative log-likelihood of the Bradley-Terry model, as defined above. |
+| `"urm"` | Normalized URM loss from the [Unbiased Alignment](https://huggingface.co/papers/2607.03248) paper. Use `label_smoothing` in [`RewardConfig`] to set the flip probability  \\( \varepsilon \\); valid values are in the range `[0.0, 0.5)`. |
+
 ## Logged metrics
 
 While training and evaluating, we record the following metrics:
