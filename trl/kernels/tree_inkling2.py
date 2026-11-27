@@ -213,9 +213,10 @@ def _patch_modeling(model_type):
             return get_relative_distance(*args, **kwargs)
 
     @wraps(bias_forward)
-    def tree_bias(self, hidden_states, relative_distance, position_ids):
+    def tree_bias(self, hidden_states, relative_distance, position_ids, **kwargs):
+        # Recent transformers pass `position_ids` among the forward's keyword arguments
         if relative_distance is not None:
-            return bias_forward(self, hidden_states, relative_distance, position_ids)
+            return bias_forward(self, hidden_states, relative_distance, position_ids=position_ids, **kwargs)
         relative_states = self.linear(hidden_states).view(*hidden_states.shape[:-1], self.num_heads, -1)
         return (self.norm(relative_states, position_ids) @ self.proj).transpose(1, 2)
 
