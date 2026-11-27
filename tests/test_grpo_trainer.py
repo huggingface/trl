@@ -593,10 +593,13 @@ class TestGRPOTrainer(TrlTestCase):
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
-            if ".indexer." in n:  # The sparse attention indexer runs under no_grad
-                continue
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # GLM-5: the DSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            if model_id == "trl-internal-testing/tiny-GlmMoeDsaForCausalLM" and ".indexer." in n:
+                assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
