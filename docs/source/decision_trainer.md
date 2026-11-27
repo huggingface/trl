@@ -1,17 +1,31 @@
 # DecisionTrainer
 
-`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective. TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. `DataCollatorForDecision` renders requests, normalizes targets, and delegates batch preparation to the model's hook when supplied.
+Use `DecisionTrainer` to fine-tune a decision model on labeled choices, yes/no questions, or scores.
 
 ## Usage
 
-Pass a configured model and a collator matching its forward inputs:
+`DataCollatorForDecision` renders each request with `model.decision_config.prepare_inputs()` and normalizes its
+target. It passes the rendered prompts and targets to the model's `prepare_inputs_for_decision()` hook, which
+builds the tensors for the forward pass, including labels.
+
+For a model that provides the hook, such as JEV, pass it to the collator:
 
 ```python
-from trl.experimental.decision import DecisionConfig, DecisionTrainer
+from trl.experimental.decision import DataCollatorForDecision, DecisionConfig, DecisionTrainer
+
+collator = DataCollatorForDecision(
+    tokenizer,
+    model.decision_config,
+    prepare_inputs_for_decision=model.prepare_inputs_for_decision,
+)
 
 trainer = DecisionTrainer(
     model=model,
-    args=DecisionConfig(output_dir="decision-output"),
+    args=DecisionConfig(
+        output_dir="decision-output",
+        per_device_train_batch_size=1,
+        activation_checkpointing=False,
+    ),
     train_dataset=dataset,
     processing_class=tokenizer,
     data_collator=collator,
@@ -20,6 +34,8 @@ trainer.train()
 trainer.save_model()
 trainer.end()
 ```
+
+The Jeva and CLM scripts below provide their own collators.
 
 The trainer preserves which parameters are trainable. Freeze the backbone or prepare adapters before constructing it. Alternatively, pass `peft_config` to wrap the whole model through PEFT; configure `modules_to_save` for any head that should remain trainable. Resume with the same model and adapter setup. The Jeva example saves a native base checkpoint before wrapping it with PEFT, so the adapter can be reloaded with its decision head.
 
@@ -73,19 +89,10 @@ to each device's batch. Context parallelism is unsupported for this example.
 
 ## JEV
 
-The shared collator uses the preparation hook from [Transformers #51382](https://github.com/huggingface/transformers/pull/51382). Use the
-[JEV training script](https://github.com/huggingface/trl/blob/main/examples/decisions/jev.py) with the model's tokenizer and `decision_config`, and set both `per_device_train_batch_size` and
-`per_device_eval_batch_size` to `1`. Disable activation checkpointing for the current JEV implementation. Each row contains one question. Use gradient accumulation for more decisions per update.
-
-```python
-from trl.experimental.decision import DataCollatorForDecision
-
-collator = DataCollatorForDecision(
-    tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
-)
-```
-
-The collator prepares raw rows when building a batch. JEV computes its native KL and ordinal RPS loss.
+The [JEV training script](https://github.com/huggingface/trl/blob/main/examples/decisions/jev.py) uses the shared
+collator with the hook from [Transformers #51382](https://github.com/huggingface/transformers/pull/51382).
+Use batch size one for training and evaluation, with one question per row. Disable activation checkpointing and
+use gradient accumulation for more decisions per update.
 
 ## Labels and metrics
 
