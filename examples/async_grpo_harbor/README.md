@@ -30,7 +30,9 @@ tokenizer in the output directory on successful completion, including runs short
 
 [launcher.py](launcher.py) starts the server, vLLM, and trainer on one two-GPU job. It installs the pinned
 OpenEnv runtime and checks out the matching harness source. Pass `HF_TOKEN` and the sandbox credential
-as job secrets. A bucket mounted at `/data` preserves checkpoints and logs.
+as job secrets. To preserve checkpoints and logs, add `-v hf://buckets/ORG/BUCKET:/training-outputs`
+to the Jobs options and `--data-root /training-outputs` to the launcher arguments. When running a
+local script, `hf jobs uv run` reserves `/data` for staged script files.
 
 Use `--train-script-url` with the raw URL of the TRL revision being tested before the example is merged.
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
