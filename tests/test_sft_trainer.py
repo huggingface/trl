@@ -2551,6 +2551,21 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+                id="qwen4-exp",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="Qwen4-Exp models were introduced in transformers-5.17.0",
+                    ),
+                    pytest.mark.xfail(
+                        raises=ValueError,
+                        reason="Qwen4-Exp doesn't support Flash Attention yet (huggingface/transformers#51369)",
+                        strict=True,
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
                 id="muse-spark",
                 marks=pytest.mark.skipif(
