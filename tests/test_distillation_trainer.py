@@ -36,6 +36,7 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -661,6 +662,23 @@ class TestDistillationTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none"
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
