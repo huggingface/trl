@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 import transformers
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
@@ -60,6 +61,7 @@ from trl.chat_template_utils import (
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    lfm2_2_5_chat_template,
     lfm2_2_5_v2_chat_template,
     lfm2_2_5_v4_chat_template,
     lfm2_2_5_vl_v2_chat_template,
@@ -87,19 +89,17 @@ from trl.chat_template_utils import (
     qwen3_6_v2_chat_template,
     qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
-    qwen3_coder_chat_template,
-    qwen3_coder_next_chat_template,
     qwen3_coder_v2_chat_template,
     qwen3_instruct_2507_v2_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
-    smolvlm_v2_chat_template,
+    smolvlm_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_response_parsing, require_vision
+from .testing_utils import MODEL_REVISIONS, TrlTestCase, require_response_parsing, require_vision
 
 
 def multiply(a: int, b: int) -> int:
@@ -143,10 +143,10 @@ def get_weather(zip_code: str, days: int, threshold: float, metric: bool, fields
 _GLM_TOKENIZER_NAMES = (
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm4_7_chat_template),
-    ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_chat_template),
-    ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template),
-    ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template),
-    ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template),
+    ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_chat_template),
+    ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_1_chat_template),
+    ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_2_chat_template),
+    ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_3_chat_template),
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
 )
 
@@ -342,6 +342,15 @@ class TestAddResponseSchema:
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_chat_template,
+                id="lfm2-2.5-v1",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_v2_chat_template,
                 id="lfm2.5-v2",
                 marks=pytest.mark.skipif(
@@ -511,11 +520,51 @@ class TestAddResponseSchema:
         "tokenizer_name, chat_template",
         [
             pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm4_7_chat_template, id="glm4.7"),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_chat_template, id="glm5"),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template, id="glm5.1"),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template, id="glm5.2"),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template, id="glm5.3"),
-            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_v2_chat_template, id="glm5.3-v2"),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_chat_template,
+                id="glm5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_1_chat_template,
+                id="glm5.1",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_2_chat_template,
+                id="glm5.2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_3_chat_template,
+                id="glm5.3",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_3_v2_chat_template,
+                id="glm5.3-v2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", None, id="glm5.3-flash"),
             pytest.param(
                 "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
@@ -1231,8 +1280,8 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
             pytest.param(
-                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-                id="smolvlm-v2",
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+                id="smolvlm-v1",
             ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
@@ -1704,35 +1753,35 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ),
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_chat_template),
+            ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_chat_template),
             id="glm5",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="GLM4 tokenizer requires transformers>=5.0.0",
+                Version(transformers.__version__) < Version("5.11.0"),
+                reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
             ),
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template),
+            ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_1_chat_template),
             id="glm5.1",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="GLM4 tokenizer requires transformers>=5.0.0",
+                Version(transformers.__version__) < Version("5.11.0"),
+                reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
             ),
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template),
+            ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_2_chat_template),
             id="glm5.2",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="GLM4 tokenizer requires transformers>=5.0.0",
+                Version(transformers.__version__) < Version("5.11.0"),
+                reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
             ),
         ),
         pytest.param(
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template),
+            ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_3_chat_template),
             id="glm5.3",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.0.0"),
-                reason="GLM4 tokenizer requires transformers>=5.0.0",
+                Version(transformers.__version__) < Version("5.11.0"),
+                reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
             ),
         ),
         pytest.param(
@@ -1958,10 +2007,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
             id="qwen3-thinking-2507",
         ),
-        pytest.param(("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_chat_template), id="qwen3-coder"),
-        pytest.param(
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template), id="qwen3-coder-next"
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", id="qwen3-coder"),
+        pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", id="qwen3-coder-next"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             id="qwen3-vl",
@@ -2055,8 +2102,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
-            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-            id="smolvlm-v2",
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+            id="smolvlm-v1",
             marks=require_vision,
         ),
         pytest.param(
@@ -2740,19 +2787,51 @@ class TestGlm4MoeTrainingChatTemplate:
         assert trained.startswith("\n<think></think>\n<tool_call>multiply")
 
     @pytest.mark.parametrize(
-        "chat_template",
+        "tokenizer_name, chat_template",
         [
-            pytest.param(glm4_7_chat_template, id="glm4.7"),
-            pytest.param(glm5_chat_template, id="glm5"),
-            pytest.param(glm5_1_chat_template, id="glm5.1"),
-            pytest.param(glm5_2_chat_template, id="glm5.2"),
-            pytest.param(glm5_3_chat_template, id="glm5.3"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm4_7_chat_template, id="glm4.7"),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_chat_template,
+                id="glm5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_1_chat_template,
+                id="glm5.1",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_2_chat_template,
+                id="glm5.2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_3_chat_template,
+                id="glm5.3",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
         ],
     )
-    def test_later_templates_assistant_masks_tool_call_without_content(self, chat_template):
+    def test_later_templates_assistant_masks_tool_call_without_content(self, tokenizer_name, chat_template):
         # Same as above for the later GLM templates, whose generation prompt pre-fills `<think>`: the trained turn
         # starts after it, and the tool-call turn is closed by `<|observation|>`
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer.chat_template = chat_template
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         messages = [
@@ -2776,19 +2855,43 @@ class TestGlm4MoeTrainingChatTemplate:
         assert "<|observation|>" in trained
 
     @pytest.mark.parametrize(
-        "chat_template",
+        "tokenizer_name, chat_template",
         [
-            pytest.param(None, id="glm4-moe"),
-            pytest.param(glm4_7_chat_template, id="glm4.7"),
-            pytest.param(glm5_chat_template, id="glm5"),
-            pytest.param(glm5_1_chat_template, id="glm5.1"),
-            pytest.param(glm5_2_chat_template, id="glm5.2"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", None, id="glm4-moe"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm4_7_chat_template, id="glm4.7"),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_chat_template,
+                id="glm5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_1_chat_template,
+                id="glm5.1",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_2_chat_template,
+                id="glm5.2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
         ],
     )
-    def test_assistant_masks_reasoning_with_thinking_disabled(self, chat_template):
+    def test_assistant_masks_reasoning_with_thinking_disabled(self, tokenizer_name, chat_template):
         # With thinking off, the generation prompt already ends after `</think>`, so the model never generates the
         # thinking block: it stays out of the trained tokens even when the turn has reasoning
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if chat_template is not None:
             tokenizer.chat_template = chat_template
         messages = [
@@ -3355,3 +3458,23 @@ class TestChatTemplatesDocumentation:
             path.name for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja") if path.name not in documented
         )
         assert missing == []
+
+
+class TestChatTemplatesCoverage:
+    def test_every_stored_template_is_tested(self):
+        # Regenerating a tiny model silently drops the coverage of its earlier template (#7492)
+        source = Path(__file__).read_text(encoding="utf-8")
+        tested = set(re.findall(r"\b(\w+)_chat_template\b", source))
+        shipped = set()
+        for model_id in set(re.findall(r'"(trl-internal-testing/[\w.-]+)"', source)):
+            path = Path(snapshot_download(model_id, revision=MODEL_REVISIONS[model_id], allow_patterns="*.jinja"))
+            if (path / "chat_template.jinja").exists():
+                shipped.add((path / "chat_template.jinja").read_text(encoding="utf-8").removesuffix("\n"))
+        untested = sorted(
+            path.name
+            for path in _CHAT_TEMPLATES_DIR.glob("*.jinja")
+            if not path.name.endswith("_training.jinja")
+            and path.stem not in tested
+            and path.read_text(encoding="utf-8").removesuffix("\n") not in shipped
+        )
+        assert untested == []

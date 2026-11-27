@@ -10,6 +10,7 @@ on:
     paths:
       - ".github/workflows/chat_templates_check.yml"
       - "scripts/check_chat_templates.py"
+      - "trl/chat_template_utils.py"
       - "trl/chat_templates/**"
 
 env:
@@ -48,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install huggingface_hub
+          uv pip install ".[vlm]"
 
       - name: Check chat templates
         run: |

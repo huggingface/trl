@@ -52,6 +52,7 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    get_chat_template_end_of_turn_token_id,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     parse_response,
@@ -457,16 +458,6 @@ class DistillationTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
-        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
-        eos_token_ids = model.generation_config.eos_token_id
-        if eos_token_ids is None:
-            eos_token_ids = []
-        elif isinstance(eos_token_ids, int):
-            eos_token_ids = [eos_token_ids]
-        if self._tokenizer.eos_token_id not in eos_token_ids:
-            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
-        self.eos_token_ids = eos_token_ids
-
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
         self._image_pad_token_id = None
@@ -811,6 +802,27 @@ class DistillationTrainer(_BaseTrainer):
                     "instantiated. Pass the teacher as a model id, or remove its `teacher_model_init_kwargs`."
                 )
 
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if train_dataset is not None and is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class, chat_template=self.chat_template)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
         # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
@@ -919,6 +931,9 @@ class DistillationTrainer(_BaseTrainer):
             args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
         )
         self.chat_template_kwargs = args.chat_template_kwargs or {}
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -1025,7 +1040,7 @@ class DistillationTrainer(_BaseTrainer):
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
                 logprobs=None,  # distillation trains on the teacher distribution, not sampled logprobs
-                generation_kwargs=args.generation_kwargs,
+                generation_kwargs={"stop_token_ids": self.eos_token_ids, **(args.generation_kwargs or {})},
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 

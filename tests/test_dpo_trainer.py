@@ -31,6 +31,7 @@ from .testing_utils import (
     is_ampere_or_newer,
     is_bf16_supported,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_kernels,
     require_peft,
     require_torch_accelerator,
@@ -182,6 +183,14 @@ class TestDPOTrainer(TrlTestCase):
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                id="glm-moe-dsa",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
             pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
@@ -254,7 +263,24 @@ class TestDPOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # GLM-5: the DSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            if model_id == "trl-internal-testing/tiny-GlmMoeDsaForCausalLM" and ".indexer." in n:
+                assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = DPOConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102

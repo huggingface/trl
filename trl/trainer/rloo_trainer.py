@@ -51,6 +51,7 @@ from transformers import (
 )
 from transformers.utils import is_peft_available, is_rich_available
 
+from ..chat_template_utils import get_chat_template_end_of_turn_token_id
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -346,16 +347,6 @@ class RLOOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
-        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
-        eos_token_ids = model.generation_config.eos_token_id
-        if eos_token_ids is None:
-            eos_token_ids = []
-        elif isinstance(eos_token_ids, int):
-            eos_token_ids = [eos_token_ids]
-        if self._tokenizer.eos_token_id not in eos_token_ids:
-            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
-        self.eos_token_ids = eos_token_ids
-
         # PEFT
         if peft_config is not None:
             if not is_peft_available():
@@ -613,6 +604,9 @@ class RLOOTrainer(_BaseTrainer):
             self.continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
         else:
             self.continuous_batching_config = None
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
@@ -631,6 +625,27 @@ class RLOOTrainer(_BaseTrainer):
             raise TypeError(
                 f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
             )
+
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
         # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
@@ -835,7 +850,7 @@ class RLOOTrainer(_BaseTrainer):
                 min_p=self.min_p,
                 max_completion_length=self.max_completion_length,
                 logprobs=None,  # we don't need logprobs from vLLM in RLOO
-                generation_kwargs=args.generation_kwargs,
+                generation_kwargs={"stop_token_ids": self.eos_token_ids, **(args.generation_kwargs or {})},
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
