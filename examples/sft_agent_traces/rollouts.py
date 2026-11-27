@@ -229,9 +229,7 @@ def main():
     api = HfApi()
     api.create_repo(args.push_to, repo_type="dataset", private=args.private, exist_ok=True)
 
-    # Real key lengths, so identifiers like `hf_hub_download` survive (`sk-` also needs a word start or an escaped
-    # newline before it, or a long hyphenated name would match), and a private key only within one JSON string, so a truncated one can't swallow
-    # the JSON around it.
+    # Real key lengths, so names like `hf_hub_download` survive, and a private key can't span JSON strings.
     secret = re.compile(
         r"hf_[A-Za-z0-9]{30,}|(?:\b|(?<=\\[nrt]))sk-[A-Za-z0-9_\-]{20,}|ghp_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{16}"
         r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[^\"]*?-----END [A-Z ]*PRIVATE KEY-----"
@@ -262,7 +260,7 @@ def main():
     env = {
         **os.environ,
         "PYTHONPATH": f"{patch_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
-        # A local vLLM needs no key, so the token only goes to the router when it is the endpoint.
+        # vLLM runs without --api-key.
         "OPENENV_LLM_API_KEY": "EMPTY" if args.serve else os.environ.get("HF_TOKEN", ""),
         "PYTHONUNBUFFERED": "1",
     }
