@@ -141,22 +141,47 @@ def _patch_convolution(cls):
     cls.forward = tree_conv
 
 
+def patch_tree_inkling2(model) -> bool:
+    """
+    Make Inkling 2's attention and short convolutions follow the tree of a tree-packed forward: its `"hybrid"` and
+    `"hybrid_sliding"` layers. Given the tree of [`~packing.TreeRow.pack`], the attention runs over the whole tree in
+    one FlexAttention call and the convolutions read each token's own path; otherwise they run unchanged.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to patch.
+
+    Returns:
+        `bool`: whether the model is an Inkling 2 model whose modeling this can patch.
+    """
+    text_config = model.config.get_text_config()
+    if text_config.model_type not in {"inkling2_text", "inkling2_loop_text"}:
+        return False
+    if text_config.attention_dropout:
+        raise ValueError("Tree packing of Inkling 2 requires attention_dropout=0.")
+    if not _patch_modeling(text_config.model_type):
+        return False
+    model.set_attn_implementation("eager")
+    return True
+
+
 @cache
-def patch_tree_inkling2(model_type):
+def _patch_modeling(model_type):
     if model_type == "inkling2_loop_text":
         from transformers.models.inkling2_loop import modeling_inkling2_loop as modeling
 
-        text_model = modeling.Inkling2LoopTextModel
-        relative_bias = modeling.Inkling2LoopRelativePositionBias
-        _patch_convolution(modeling.Inkling2LoopShortConvolution)
-        _patch_convolution(modeling.Inkling2LoopDynamicShortConvolution)
+        prefix = "Inkling2Loop"
     else:
         from transformers.models.inkling2 import modeling_inkling2 as modeling
 
-        text_model = modeling.Inkling2TextModel
-        relative_bias = modeling.Inkling2RelativePositionBias
-        _patch_convolution(modeling.Inkling2ShortConvolution)
-        _patch_convolution(modeling.Inkling2DynamicShortConvolution)
+        prefix = "Inkling2"
+    # Before transformers 5.24, the relative distance was computed inside each attention layer
+    if "get_relative_distance" not in vars(modeling):
+        return False
+    text_model = vars(modeling)[f"{prefix}TextModel"]
+    relative_bias = vars(modeling)[f"{prefix}RelativePositionBias"]
+    _patch_convolution(vars(modeling)[f"{prefix}ShortConvolution"])
+    _patch_convolution(vars(modeling)[f"{prefix}DynamicShortConvolution"])
 
     model_forward = text_model.forward
     get_relative_distance = modeling.get_relative_distance
@@ -213,3 +238,4 @@ def patch_tree_inkling2(model_type):
     modeling.get_relative_distance = tree_relative_distance
     relative_bias.forward = tree_bias
     modeling.eager_attention_forward = tree_attention
+    return True

@@ -75,7 +75,6 @@ from ..chat_template_utils import (
 from ..generation.async_vllm_client import AsyncVLLMClient
 from ..generation.weight_transfer import WeightTransferClient
 from ..import_utils import is_aiohttp_available, is_jmespath_available
-from ..kernels.tree_inkling2 import patch_tree_inkling2
 from .async_grpo_config import AsyncGRPOConfig
 from .base_trainer import _BaseTrainer
 from .utils import (
@@ -3151,17 +3150,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "mlp",
         }
         # Check tree attention compat
-        inkling2 = text_config.model_type in {"inkling2_text", "inkling2_loop_text"}
-        if inkling2:
-            if text_config.attention_dropout:
-                raise ValueError("Tree packing of Inkling 2 requires attention_dropout=0.")
-            patch_tree_inkling2(text_config.model_type)
-            model.set_attn_implementation("eager")
-        elif layer_types not in (set(), {"linear_attention"}, {"conv"}):
+        if layer_types not in (set(), {"linear_attention"}, {"conv"}, {"hybrid", "hybrid_sliding"}):
             raise ValueError(
                 f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
-                "transformers' gated DeltaNet and Mamba2 layers and LFM2's short convolutions along each sample's own "
-                "path; any other recurrent or convolutional layer would scan across samples."
+                "transformers' gated DeltaNet and Mamba2 layers, LFM2's short convolutions and Inkling 2's hybrid "
+                "layers along each sample's own path; any other recurrent or convolutional layer would scan across "
+                "samples."
             )
         if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
             raise ValueError(
@@ -3175,7 +3169,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "before it, these layers do not pass the forward's keyword arguments down to the module-level "
                 "function tree packing patches, so they would scan across samples."
             )
-        if layer_types and not inkling2 and not patch_tree_recurrent(model, *layer_types):
+        if layer_types == {"hybrid", "hybrid_sliding"}:
+            from ..kernels.tree_inkling2 import patch_tree_inkling2
+
+            if not patch_tree_inkling2(model):
+                raise ValueError(
+                    f"{type(model).__name__}'s hybrid layers aren't Inkling 2's (with transformers>=5.24.0), the only "
+                    "hybrid layers tree packing routes along each sample's own path."
+                )
+        elif layer_types and not patch_tree_recurrent(model, *layer_types):
             raise ValueError(
                 f"{type(model).__name__}'s {sorted(layer_types)} layers don't run through the functions tree packing "
                 "patches (transformers' gated DeltaNet, Mamba2 or short convolution), so they would scan across "
