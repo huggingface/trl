@@ -20,6 +20,11 @@ template stops being recognized until the new revision is stored.
 For each stored template, `REPOS` lists the repo it comes from and the most-downloaded chat checkpoint that ships it,
 so a popular checkpoint that changes its chat template on its own is caught too.
 
+It also checks that the model stops generating where its training template ends an assistant turn: the last token
+trained for each assistant turn (a final answer, and a tool call if the template supports tools) must be one of the
+repo's stop tokens (`eos_token_id` of `generation_config.json`, else of `config.json`), or the end-of-turn token TRL
+adds to them when training (#8564).
+
 Some reference repos are gated, so the Hugging Face token in use needs access to them.
 
 Usage, from the repository root:
@@ -34,9 +39,53 @@ import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
+from transformers import AutoProcessor, ProcessorMixin
+
+from trl.chat_template_utils import (
+    get_chat_template_end_of_turn_token_id,
+    get_training_chat_template,
+    supports_tool_calling,
+)
+from trl.data_utils import prepare_multimodal_messages
+
+
+MESSAGES = [
+    {"role": "user", "content": "What is 2 * 3?"},
+    {"role": "assistant", "content": "The result is 6."},
+]
+TOOL_MESSAGES = [
+    {"role": "user", "content": "What is 2 * 3?"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 2, "b": 3}}}],
+    },
+    {"role": "tool", "name": "multiply", "content": "6"},
+    {"role": "assistant", "content": "The result is 6."},
+]
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "multiply",
+            "description": "Multiply two integers.",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                "required": ["a", "b"],
+            },
+        },
+    }
+]
 
 
 REPOS = [
+    "allenai/Olmo-3-7B-Instruct",
+    "allenai/Olmo-3-7B-Instruct-SFT",
+    "allenai/Olmo-3.1-32B-Instruct",
+    "allenai/Olmo-3-7B-Think",
+    "allenai/Olmo-3-7B-Think-SFT",
+    "allenai/Olmo-3-32B-Think",
     "CohereLabs/aya-expanse-8b",
     "CohereLabs/tiny-aya-earth",
     "deepseek-ai/DeepSeek-R1",
@@ -47,6 +96,9 @@ REPOS = [
     "deepseek-ai/DeepSeek-V3",
     "deepseek-ai/DeepSeek-V3-0324",
     "deepseek-ai/DeepSeek-V3.1",
+    "deepseek-ai/DeepSeek-V3.2-Exp",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "deepseek-ai/DeepSeek-V4.1-Flash-1017",
     "google/diffusiongemma-26B-A4B-it",
     "google/gemma-2-2b-it",
     "google/gemma-3-4b-it",
@@ -74,6 +126,9 @@ REPOS = [
     "meta-models/Muse-Spark-Open-816B-A42B",
     "microsoft/Phi-3-mini-4k-instruct",
     "microsoft/Phi-3.5-mini-instruct",
+    "microsoft/phi-4",
+    "microsoft/Phi-4-mini-instruct",
+    "microsoft/Phi-4-mini-reasoning",
     "mistralai/Mistral-Large-4-1T-A52B",
     "mistralai/Mistral-Medium-3.5-128B",
     "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
@@ -101,6 +156,7 @@ REPOS = [
     "Qwen/Qwen3.5-4B",
     "Qwen/Qwen3.6-35B-A3B",
     "Qwen/Qwen3.8-27B",
+    "thinkingmachines/Inkling",
     "zai-org/GLM-4.5",
     "zai-org/GLM-4.5-Air",
     "zai-org/GLM-4.7",
@@ -130,14 +186,58 @@ def get_chat_template(api, repo):
                 return chat_template
 
 
+def get_stop_token_ids(api, repo):
+    files = api.list_repo_files(repo)
+    filename = "generation_config.json" if "generation_config.json" in files else "config.json"
+    config = json.loads(Path(hf_hub_download(repo, filename)).read_text(encoding="utf-8"))
+    eos_token_id = config.get("eos_token_id", config.get("text_config", {}).get("eos_token_id"))
+    return {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id or [])
+
+
+def get_unstopped_turn_ends(api, repo, chat_template):
+    processing_class = AutoProcessor.from_pretrained(repo)
+    processing_class.chat_template = chat_template
+    training_chat_template = (
+        get_training_chat_template(processing_class, require_prefix_preservation=False) or chat_template
+    )
+    stop_token_ids = get_stop_token_ids(api, repo)
+    stop_token_ids.add(get_chat_template_end_of_turn_token_id(processing_class, chat_template=training_chat_template))
+    messages, tools = (TOOL_MESSAGES, TOOLS) if supports_tool_calling(processing_class) else (MESSAGES, None)
+    tokenizer = processing_class
+    if isinstance(processing_class, ProcessorMixin):
+        tokenizer = processing_class.tokenizer
+        messages = prepare_multimodal_messages(messages)
+    output = tokenizer.apply_chat_template(
+        messages,
+        tools=tools,
+        chat_template=training_chat_template,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+    )
+    input_ids, mask = output["input_ids"], output["assistant_masks"]
+    # The last token of each assistant turn (masked span), skipping trailing whitespace
+    turn_ends = [
+        next(t for t in reversed(input_ids[: i + 1]) if tokenizer.decode([t]).strip())
+        for i in range(len(mask))
+        if mask[i] and (i + 1 == len(mask) or not mask[i + 1])
+    ]
+    return [tokenizer.convert_ids_to_tokens(t) for t in turn_ends if t not in stop_token_ids]
+
+
 def main():
     stored = {path.read_text(encoding="utf-8") for path in Path("trl/chat_templates").glob("*.jinja")}
     api = HfApi()
-    drifted = [repo for repo in REPOS if get_chat_template(api, repo) not in stored]
-    for repo in drifted:
-        print(f"{repo}: the chat template it ships is not stored in trl/chat_templates/")
-    print(f"{len(REPOS) - len(drifted)}/{len(REPOS)} reference repos ship a stored chat template")
-    sys.exit(1 if drifted else 0)
+    failed = []
+    for repo in REPOS:
+        chat_template = get_chat_template(api, repo)
+        if chat_template not in stored:
+            print(f"{repo}: the chat template it ships is not stored in trl/chat_templates/")
+            failed.append(repo)
+        elif unstopped := get_unstopped_turn_ends(api, repo, chat_template):
+            print(f"{repo}: the training chat template ends an assistant turn on {unstopped}, not a stop token")
+            failed.append(repo)
+    print(f"{len(REPOS) - len(failed)}/{len(REPOS)} reference repos pass")
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

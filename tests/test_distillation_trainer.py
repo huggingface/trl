@@ -12,14 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
+from collections import defaultdict
 from unittest.mock import patch
 
 import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate.utils import set_seed
 from accelerate.utils.memory import release_memory
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
@@ -32,6 +36,7 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -52,6 +57,252 @@ def multiply_tool(a: int, b: int) -> int:
         The product of the two integers.
     """
     return a * b
+
+
+def record(key: str, value):
+    """Append `value` under `key` to the file `TRL_TEST_RECORD` names.
+
+    Tools and environments run in the rollout worker's process, so they report what they see through a file rather than
+    through the test's variables.
+    """
+    with open(os.environ["TRL_TEST_RECORD"], "a") as f:
+        f.write(json.dumps([key, value]) + "\n")
+
+
+def recorded(path: str) -> dict[str, list]:
+    """Read back what [`record`] wrote to `path`, as `{key: [value, ...]}`."""
+    records = defaultdict(list)
+    with open(path) as f:
+        for line in f:
+            key, value = json.loads(line)
+            records[key].append(value)
+    return records
+
+
+class ScriptedTurns:
+    """Answers each prompt with a completion written as text, in place of the model's generation.
+
+    The k-th first turn of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets
+    `after_tool`. Call it with a prompt's token ids, or patch [`~ScriptedTurns.generate`] in for the model's
+    `generate`.
+
+    Args:
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer of the model.
+        first_turns (`list[str]` or `Callable[[str], list[str]]`):
+            Completions of the first turn, or a function of the prompt's text returning them.
+        after_tool (`str`, *optional*, defaults to `"Done!<|im_end|>"`):
+            Completion of a turn after a tool result.
+        tool_response_marker (`str`, *optional*, defaults to `"<tool_response>"`):
+            Text the chat template renders a tool result with, which tells the turns apart.
+
+    Attributes:
+        turns_after_tool (`int`):
+            Number of turns answered after a tool result.
+    """
+
+    def __init__(self, tokenizer, first_turns, after_tool="Done!<|im_end|>", tool_response_marker="<tool_response>"):
+        self.tokenizer = tokenizer
+        self.first_turns = first_turns
+        self.after_tool = after_tool
+        self.tool_response_marker = tool_response_marker
+        self.seen = defaultdict(int)
+        self.turns_after_tool = 0
+
+    def __call__(self, prompt_ids: list[int]) -> list[int]:
+        prompt = self.tokenizer.decode(prompt_ids)
+        if self.tool_response_marker in prompt:
+            self.turns_after_tool += 1
+            text = self.after_tool
+        else:
+            first_turns = self.first_turns(prompt) if callable(self.first_turns) else self.first_turns
+            text = first_turns[self.seen[prompt] % len(first_turns)]
+            self.seen[prompt] += 1
+        return self.tokenizer(text, add_special_tokens=False).input_ids
+
+    def generate(self, input_ids, attention_mask, **kwargs):
+        """Answer a batch of left-padded prompts as `generate` does: each prompt followed by its completion,
+        right-padded."""
+        completions = [self(ids[mask.bool()].tolist()) for ids, mask in zip(input_ids, attention_mask, strict=True)]
+        width = max(len(ids) for ids in completions)
+        completion_ids = [ids + [self.tokenizer.pad_token_id] * (width - len(ids)) for ids in completions]
+        return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+
+class CounterEnvironment:
+    def reset(self, **kwargs):
+        record("reset_counter", kwargs)
+        return "Count."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        record("increment", step)
+        return step
+
+
+class EchoEnvironment:
+    def reset(self, **kwargs):
+        record("reset_echo", kwargs)
+        return "Echo."
+
+    def shout(self, text: str) -> str:
+        """
+        Shout the given text.
+
+        Args:
+            text: Text to shout.
+
+        Returns:
+            The text in upper case.
+        """
+        record("shout", text)
+        return text.upper()
+
+
+class ZipEnvironment:
+    def reset(self, **kwargs):
+        return "Give the zip code."
+
+    def submit(self, answer: str) -> str:
+        """
+        Submit the zip code.
+
+        Args:
+            answer: The zip code.
+
+        Returns:
+            A confirmation.
+        """
+        record("zip", answer)
+        return "ok"
+
+
+class CountEnvironment:
+    def reset(self, **kwargs):
+        return "Count."
+
+    def submit(self, answer: int) -> str:
+        """
+        Submit the count.
+
+        Args:
+            answer: The count.
+
+        Returns:
+            A confirmation.
+        """
+        record("count", answer)
+        return "ok"
+
+
+class IncrementEnvironment:
+    def reset(self, **kwargs):
+        self._counter = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._counter += step
+        return self._counter
+
+
+class StartedCounterEnvironment:
+    # Reads its start from a dataset column, keeps its state across turns, and scores the rollout from it
+    def reset(self, start: int, **kwargs):
+        self._counter = start
+        return f" The counter starts at {start}."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter, must be positive.
+
+        Returns:
+            The updated counter value.
+        """
+        if step <= 0:
+            raise ValueError("`step` must be positive.")
+        self._counter += step
+        return self._counter
+
+    def get_reward(self) -> float:
+        return float(self._counter)
+
+
+class DocumentEnvironment:
+    def reset(self, length: int, **kwargs):
+        self._length = length
+
+    def read(self) -> str:
+        """
+        Read the document.
+
+        Returns:
+            The content of the document.
+        """
+        return "lorem " * self._length
+
+
+class PropertyEnvironment:
+    def __init__(self):
+        self.is_reset = False
+
+    def reset(self, **kwargs):
+        self.is_reset = True
+
+    @property
+    def reward(self) -> float:
+        if self.is_reset:
+            raise RuntimeError("`reward` must not be evaluated while discovering tools")
+        return 0.0
+
+    def echo(self, text: str) -> str:
+        """
+        Echo the text back.
+
+        Args:
+            text: Text to echo.
+
+        Returns:
+            The text, unchanged.
+        """
+        return text
+
+
+class ScoredEnvironment:  # owns its reward
+    def reset(self, **kwargs): ...
+
+    def act(self, x: int) -> int:
+        """
+        Act.
+
+        Args:
+            x: A value.
+
+        Returns:
+            The value.
+        """
+        return x
+
+    def get_reward(self) -> float:
+        return 1.0
 
 
 if is_peft_available():
@@ -377,7 +628,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             train_dataset=dataset,
         )
 
@@ -393,7 +644,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -412,6 +663,23 @@ class TestDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none"
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.args.pad_to_multiple_of == expected
+
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -424,7 +692,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -450,7 +718,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -530,6 +798,52 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_max_tool_calling_iterations_skips_last_turn_tool_calls(self):
+        # The model calls the tool on every turn. With max_tool_calling_iterations=1, the first turn's call runs, and
+        # the call in the turn generated after its result is kept in the completion but never executed.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=128,
+            max_tool_calling_iterations=1,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            # fmt: off
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+            tool_call_ids = [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645]
+            # fmt: on
+            completion_ids = torch.tensor([tool_call_ids] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[0]["tools/call_frequency"] == pytest.approx(1.0)  # one executed call each
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        for completion in completions["completion"]:  # completions are logged as decoded text
+            assert completion.count("<tool_response>") == 1  # only the first turn's tool call was executed
+            assert completion.endswith("</tool_call>")  # the last turn's tool call was not executed
+
     def test_train_stops_on_every_eos_token_id(self):
         # Phi-3.5 ends a turn with `<|end|>`, which only its generation config declares as eos, not its tokenizer
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -594,7 +908,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -618,7 +932,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -640,7 +954,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Iterable datasets require `dispatch_batches=False`"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -655,7 +969,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -679,7 +993,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -702,7 +1016,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -741,7 +1055,7 @@ class TestDistillationTrainer(TrlTestCase):
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -791,7 +1105,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=train_dataset,
         )
@@ -818,7 +1132,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
@@ -838,7 +1152,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -859,7 +1173,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -885,7 +1199,7 @@ class TestDistillationTrainer(TrlTestCase):
 
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -907,7 +1221,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -928,7 +1242,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -960,7 +1274,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -985,7 +1299,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1029,7 +1343,7 @@ class TestDistillationTrainer(TrlTestCase):
             # the params-changed check below vacuous. Diverge the teacher so the loss — and the update — clears fp noise.
             torch.manual_seed(0)
             with torch.no_grad():
-                for p in trainer.teacher_model.parameters():
+                for p in trainer.teacher_models[None].parameters():
                     p.add_(0.5 * torch.randn_like(p))
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1077,7 +1391,7 @@ class TestDistillationTrainer(TrlTestCase):
             torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
             trainer = DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
@@ -1103,7 +1417,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1143,7 +1457,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",  # identifier, so that the trainer quantizes it
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -1188,7 +1502,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",  # identifier, so that the trainer quantizes it
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
@@ -1234,7 +1548,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1271,7 +1585,7 @@ class TestDistillationTrainer(TrlTestCase):
         assert training_args.gradient_checkpointing
         trainer = DistillationTrainer(
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(),
@@ -1305,7 +1619,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=training_args,
             train_dataset=dataset,
         )
@@ -1330,7 +1644,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -1345,7 +1659,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         DistillationTrainer(  # must construct without raising
             model=model,
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
@@ -1358,7 +1672,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="lm_head"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=LoraConfig(target_modules=["q_proj", "lm_head"]),
@@ -1371,7 +1685,7 @@ class TestDistillationTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="Prompt-learning"):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 peft_config=PrefixTuningConfig(num_virtual_tokens=4, task_type="CAUSAL_LM"),
@@ -1410,7 +1724,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.5, report_to="none"),
             train_dataset=dataset,
         )
@@ -1447,7 +1761,7 @@ class TestDistillationTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             args=DistillationConfig(output_dir=self.tmp_dir, beta=0.25, report_to="none"),
             train_dataset=dataset,
         )
@@ -1473,7 +1787,7 @@ class TestDistillationTrainer(TrlTestCase):
             attention_mask = torch.cat([batch["prompt_mask"], batch["completion_mask"]], dim=1)
             keep = slice(-completion_length - 1, -1)
             s = trainer.model(input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
-            t = trainer.teacher_model(input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
+            t = trainer.teacher_models[None](input_ids=input_ids, attention_mask=attention_mask).logits[:, keep, :]
             slp = torch.log_softmax(s.float(), dim=-1)
             tlp = torch.log_softmax(t.float(), dim=-1)
             beta_t = torch.tensor(0.25)
@@ -1503,6 +1817,745 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_train_with_multiple_teachers(self):
+        # When `teacher_model` is a dict, each example selects its teacher via its `teacher_id` field, and its
+        # completion is scored by that teacher only. With `shuffle_dataset=False`, every batch is [a, b, a, b].
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example, idx: {"teacher_id": ["a", "b"][idx % 2]}, with_indices=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 examples per teacher, so a batch mixes both teachers
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            logging_steps=1,
+            shuffle_dataset=False,  # keep the [a, b, a, b] batch layout deterministic
+            remove_unused_columns=True,  # `teacher_id` must survive column removal
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model={
+                "a": "trl-internal-testing/small-Qwen3ForCausalLM",
+                "b": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            },
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Both teachers score their own share of the completion tokens at every step
+        for entry in trainer.state.log_history[:-1]:
+            assert entry["teacher/a/token_frac"] + entry["teacher/b/token_frac"] == pytest.approx(1.0)
+            assert entry["teacher/a/jsd"] > 0 and entry["teacher/b/jsd"] > 0
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_unknown_teacher_raises(self):
+        # With a dict `teacher_model`, an example whose `teacher_id` field doesn't match any configured teacher should
+        # fail with a clear error.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"teacher_id": "unknown"})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model={"a": "trl-internal-testing/small-Qwen3ForCausalLM"},
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with pytest.raises(ValueError, match="not among the teachers"):
+            trainer.train()
+
+    def test_train_with_same_teacher_under_two_ids(self):
+        # Splitting the examples between two IDs of the same teacher must train and evaluate like a single teacher:
+        # every completion token weighs the same in the loss, whatever its teacher.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example, idx: {"teacher_id": ["a", "b"][idx % 2]}, with_indices=True)
+        teacher = "trl-internal-testing/small-Qwen3ForCausalLM"
+
+        trainers, eval_losses = [], []
+        for teacher_model in [teacher, {"a": teacher, "b": teacher}]:
+            training_args = DistillationConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                gradient_accumulation_steps=2,  # normalize the loss across micro-batches routed differently
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                optim="sgd",  # the update stays proportional to the gradient, so rounding differences stay small
+                report_to="none",
+            )
+            trainer = DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model=teacher_model,
+                args=training_args,
+                train_dataset=dataset,
+                eval_dataset=dataset,
+            )
+            set_seed(42)  # generation is sampled, so seed right before training to make runs comparable
+            trainer.train()
+            set_seed(42)
+            eval_losses.append(trainer.evaluate()["eval_loss"])
+            trainers.append(trainer)
+
+        single, two_ids = trainers
+        for n, param in single.model.named_parameters():
+            torch.testing.assert_close(two_ids.model.get_parameter(n), param, rtol=1e-5, atol=1e-6)
+        assert eval_losses[1] == pytest.approx(eval_losses[0], rel=1e-5)
+
+    def test_config_mapping(self):
+        args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            teacher_model_name_or_path='{"a": "org/a", "b": "org/b"}',
+            teacher_model_init_kwargs='{"a": {"dtype": "bfloat16"}}',
+        )
+        assert args.teacher_model_name_or_path == {"a": "org/a", "b": "org/b"}
+        assert args.teacher_model_init_kwargs == {"a": {"dtype": "bfloat16"}}
+
+        args = DistillationConfig(output_dir=self.tmp_dir, teacher_model_name_or_path="org/a")
+        assert args.teacher_model_name_or_path == "org/a"
+
+    def test_per_teacher_init_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        teacher_model = {
+            "a": "trl-internal-testing/small-Qwen3ForCausalLM",
+            "b": "trl-internal-testing/small-Qwen3ForCausalLM",
+        }
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model=teacher_model,
+            args=DistillationConfig(
+                output_dir=self.tmp_dir,
+                teacher_model_init_kwargs={"a": {"dtype": "bfloat16"}, "b": {"dtype": "float32"}},
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        assert trainer.accelerator.unwrap_model(trainer.teacher_models["a"]).dtype == torch.bfloat16
+        assert trainer.accelerator.unwrap_model(trainer.teacher_models["b"]).dtype == torch.float32
+
+        with pytest.raises(ValueError, match="unknown teacher IDs"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model=teacher_model,
+                args=DistillationConfig(
+                    output_dir=self.tmp_dir, teacher_model_init_kwargs={"typo": {}}, report_to="none"
+                ),
+                train_dataset=dataset,
+            )
+
+    def test_teacher_vocab_size_mismatch_raises_with_multiple_teachers(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        with pytest.raises(ValueError, match="teacher model 'b' has vocab_size"):
+            DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model={
+                    "a": "trl-internal-testing/small-Qwen3ForCausalLM",
+                    "b": "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                },
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+    @pytest.mark.skipif("TRL_TEST_DISTILLATION_CONFIG" not in os.environ, reason="launched by tests/distributed")
+    def test_distributed_teacher_routing(self):
+        # Each rank holds different teacher IDs, so a teacher may have no rows on a rank. With the same teacher under
+        # both IDs, this must match a single ID.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        teacher = "trl-internal-testing/small-Qwen3ForCausalLM"
+
+        trainers = []
+        for teacher_model, teacher_ids in [
+            ({"a": teacher}, ["a"]),
+            ({"a": teacher, "b": teacher}, ["a", "b", "a", "b", "a", "a", "a", "a"]),
+        ]:
+            training_args = DistillationConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+                per_device_train_batch_size=4,
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                shuffle_dataset=False,  # keep the per-rank teacher IDs deterministic
+                optim="sgd",  # the update stays proportional to the gradient, so rounding differences stay small
+                bf16=False,  # DeepSpeed keeps bf16 weights, which round differently once the loss is split per teacher
+                save_strategy="no",
+                report_to="none",
+                **json.loads(os.environ["TRL_TEST_DISTILLATION_CONFIG"]),
+            )
+            trainer = DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model=teacher_model,
+                args=training_args,
+                train_dataset=dataset.add_column(
+                    "teacher_id", [teacher_ids[i % len(teacher_ids)] for i in range(len(dataset))]
+                ),
+            )
+            set_seed(42)  # generation is sampled, so seed right before training to make runs comparable
+            trainer.train()
+            trainers.append(trainer)
+
+        one_id, two_ids = trainers
+        assert one_id.accelerator.num_processes == 2
+        assert one_id.state.global_step == two_ids.state.global_step
+        one_id_params = one_id.accelerator.get_state_dict(one_id.model_wrapped)
+        two_ids_params = two_ids.accelerator.get_state_dict(two_ids.model_wrapped)
+        # ZeRO-3 consolidates the weights on rank zero.
+        if one_id.accelerator.is_main_process:
+            for name, param in one_id_params.items():
+                torch.testing.assert_close(two_ids_params[name].cpu(), param.cpu(), rtol=1e-5, atol=1e-7, msg=name)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_factory(self):
+        # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
+        # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
+        # succeed and the other will fail (because `reset` is not exposed as a tool).
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_steps=2,
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            # A different (same-vocab) teacher, so the divergence is not trivially zero
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=IncrementEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # a call to `reset`, which is not exposed as a tool
+                '<tool_call>\n{"name": "reset", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] is not None
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(1 / 2)
+        # The failed call is answered with its error, so both tool calls get a next turn at every step
+        assert script.turns_after_tool == 2 * trainer.state.global_step
+        # Without `get_reward`, no environment score is logged
+        assert not any(key.startswith("rewards/") for key in trainer.state.log_history[-1])
+
+        # The tools in the prompt are the environment's public methods: `increment`, not `reset`
+        prompts = list(script.seen)
+        assert '"name": "increment"' in prompts[0]
+        assert '"name": "reset"' not in prompts[0]
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_stateful_environment(self):
+        # Each rollout is reset with its `start` column and calls `increment` every turn: start -> +1 -> +3, and the
+        # third call is cut by `max_tool_calling_iterations=2`
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 10, 20]},
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_tool_calling_iterations=2,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=StartedCounterEnvironment,
+        )
+
+        increment_1 = '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'
+        increment_2 = '<tool_call>\n{"name": "increment", "arguments": {"step": 2}}\n</tool_call><|im_end|>'
+        script = ScriptedTurns(trainer.processing_class, first_turns=[increment_1], after_tool=increment_2)
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["train_loss"] is not None
+        # 2 calls run per rollout, the third is cut by `max_tool_calling_iterations`
+        assert logged["tools/call_frequency"] == pytest.approx(2.0)
+        assert logged["tools/failure_frequency"] == pytest.approx(0.0)
+        # The score is logged, never trained on: final counters 3, 13 and 23
+        assert logged["rewards/StartedCounterEnvironment/mean"] == pytest.approx(13.0)
+        # Only the 3 model turns count as completion tokens: the tool results are masked out of the loss
+        num_turn_tokens = len(trainer.processing_class(increment_1, add_special_tokens=False).input_ids)
+        assert logged["completions/mean_length"] == pytest.approx(3 * num_turn_tokens)
+        # The observation returned by `reset` is appended to the prompt
+        assert {prompt.count("The counter starts at") for prompt in script.seen} == {1}
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_environment_and_tools(self):
+        # Rollouts call the standalone tool, `increment` with a rejected step, and `increment`
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Count."}]] * 3, "start": [0, 0, 0]})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+            environment_factory=StartedCounterEnvironment,
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "increment", "arguments": {"step": -1}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+            ],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["tools/call_frequency"] == pytest.approx(1.0)
+        # The exception raised by the environment is returned to the model as the tool result, so it gets a next turn
+        assert logged["tools/failure_frequency"] == pytest.approx(1 / 3)
+        assert script.turns_after_tool == 3 * trainer.state.global_step
+        # Only the successful `increment` moved its counter
+        assert logged["rewards/StartedCounterEnvironment/mean"] == pytest.approx(1 / 3)
+        prompt = next(iter(script.seen))
+        assert '"name": "multiply_tool"' in prompt and '"name": "increment"' in prompt
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_episode_capped_by_max_completion_length(self):
+        # `max_completion_length` caps the whole episode: an overflowing tool result is dropped, a model turn truncated
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Read."}]] * 3, "length": [1000, 1, 1000]},
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=64,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=DocumentEnvironment,
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=['<tool_call>\n{"name": "read", "arguments": {}}\n</tool_call><|im_end|>'],
+            after_tool="word " * 100 + "<|im_end|>",
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        logged = trainer.state.log_history[-1]
+        assert logged["train_loss"] is not None
+        assert logged["tools/call_frequency"] == pytest.approx(1.0)
+        # Only the short document fits: that rollout gets a next turn, truncated at the budget
+        assert script.turns_after_tool == trainer.state.global_step
+        assert logged["completions/clipped_ratio"] == pytest.approx(1 / 3)
+        assert logged["completions/max_length"] <= 64
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments(self, monkeypatch):
+        # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
+        # only that environment's tools are exposed. Here we build a mixed batch with both environments and check that
+        # a tool call from a "counter" example dispatches to the CounterEnvironment's `increment`, while a tool call
+        # from an "echo" example dispatches to the EchoEnvironment's `shout`. Every batch holds 2 examples of each
+        # environment.
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["counter", "echo"] * 2}
+        )
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # a batch mixes both environments
+            remove_unused_columns=True,  # `environment` must survive column removal
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                    '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                    # counter example: no tool call
+                    "I won't<|im_end|>",
+                ]
+                if "Count." in prompt
+                else [
+                    # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                    '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>',
+                    # echo example: no tool call
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The tool call from the counter example ran `increment` (defined only on CounterEnvironment) and the one from
+        # the echo example ran `shout` (defined only on EchoEnvironment): each rollout dispatched to its own tools.
+        records = recorded(record_path)
+        assert records["increment"]
+        assert records["shout"]
+        # Half of the rollouts issued a tool call, and every call succeeded.
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
+        assert records["reset_counter"] and records["reset_echo"]
+        assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
+        # Each rollout is shown only the tool of its own environment
+        prompts = list(script.seen)
+        assert all(("increment" in prompt) == ("Count." in prompt) for prompt in prompts)
+        assert all(("shout" in prompt) == ("Echo." in prompt) for prompt in prompts)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments_same_tool_name(self, monkeypatch):
+        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
+        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        # Every batch holds 2 examples of each environment.
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "environment": ["zip", "count"] * 2}
+        )
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # a batch mixes both environments
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                ['<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>']
+                if "zip code" in prompt
+                else ['<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>']
+            ),
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        records = recorded(record_path)
+        assert records["zip"] and all(answer == "42" for answer in records["zip"])
+        assert records["count"] and all(answer == 42 for answer in records["count"])
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_reset_does_not_receive_teacher_id(self, monkeypatch):
+        # When `teacher_model` is a dict, each example selects its teacher via its `teacher_id` field. Like
+        # `environment` in multi-environment mode, `teacher_id` is a control field, so it must not reach `reset`.
+        dataset = Dataset.from_dict(
+            {"prompt": [[{"role": "user", "content": "Play."}]] * 4, "teacher_id": ["a", "b"] * 2}
+        )
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 examples per teacher, so a batch mixes both teachers
+            remove_unused_columns=True,  # `teacher_id` must survive column removal
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model={
+                "a": "trl-internal-testing/tiny-Qwen3ForCausalLM",
+                "b": "trl-internal-testing/tiny-Qwen3ForCausalLM",
+            },
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=CounterEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=['<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>'],
+        )
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Every rollout was reset, and `teacher_id` is a control field not forwarded to `reset`.
+        records = recorded(record_path)
+        assert records["reset_counter"]
+        assert all("teacher_id" not in kwargs for kwargs in records["reset_counter"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_unknown_environment_raises(self):
+        # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
+        # environment should fail with a clear error rather than a bare KeyError mid-rollout.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment},
+        )
+
+        with pytest.raises(ValueError, match="not among the environments"):
+            trainer.train()
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_tool_discovery_does_not_evaluate_environment_properties(self):
+        # Tool discovery must list the environment's methods on its class. `inspect.getmembers` calls `getattr` on
+        # every name before applying the predicate, so listing the instance evaluates its properties, and a property
+        # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
+        # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
+        # instances, so a second batch that listed the instance would raise before generating anything.
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "Play."}]] * 6})
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_steps=2,  # the first batch resets the pooled instances, the second re-lists their tools
+            report_to="none",
+        )
+
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory=PropertyEnvironment,
+        )
+
+        # No tool call, so one generation round per rollout.
+        script = ScriptedTurns(trainer.processing_class, first_turns=["I won't increment<|im_end|>"])
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_environment_owned_reward_mixed_environments(self):
+        # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
+        # env *class* contributes one reward column (named after its class); a rollout is scored only when its
+        # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
+        # deduplicated by class: two names mapping to the same `get_reward` class share a single column (no
+        # double-counting).
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [[{"role": "user", "content": "Play."}]] * 3,
+                "environment": ["scored", "scored2", "plain"],
+            }
+        )
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # one batch holds the 3 environments
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+            # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
+            environment_factory={
+                "scored": ScoredEnvironment,
+                "scored2": ScoredEnvironment,
+                "plain": IncrementEnvironment,
+            },
+        )
+
+        # No tool call.
+        script = ScriptedTurns(trainer.processing_class, first_turns=["I won't increment<|im_end|>"])
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is logged. It scores only the rollouts bound to `ScoredEnvironment`: an `IncrementEnvironment` rollout
+        # is left out instead of raising.
+        logged = trainer.state.log_history[-1]
+        reward_columns = {key for key in logged if key.startswith("rewards/") and key.endswith("/mean")}
+        assert reward_columns == {"rewards/ScoredEnvironment/mean"}
+        assert logged["rewards/ScoredEnvironment/mean"] == 1.0
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_async_environment_raises(self):
+        # Async environment methods (tools or `get_reward`) are rejected at init
+        class AsyncToolEnvironment(IncrementEnvironment):
+            async def decrement(self, step: int) -> int:
+                """
+                Decrement the internal counter.
+
+                Args:
+                    step: Value to subtract from the counter.
+
+                Returns:
+                    The updated counter value.
+                """
+                self._counter -= step
+                return self._counter
+
+        class AsyncRewardEnvironment(IncrementEnvironment):
+            async def get_reward(self) -> float:
+                return float(self._counter)
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
+        for environment_factory in (AsyncToolEnvironment, AsyncRewardEnvironment):
+            with pytest.raises(ValueError, match="Async"):
+                DistillationTrainer(
+                    model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                    teacher_model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                    args=training_args,
+                    train_dataset=dataset,
+                    environment_factory=environment_factory,
+                )
+
 
 @require_vision
 class TestDistillationTrainerVLM(TrlTestCase):
@@ -1511,6 +2564,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
         [
             pytest.param(
                 "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+                id="gemma3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
@@ -1518,17 +2572,43 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
-            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.23.0"),
+                        reason="Inkling 2 models were introduced in transformers-5.23.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) < Version("5.24.0.dev0"),
+                        reason="transformers < 5.24 loads the dequantized FP8 checkpoint in mixed dtypes "
+                        "(huggingface/transformers#50595, huggingface/transformers#50975)",
+                        strict=True,
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
+                ),
+            ),
+            pytest.param("trl-internal-testing/tiny-InternVLForConditionalGeneration", id="internvl"),
+            pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava-next"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen3.5-nothink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1536,6 +2616,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -1602,9 +2683,13 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",  # image_grid_thw path
+                id="qwen2-vl",
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",  # image_position_ids path
+                id="gemma3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="transformers<4.57 Gemma3 image processor can't batch variable-size images",
@@ -1640,13 +2725,30 @@ class TestDistillationTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="Inkling 2 models were introduced in transformers-5.23.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.24.0"),
+                    reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
                 ),
             ),
         ],

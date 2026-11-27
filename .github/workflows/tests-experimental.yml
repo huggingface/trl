@@ -65,6 +65,7 @@ jobs:
 
       - name: Install Make and Git
         run: |
+          rm /etc/apt/sources.list.d/cuda-ubuntu2204-x86_64.list  # Only Ubuntu packages are installed: skip NVIDIA's flaky mirror (#8621)
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
@@ -81,6 +82,7 @@ jobs:
           uv pip install ".[dev]"
 
       - name: Test with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         run: |
           source .venv/bin/activate
           make test_experimental
@@ -90,6 +92,7 @@ jobs:
         run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Test OpenEnv harness with pytest
+        timeout-minutes: 60  # A hung test otherwise holds the runner for 4 hours: #8420
         if: ${{ !cancelled() }}
         run: |
           source .venv/bin/activate

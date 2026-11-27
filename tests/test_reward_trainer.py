@@ -29,13 +29,21 @@ from trl.trainer.reward_trainer import DataCollatorForPreference
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_torch_accelerator,
 )
 
 
 if is_peft_available():
-    from peft import LoraConfig, get_peft_model
+    from peft import (
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 class TestDataCollatorForPreference(TrlTestCase):
@@ -132,9 +140,9 @@ class TestRewardTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
+            pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
         ],
     )
     def test_train(self, model_id):
@@ -157,6 +165,18 @@ class TestRewardTrainer(TrlTestCase):
             if f"layers.{trainer.model.config.num_hidden_layers - 1}.mlp.experts" in n:
                 continue
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = RewardConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
@@ -619,6 +639,56 @@ class TestRewardTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "peft_type",
+        [
+            "prompt_tuning",
+            "prefix_tuning",
+            "prompt_encoder",
+        ],
+    )
+    @require_peft
+    def test_train_with_peft_config_prompt_tuning(self, peft_type):
+        model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
+        base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer, p-tuning doesn't support gradient checkpointing
+        # transformers 5.23 renamed `gradient_checkpointing*` to `activation_checkpointing*` (see #8134)
+        if Version(transformers.__version__) >= Version("5.23.0"):
+            checkpointing_args = {"activation_checkpointing": False}
+        else:
+            checkpointing_args = {"gradient_checkpointing": False}
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
+        if peft_type == "prompt_tuning":
+            peft_config = PromptTuningConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        elif peft_type == "prefix_tuning":
+            peft_config = PrefixTuningConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        elif peft_type == "prompt_encoder":
+            peft_config = PromptEncoderConfig(task_type=TaskType.SEQ_CLS, num_virtual_tokens=4)
+        trainer = RewardTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model params to be the same
+                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
+            elif "original_module" not in n:  # We expect the peft params to be different (except the frozen head)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
