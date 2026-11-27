@@ -301,7 +301,10 @@ def main() -> None:
     elif not data_root.is_dir():
         raise RuntimeError(f"--data-root {data_root} is not a directory. Check the Job volume mount.")
     else:
-        os.environ.setdefault("HF_HOME", str(data_root / "hf-cache"))
+        # Keep HF_HOME off the bucket: Gradio caches its frpc tunnel binary there,
+        # and mounted buckets drop the exec bit between Jobs.
+        os.environ.setdefault("HF_HUB_CACHE", str(data_root / "hf-cache" / "hub"))
+        os.environ.setdefault("TRACKIO_DIR", str(data_root / "trackio"))
     logs = data_root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
 
