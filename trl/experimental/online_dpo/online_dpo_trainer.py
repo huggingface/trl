@@ -534,7 +534,13 @@ class OnlineDPOTrainer(_BaseTrainer):
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
-                    "max_num_batched_tokens": 4096,
+                    # vLLM < 0.35 crashes at warmup if this exceeds max_num_seqs * max_model_len (#8601)
+                    "max_num_batched_tokens": min(
+                        4096,
+                        self.args.per_device_train_batch_size
+                        * self.vllm_tensor_parallel_size
+                        * (args.max_length + args.max_new_tokens),
+                    ),
                     "enable_sleep_mode": self.args.vllm_enable_sleep_mode,
                 }
                 # The extensible KV cache (vLLM >= 0.34) caps torch's allocator for the whole process and keeps the cap

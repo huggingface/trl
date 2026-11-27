@@ -136,7 +136,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6": "57faabc3b49ec3ae69b8d6158130ce19496bc2d3",
     "trl-internal-testing/tiny-RemoteForCausalLM": "e857b87273d2b5db9c3ee15a0229d715a2e307ce",
     "trl-internal-testing/tiny-SmolLM3ForCausalLM": "a93d8be3babaeb72402f6c9551689d1f9c2eb2ee",
-    "trl-internal-testing/tiny-SmolVLMForConditionalGeneration": "87d4ff483bc2b4f07d3cf629305a807243829be5",
+    "trl-internal-testing/tiny-SmolVLMForConditionalGeneration": "df69fd5879c0ebef28b4da09f215fb81a71825e6",
     "trl-internal-testing/tiny-T5ForConditionalGeneration": "1e80b8121ed01c2d3fc14fd85c7f70edcc4e925d",
 }
 
