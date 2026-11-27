@@ -3149,6 +3149,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             "moe",
             "mlp",
         }
+        # GLM-5's DeepSeek Sparse Attention ("indexed_attention") is not supported by tree attention yet
         # Check tree attention compat
         if layer_types not in (set(), {"linear_attention"}, {"conv"}):
             raise ValueError(
