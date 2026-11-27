@@ -28,8 +28,10 @@ import numpy as np
 import pytest
 import requests
 import torch
+import transformers
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
+from packaging.version import Version
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
@@ -66,9 +68,6 @@ from ..testing_utils import TrlTestCase, is_ampere_or_newer, is_bf16_supported, 
 
 
 TEACHER_TOP_K = 4
-
-# The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
-# model (`head_size=32`) below, rather than the usual `tiny-*` one (`head_size=2`).
 
 
 def _make_teacher_topk(
@@ -484,7 +483,7 @@ class TestParseTeacherLogprobs:
 def _rollout_loop(**kwargs):
     # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM or teacher connection happens here).
     tokenizer = kwargs.get("processing_class") or AutoTokenizer.from_pretrained(
-        "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     )
     kwargs = {
         "model_name": "test",
@@ -654,7 +653,7 @@ class TestMultiTeacherRouting:
 
     def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_lens=None):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens)
         requests = []
 
@@ -691,7 +690,7 @@ class TestMultiTeacherRouting:
         assert [sample.teacher_id for sample in samples] == ["code", "math"]
 
     def test_only_the_student_request_is_salted_by_model_version(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         loop = _scoring_loop(tokenizer, ONE_TEACHER)
         loop._model_version_value.value = 3
         requests = []
@@ -1033,7 +1032,7 @@ class TestPerTeacherStats:
 )
 class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         AsyncDistillationTrainer(
             model=model_id,
@@ -1041,7 +1040,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         )
 
     def _train_one_step_and_save(self, fsdp=False):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncDistillationConfig(
@@ -1084,9 +1083,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "instantiated"),
         [
-            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", False),
-            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False, id="qwen2.5"),
+            # an already instantiated model
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True, id="qwen2.5-instantiated"),
+            # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False, id="qwen3-moe"),
         ],
     )
     def test_train(self, model_id, instantiated):
@@ -1132,8 +1133,90 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_vlm(self):
+        # Gemma3 refuses FlashAttention, which its language model takes instead (#8400)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            token_budget=160,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        language_model = trainer.model.get_decoder()
+        assert language_model.config._attn_implementation.startswith("kernels-community/")
+        previous_trainable_params = {n: param.clone() for n, param in language_model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = language_model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+    )
+    def test_train_vlm_text_only_data(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            token_budget=160,
+            logging_steps=1,
+            report_to="none",
+            model_init_kwargs={"dtype": "float32"},
+        )
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed, except the frozen vision tower
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                assert not new_param.requires_grad, f"Param {n} is trainable"
+                torch.testing.assert_close(param, new_param, rtol=1e-12, atol=1e-12, msg=f"Param {n} is updated")
+            else:
+                assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"),
+        reason="Qwen3-VL series were introduced in transformers-4.57.0",
+    )
+    def test_init_vlm_from_name(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            args=AsyncDistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        assert isinstance(trainer.model, transformers.Qwen3VLForConditionalGeneration)
+
     def test_router_aux_loss_coef_on_a_dense_model_raises(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
             AsyncDistillationTrainer(
@@ -1145,8 +1228,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
-        # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
-        # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
         model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -1183,7 +1264,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
         # training run through the narrow top-1 + actual-token support path (including the beta==1.0 special case),
         # checking grad_norm/loss stay finite throughout, not just that training completes.
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
         training_args = AsyncDistillationConfig(
@@ -1212,7 +1293,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
 
 
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
     trainer = AsyncDistillationTrainer(
         model=model_id,
@@ -1385,7 +1466,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
     does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`, `fake.paused`.
     """
 
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
     def _lora_config(self, **kwargs):
         from peft import LoraConfig
@@ -1446,12 +1527,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             if "lora_" in name:
                 assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
             else:
-                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
-                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
-                # learning rate would move them by orders of magnitude more.
-                torch.testing.assert_close(
-                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
-                )
+                assert torch.equal(param, new_param), f"Base parameter {name} has changed."
 
     @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
     def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
@@ -1574,27 +1650,37 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, fake_vllm):
-        merged_during_send = []
+    def test_merged_sync_and_lora_bias_raises(self, fake_vllm):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(fake_vllm, self._lora_config(lora_bias=True))
 
-        class _RaisingWeightTransfer(_StubWeightTransfer):
+    def test_merged_sync_sends_merged_lora_weights(self, fake_vllm):
+        from peft.tuners.lora import LoraLayer
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
             def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        trainer = self._build(
+            fake_vllm, self._lora_config(init_lora_weights=False), weight_transfer=_RecordingWeightTransfer
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.clone() for name, module in lora_layers.items()}
+        trainer._sync_weight()
 
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            expected = base_weights[name] + module.get_delta_weight("default")
+            assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight, base_weights[name]), name
 
 
 def _tensors_handed_to_producer(info, stream):

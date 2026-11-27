@@ -2,7 +2,7 @@
 
 [OpenEnv](https://github.com/openenv/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
-This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
+This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://openenv.github.io/OpenEnv/).
 
 > [!NOTE]
 > Ready-to-use OpenEnv examples: [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) (minimal), [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch), [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle), [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env), [`grpo_browsergym`](https://github.com/huggingface/trl/tree/main/examples/grpo_browsergym), [`grpo_carla`](https://github.com/huggingface/trl/tree/main/examples/grpo_carla), and [`async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) (local and HF Jobs).
@@ -57,7 +57,7 @@ pip install -e .
 
 ## Quick start
 
-The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/grpo_echo/grpo_echo.py) script trains a model with the [Echo environment](https://huggingface.co/docs/openenv/environments/echo), which rewards completions based on their text length:
+The fastest way to understand the integration is a complete example. The [echo.py](https://github.com/huggingface/trl/blob/main/examples/grpo_echo/grpo_echo.py) script trains a model with the [Echo environment](https://openenv.github.io/OpenEnv/main/environments/echo), which rewards completions based on their text length:
 
 ```python
 from datasets import Dataset
@@ -227,10 +227,10 @@ def reset(self, **kwargs) -> str | None:
 
 ## Advanced example: Wordle
 
-Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, a reward split into several terms, and episode termination via exceptions.
+Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://openenv.github.io/OpenEnv/main/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, a reward split into several terms, and episode termination via exceptions.
 
 > [!NOTE]
-> The [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo) covers the whole pipeline: the SFT data, the SFT warmup, this GRPO step and the evaluation, with hardware and costs. The notebook version of this example is [`grpo_wordle.ipynb`](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
+> The [OpenEnv Wordle tutorial](https://openenv.github.io/OpenEnv/main/tutorials/wordle-grpo) covers the whole pipeline: the SFT data, the SFT warmup, this GRPO step and the evaluation, with hardware and costs. The notebook version of this example is [`grpo_wordle.ipynb`](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
 
 ### The TextArena Environment
 
@@ -269,9 +269,12 @@ FEEDBACK = re.compile(r"Feedback:\n([A-Z ]+)\n([GYX ]+)")
 
 class WordleEnv:
     def __init__(self):
-        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space")
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
 
     def reset(self, **kwargs) -> str | None:
+        # One connection per game, see "Long runs against a Space" above
+        self.client.close()
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space").sync()
         result = self.client.reset()
         self._last_full_feedback = result.observation.messages[0].content
         self.done = False
@@ -365,7 +368,7 @@ A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays
 
 ### Running the example
 
-Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=64` variable on your copy.
+Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=96` variable on your copy (64 games, plus the sessions still being closed between games).
 
 <hfoptions id="wordle_vllm_mode">
 
@@ -450,7 +453,7 @@ class MultiEnv:
                     self._wordle_client.close()
                 except Exception:
                     pass
-            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL)
+            self._wordle_client = TextArenaEnv(base_url=WORDLE_URL).sync()
             result = self._wordle_client.reset()
             self._last_full_feedback = result.observation.messages[0].content
             self.reward = 0.0
@@ -461,7 +464,7 @@ class MultiEnv:
                     self._catch_client.close()
                 except Exception:
                     pass
-            self._catch_client = OpenSpielEnv(base_url=CATCH_URL)
+            self._catch_client = OpenSpielEnv(base_url=CATCH_URL).sync()
             result = self._catch_client.reset()
             self.done = result.observation.done
             return _format_catch_obs(result.observation.info_state)
@@ -602,7 +605,7 @@ Then connect:
 env = EchoEnv(base_url="http://0.0.0.0:8001")
 ```
 
-For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/environments).
+For more details, see the [OpenEnv catalog](https://openenv.github.io/OpenEnv/main/environments).
 
 </hfoption>
 
@@ -612,33 +615,38 @@ For more details, see the [OpenEnv catalog](https://huggingface.co/docs/openenv/
 
 The best way to explore the current catalog of maintained environments is by visiting the official OpenEnv [catalog](https://huggingface.co/collections/openenv/environment-hub).
 
-To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://huggingface.co/docs/openenv/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
+To create your own environment, check out the guide on [Building Your Own Environment with OpenEnv](https://openenv.github.io/OpenEnv/main/getting_started/environment-builder). Environments are tightly integrated with the Hub, so you can push new environments for the community to reuse.
 
 ## Server concurrency
 
-When using `environment_factory`, the trainer creates N environment instances (one per generation), each opening a WebSocket connection to the server. By default, OpenEnv servers allow only 1 concurrent session, which will cause failures during training.
+When using `environment_factory`, the trainer creates one environment instance per rollout in the generation batch, and each instance typically opens its own WebSocket session on the server. Instances are pooled and reused (via `reset()`) for the whole run, so these sessions stay open between steps. With [`GRPOTrainer`], the server must therefore accept `generation_batch_size` concurrent sessions: each process holds `per_device_train_batch_size × steps_per_generation` instances (more if `per_device_eval_batch_size` is larger), and `generation_batch_size` (default `per_device_train_batch_size × num_processes × gradient_accumulation_steps`) is the sum over processes. With [`AsyncGRPOTrainer`], up to `max_concurrent_rollouts` rollouts, and so environment instances, can run at once.
 
-To support parallel training, configure the server for concurrency:
+By default, OpenEnv servers allow only 1 concurrent session. When the trainer opens more sessions than the server allows, the extra ones are refused with a `CAPACITY_REACHED` error.
 
-1. In your environment file, declare concurrent session support:
+To accept more sessions, both of these must hold on the server:
+
+1. The environment supports concurrent sessions. It declares it with:
 
 ```python
 SUPPORTS_CONCURRENT_SESSIONS: bool = True
 ```
 
-2. In your server app, set the concurrency limit:
+2. The server app sets the session limit. Most environments in the OpenEnv repository read it from the `MAX_CONCURRENT_ENVS` environment variable, so you can set it when you start the server (for example `MAX_CONCURRENT_ENVS=64`) or as a variable of the Hugging Face Space. In your own server app:
 
 ```python
 app = create_app(
     create_my_environment,
     MyAction,
     MyObservation,
-    max_concurrent_envs=64,  # match or exceed generation_batch_size
+    max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "64")),  # >= generation_batch_size
 )
 ```
 
+> [!WARNING]
+> Only declare `SUPPORTS_CONCURRENT_SESSIONS = True` for an environment whose sessions are isolated from each other. All sessions run in the same server process, so module-level globals, shared files or temporary directories, a shared interpreter or subprocess, or environment variables let one episode, or code written by the model, affect another. If an environment does not support concurrent sessions, run several server instances instead (for example one per rollout) and spread the environment instances across them.
+
 > [!TIP]
-> `max_concurrent_envs` should be ≥ `generation_batch_size` (which defaults to `per_device_train_batch_size × gradient_accumulation_steps`). For example, with `gradient_accumulation_steps=64` and batch size 1, you need at least 64 concurrent sessions.
+> For example, with `per_device_train_batch_size=1`, `gradient_accumulation_steps=64` and a single process, the server needs at least 64 concurrent sessions.
 
 ## `environment_factory` vs `rollout_func`
 
@@ -655,7 +663,7 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black-box (loop-owning)** path built on [`AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://openenv.github.io/OpenEnv/main/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
 > [!NOTE]
 > This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.

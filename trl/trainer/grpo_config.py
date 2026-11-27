@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
+import torch
+
 from .base_config import _BaseConfig
 
 
@@ -37,8 +39,8 @@ class GRPOConfig(_BaseConfig):
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
-            processing classes.
+            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -59,8 +61,9 @@ class GRPOConfig(_BaseConfig):
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
-            requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
+            Whether to only keep the columns `"prompt"` and `"environment"` in the dataset. If you use a custom reward
+            function that requires any column other than `"prompts"` and `"completions"`, you should keep this to
+            `False`.
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
@@ -68,7 +71,9 @@ class GRPOConfig(_BaseConfig):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the generated completion.
+            Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the whole
+            multi-turn completion after the prompt (all model turns plus tool results), unlike [`AsyncGRPOConfig`],
+            where it caps each turn.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -78,7 +83,9 @@ class GRPOConfig(_BaseConfig):
             Whether to shuffle the training dataset.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
-            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on
+            NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in
+            host memory. It does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -320,7 +327,9 @@ class GRPOConfig(_BaseConfig):
             stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
             results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
             length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
-            otherwise).
+            otherwise). When the limit is reached, the tool calls of the last generated turn are not executed and the
+            completion ends with that turn, so a final tool call (for example one that submits an answer) is never
+            executed.
         vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
@@ -439,7 +448,7 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string. The `revision` value is also used when loading "
-            "processing classes."
+            "the processing class."
         },
     )
     trust_remote_code: bool = field(
@@ -481,8 +490,9 @@ class GRPOConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
-            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
+            "help": "Whether to only keep the columns 'prompt' and 'environment' in the dataset. If you use a custom "
+            "reward function that requires any column other than 'prompts' and 'completions', you should keep this to "
+            "`False`."
         },
     )
     num_generations: int | None = field(
@@ -501,7 +511,11 @@ class GRPOConfig(_BaseConfig):
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum length of the generated completion."},
+        metadata={
+            "help": "Maximum length of the generated completion. With `tools` or `environment_factory`, it caps the "
+            "whole multi-turn completion after the prompt (all model turns plus tool results), unlike "
+            "`AsyncGRPOConfig`, where it caps each turn."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
@@ -519,9 +533,10 @@ class GRPOConfig(_BaseConfig):
     pad_to_multiple_of: int | str | None = field(
         default="auto",
         metadata={
-            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
-            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
-            "pad elsewhere."
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. "
+            "`'auto'` pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and "
+            "with SDPA attention on NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a "
+            "graph per input shape in host memory. It does not pad elsewhere."
         },
     )
 
@@ -929,7 +944,9 @@ class GRPOConfig(_BaseConfig):
             "generation stops when the model generates a response turn with no tool calls, when the completion "
             "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
             "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
-            "`max_position_embeddings` otherwise)."
+            "`max_position_embeddings` otherwise). When the limit is reached, the tool calls of the last generated "
+            "turn are not executed and the completion ends with that turn, so a final tool call (for example one "
+            "that submits an answer) is never executed."
         },
     )
     vllm_importance_sampling_correction: bool = field(
@@ -1071,8 +1088,14 @@ class GRPOConfig(_BaseConfig):
             self.pad_to_multiple_of = (
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
-        if self.pad_to_multiple_of == "auto":
-            # Neuron compiles once per input shape, so padding bounds the number of compilations
+        # Neuron compiles once per input shape, so padding bounds the number of compilations. On GPUs where SDPA uses
+        # cuDNN, the trainer resolves "auto" once it knows the model's attention implementation (#8439)
+        cudnn_sdpa_gpu = (
+            torch.version.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+        )
+        if self.pad_to_multiple_of == "auto" and not cudnn_sdpa_gpu:
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:

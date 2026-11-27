@@ -15,6 +15,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import torch
+
 from .base_config import _BaseConfig
 
 
@@ -40,23 +42,29 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
             for both the student and teacher.
-        teacher_model_name_or_path (`str`, *optional*):
-            Model name or path for the teacher model. Used when the teacher is loaded locally.
+        teacher_model_name_or_path (`str` or `dict[str, str]`, *optional*):
+            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from teacher
+            ID to model name or path uses several teachers, where the `teacher_id` column of each row selects its
+            teacher.
         teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
+            from a string. When `teacher_model_name_or_path` is a mapping, provide a mapping from teacher ID to loading
+            kwargs instead, e.g. `{"math": {"dtype": "bfloat16"}, "code": {"revision": "main"}}`. Omitted teachers use
+            the default loading kwargs.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to only keep the column `"prompt"` in the dataset. The trainer consumes the raw prompt column and
-            generates completions on-policy, so it defaults to `False`.
+            Whether to remove dataset columns other than `"prompt"`, `"image"`, `"images"`, `"teacher_id"`, and
+            `"environment"`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum number of tokens to generate per completion during on-policy generation.
+            Maximum number of tokens to generate per completion during on-policy generation. With `tools` or
+            `environment_factory`, it caps the whole multi-turn completion after the prompt (all model turns plus tool
+            results).
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -66,7 +74,9 @@ class DistillationConfig(_BaseConfig):
             Whether to shuffle the training dataset.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
-            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on
+            NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in
+            host memory. It does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -141,7 +151,9 @@ class DistillationConfig(_BaseConfig):
             stops when the model generates a response turn with no tool calls, when the completion (all turns and tool
             results) reaches `max_completion_length` tokens, or when the full sequence reaches the model's maximum
             length (`vllm_max_model_length` with `vllm_mode="colocate"`, the model's `max_position_embeddings`
-            otherwise).
+            otherwise). When the limit is reached, the tool calls of the last generated turn are not executed and the
+            completion ends with that turn, so a final tool call (for example one that submits an answer) is never
+            executed.
 
         > Parameters that control the logging
 
@@ -165,6 +177,7 @@ class DistillationConfig(_BaseConfig):
 
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
+        "teacher_model_name_or_path",
         "teacher_model_init_kwargs",
         "generation_kwargs",
         "chat_template_kwargs",
@@ -193,9 +206,11 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    teacher_model_name_or_path: str | None = field(
+    teacher_model_name_or_path: dict[str, str] | str | None = field(
         default=None,
-        metadata={"help": "Model name or path for the teacher model."},
+        metadata={
+            "help": "Model name or path for the teacher model, or a mapping from teacher ID to model name or path."
+        },
     )
     teacher_model_revision: str | None = field(
         default=None,
@@ -204,7 +219,8 @@ class DistillationConfig(_BaseConfig):
     teacher_model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher, or "
+            "a mapping from teacher ID to such kwargs."
         },
     )
     disable_dropout: bool = field(
@@ -218,13 +234,16 @@ class DistillationConfig(_BaseConfig):
     remove_unused_columns: bool | None = field(
         default=False,
         metadata={
-            "help": "Whether to only keep the column 'prompt' in the dataset. The trainer consumes the raw prompt "
-            "column and generates completions on-policy, so it defaults to `False`."
+            "help": "Whether to remove dataset columns other than 'prompt', 'image', 'images', 'teacher_id', and "
+            "'environment'."
         },
     )
     max_completion_length: int | None = field(
         default=512,
-        metadata={"help": "Maximum number of tokens to generate per completion."},
+        metadata={
+            "help": "Maximum number of tokens to generate per completion. With `tools` or `environment_factory`, it "
+            "caps the whole multi-turn completion after the prompt (all model turns plus tool results)."
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
@@ -242,9 +261,10 @@ class DistillationConfig(_BaseConfig):
     pad_to_multiple_of: int | str | None = field(
         default="auto",
         metadata={
-            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
-            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
-            "pad elsewhere."
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. "
+            "`'auto'` pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and "
+            "with SDPA attention on NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a "
+            "graph per input shape in host memory. It does not pad elsewhere."
         },
     )
 
@@ -373,7 +393,9 @@ class DistillationConfig(_BaseConfig):
             "generation stops when the model generates a response turn with no tool calls, when the completion "
             "(all turns and tool results) reaches `max_completion_length` tokens, or when the full sequence reaches "
             "the model's maximum length (`vllm_max_model_length` with `vllm_mode=\"colocate\"`, the model's "
-            "`max_position_embeddings` otherwise)."
+            "`max_position_embeddings` otherwise). When the limit is reached, the tool calls of the last generated "
+            "turn are not executed and the completion ends with that turn, so a final tool call (for example one "
+            "that submits an answer) is never executed."
         },
     )
 
@@ -405,8 +427,14 @@ class DistillationConfig(_BaseConfig):
             self.pad_to_multiple_of = (
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
-        if self.pad_to_multiple_of == "auto":
-            # Neuron compiles once per input shape, so padding bounds the number of compilations
+        # Neuron compiles once per input shape, so padding bounds the number of compilations. On GPUs where SDPA uses
+        # cuDNN, the trainer resolves "auto" once it knows the model's attention implementation (#8439)
+        cudnn_sdpa_gpu = (
+            torch.version.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+        )
+        if self.pad_to_multiple_of == "auto" and not cudnn_sdpa_gpu:
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.beta < 0.0 or self.beta > 1.0:
