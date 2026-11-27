@@ -886,6 +886,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
 
     @require_kernels
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.4.0"),
+        reason="transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels",
+    )
     @pytest.mark.usefixtures("stub_weight_transfer")
     def test_rms_norm_layers_run_the_hub_kernel(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")

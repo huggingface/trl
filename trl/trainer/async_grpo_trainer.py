@@ -3117,8 +3117,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
 
         # RMSNorm layers, and only them, run the fused Liger kernel from the Hub: tree packing wraps the recurrent and
-        # convolution functions that the Hub's other training kernels replace
-        if is_kernels_available():
+        # convolution functions that the Hub's other training kernels replace. transformers 5.2/5.3 pin a kernels<0.11
+        # that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+        if is_kernels_available() and Version(transformers.__version__) >= Version("5.4.0"):
             from kernels import LayerRepository, Mode, kernelize, use_kernel_mapping
 
             rms_norm = LayerRepository(repo_id="kernels-community/liger-kernels", layer_name="LigerRMSNorm", version=4)
