@@ -80,6 +80,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-GemmaForCausalLM": "08058fb469384b006af92d452849b0371f593a9a",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM": "9c73ba05132e99afd6e5bc13468e1f72c10c7c1a",
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration": "9339c1e41517bf775383d28e286be70bcaef8334",
+    "trl-internal-testing/tiny-GlmMoeDsaForCausalLM": "63e79bf555786c95017516674a6a8f9a49c02ad5",
     "trl-internal-testing/tiny-GptOssForCausalLM": "cb95c03d6ab62791e09ef922fc28856d18b45909",
     "trl-internal-testing/tiny-GraniteMoeForCausalLM": "76b45c5376916fcc17bdeb598df3337cd14a4f5e",
     "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM": "0ea8ef8b1cb6b15f9d47860269de792c96e69d23",
