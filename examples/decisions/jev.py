@@ -45,7 +45,7 @@ def main(script_args, training_args, model_args):
     )
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     collator = DataCollatorForDecision(
-        tokenizer, model.decision_config, prepare_decision_inputs=model.prepare_decision_inputs
+        tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
     )
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     trainer = DecisionTrainer(

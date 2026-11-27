@@ -81,7 +81,7 @@ The shared collator uses the preparation hook from [Transformers #51382](https:/
 from trl.experimental.decision import DataCollatorForDecision
 
 collator = DataCollatorForDecision(
-    tokenizer, model.decision_config, prepare_decision_inputs=model.prepare_decision_inputs
+    tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
 )
 ```
 

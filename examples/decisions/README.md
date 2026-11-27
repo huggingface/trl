@@ -34,7 +34,7 @@ Requires [Transformers #51382](https://github.com/huggingface/transformers/pull/
 Each dataset row contains one question in `request` (JSON), or `state` / `questions`, plus one of `target_index`,
 `target_probs`, `p_true`, or `score`. Supply `target_probs` by option name, or as a list starting with zero
 followed by the probabilities in option order.
-The shared `DataCollatorForDecision` normalizes targets and calls the model's `prepare_decision_inputs` hook.
+The shared `DataCollatorForDecision` normalizes targets and calls the model's `prepare_inputs_for_decision` hook.
 
 ```bash
 python examples/decisions/jev.py --model_name_or_path autotrust/JEV-9B \

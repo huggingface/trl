@@ -125,23 +125,23 @@ class DataCollatorForDecision(DataCollatorMixin):
             Tokenizer or processor used to render the decision request.
         decision_config ([`~transformers.DecisionConfig`]):
             Decision settings and template from the model.
-        prepare_decision_inputs (`Callable`, *optional*):
+        prepare_inputs_for_decision (`Callable`, *optional*):
             Model hook that receives rendered prompts and a `targets` keyword argument with one normalized distribution
             per question. It returns the model's forward inputs, including labels.
     """
 
     tokenizer: PreTrainedTokenizerBase
     decision_config: TransformersDecisionConfig
-    prepare_decision_inputs: Callable[..., dict[str, Any]] | None = field(default=None, kw_only=True)
+    prepare_inputs_for_decision: Callable[..., dict[str, Any]] | None = field(default=None, kw_only=True)
     return_tensors = "pt"
 
     def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        if self.prepare_decision_inputs is None:
-            raise ValueError("Pass the model's prepare_decision_inputs hook or use a model-specific collator.")
+        if self.prepare_inputs_for_decision is None:
+            raise ValueError("Pass the model's prepare_inputs_for_decision hook or use a model-specific collator.")
 
         inputs, questions, targets = zip(*(self.prepare_example(example) for example in features), strict=True)
         prompts = [(prompt, [question]) for prompt, question in zip(inputs, questions, strict=True)]
-        batch = self.prepare_decision_inputs(prompts, targets=targets)
+        batch = self.prepare_inputs_for_decision(prompts, targets=targets)
         return {**batch, "is_choice": torch.tensor([question.type == "choice" for question in questions])}
 
     def prepare_example(self, example: dict[str, Any]):

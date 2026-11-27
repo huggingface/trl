@@ -47,7 +47,7 @@ from ..testing_utils import TrlTestCase, require_peft
 
 HAS_JEVA = "jeva" in CONFIG_MAPPING
 HAS_CLM = "clm" in CONFIG_MAPPING
-HAS_JEV_PREPARATION = "JevForDecision" in LOSS_MAPPING and hasattr(JevForDecision, "prepare_decision_inputs")
+HAS_JEV_PREPARATION = "JevForDecision" in LOSS_MAPPING and hasattr(JevForDecision, "prepare_inputs_for_decision")
 
 if HAS_JEVA:
     from transformers import AutoModelForDecision, JevaForDecision
@@ -682,7 +682,7 @@ class TestDecisionTrainerJev(TrlTestCase):
         model = JevForDecision(JevConfig(text_config=encoder.config, hidden_size=encoder.config.hidden_size))
         model.model = encoder
         collator = DataCollatorForDecision(
-            tokenizer, model.decision_config, prepare_decision_inputs=model.prepare_decision_inputs
+            tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
         )
         rows = [
             (
