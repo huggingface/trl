@@ -147,7 +147,10 @@ _GLM_TOKENIZER_NAMES = (
     ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template),
     ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template),
     ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template),
+    ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_v2_chat_template),
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+    ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v2_chat_template),
+    ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v3_chat_template),
 )
 
 
@@ -1745,8 +1748,38 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ),
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_v2_chat_template),
+            id="glm5.3-v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="GLM4 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
             id="glm5.3-flash",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v2_chat_template),
+            id="glm5.3-flash-v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v3_chat_template),
+            id="glm5.3-flash-v3",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -1968,6 +2001,9 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             id="qwen3-thinking-2507",
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", id="qwen3-coder"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_v2_chat_template), id="qwen3-coder-v2"
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", id="qwen3-coder-next"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
@@ -2754,6 +2790,7 @@ class TestGlm4MoeTrainingChatTemplate:
             pytest.param(glm5_1_chat_template, id="glm5.1"),
             pytest.param(glm5_2_chat_template, id="glm5.2"),
             pytest.param(glm5_3_chat_template, id="glm5.3"),
+            pytest.param(glm5_3_v2_chat_template, id="glm5.3-v2"),
         ],
     )
     def test_later_templates_assistant_masks_tool_call_without_content(self, chat_template):
