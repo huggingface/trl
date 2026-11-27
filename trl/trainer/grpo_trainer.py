@@ -577,12 +577,14 @@ class GRPOTrainer(_BaseTrainer):
             if Version(transformers.__version__) >= Version("5.23.0"):
                 args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
-        # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer handles
-        # this from 5.0.0 (https://github.com/huggingface/transformers/pull/42558)
+        # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
         if (
             is_peft_model(model)
             and args.gradient_checkpointing
-            and Version(transformers.__version__) < Version("5.0.0")
+            and (
+                Version(transformers.__version__) < Version("5.0.0")
+                or (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+            )
         ):
             model.enable_input_require_grads()
 
