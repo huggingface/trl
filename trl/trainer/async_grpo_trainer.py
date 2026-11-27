@@ -3214,16 +3214,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
-        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
-        eos_token_ids = model.generation_config.eos_token_id
-        if eos_token_ids is None:
-            eos_token_ids = []
-        elif isinstance(eos_token_ids, int):
-            eos_token_ids = [eos_token_ids]
-        if processing_class.eos_token_id not in eos_token_ids:
-            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
-        self.eos_token_ids = eos_token_ids
-
         # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
@@ -3344,8 +3334,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # The chat template's end-of-turn token also ends a completion (#8566)
         if is_conversational(next(iter(train_dataset))):
             end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
-            if end_of_turn_id is not None and end_of_turn_id not in self.eos_token_ids:
-                self.eos_token_ids = [*self.eos_token_ids, end_of_turn_id]
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Vision dataset detection
         dataset_sample = next(iter(train_dataset))

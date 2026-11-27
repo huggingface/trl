@@ -3580,6 +3580,7 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
         def fake_generate(input_ids, **kwargs):
             # 'Blue<end_of_turn>and green': the turn ends on `<end_of_turn>`, and generation goes on after it
