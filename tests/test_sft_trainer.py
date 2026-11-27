@@ -41,6 +41,7 @@ from .testing_utils import (
     ignore_warnings,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_kernels,
     require_peft,
     require_torch_accelerator,
@@ -339,24 +340,26 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            "trl-internal-testing/tiny-FalconMambaForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+            pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", id="falcon-mamba"),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                id="glm4-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
                 ),
             ),
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-            "trl-internal-testing/tiny-PhimoeForCausalLM",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granite-moe"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granite-moe-hybrid"),
+            pytest.param("trl-internal-testing/tiny-PhimoeForCausalLM", id="phimoe"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="qwen2-r1-distill"),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3-moe"),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
+                id="beam",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.1"),
                     reason="Beam was introduced in transformers-5.20.1",
@@ -364,6 +367,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                id="nemotron3-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
                     reason="Nemotron 3 gradient checkpointing requires transformers>=5.7.0 (see transformers#45625)",
@@ -371,14 +375,16 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Olmo3ForCausalLM",
+                id="olmo3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("4.57.0"),
                     reason="Olmo 3 requires transformers>=4.57.0",
                 ),
             ),
-            "trl-internal-testing/tiny-Lfm2ForCausalLM",
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                id="lfm2.5",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
@@ -386,6 +392,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                id="lfm2.5-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2-MoE requires transformers>=5.0.0",
@@ -413,6 +420,18 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = SFTConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     @pytest.mark.parametrize(
         "config_name",
@@ -483,11 +502,12 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
             # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
             # (`Qwen3_5ForCausalLM`, model type `qwen3_5_text`), which is how Qwen3.5 is usually trained on text
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen3.5-nothink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -495,6 +515,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -720,24 +741,13 @@ class TestSFTTrainer(TrlTestCase):
             checkpointing_args = {"activation_checkpointing": False}
         else:
             checkpointing_args = {"gradient_checkpointing": False}
-        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", **checkpointing_args)
         if peft_type == "prompt_tuning":
-            peft_config = PromptTuningConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-                tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            )
+            peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         elif peft_type == "prefix_tuning":
-            peft_config = PrefixTuningConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-            )
+            peft_config = PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         elif peft_type == "prompt_encoder":
-            peft_config = PromptEncoderConfig(
-                task_type=TaskType.CAUSAL_LM,
-                num_virtual_tokens=4,
-                encoder_hidden_size=model.config.hidden_size,  # This will be overwritten below
-            )
+            peft_config = PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
@@ -847,18 +857,41 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id, target_modules, target_parameters, expect_error",
         [
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], None, True),
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", "all-linear", None, True),
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", r".*\.(q_proj|v_proj)", None, False),
-            (
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                None,
+                True,
+                id="glm4-moe-mlp",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM", "all-linear", None, True, id="glm4-moe-all-linear"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                r".*\.(q_proj|v_proj)",
+                None,
+                False,
+                id="glm4-moe-qv-regex",
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
                 ["gate_proj", "up_proj", "down_proj"],
                 ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"],
                 False,
+                id="glm4-moe-mlp-and-experts",
             ),
             # no peft version maps `target_modules` onto the routed experts of these models (#8427)
-            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", None, False),
-            ("trl-internal-testing/tiny-GptOssForCausalLM", "all-linear", None, False),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                "all-linear",
+                None,
+                False,
+                id="lfm2.5-moe-all-linear",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM", "all-linear", None, False, id="gpt-oss-all-linear"
+            ),
         ],
     )
     def test_moe_lora_raises_when_peft_skips_routed_experts(
@@ -896,12 +929,26 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id, target_modules, expect_warning",
         [
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], True),
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                True,
+                id="glm4-moe-mlp",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False, id="glm4-moe-qv"
+            ),
             # no dense or shared expert layers to skip
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                ["gate_proj", "up_proj", "down_proj"],
+                False,
+                id="qwen3-moe-mlp",
+            ),
             # peft doesn't remap this model's targets, so its dense layers are trained (#8427)
-            ("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", False),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", "all-linear", False, id="lfm2.5-moe-all-linear"
+            ),
         ],
     )
     def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
@@ -924,12 +971,13 @@ class TestSFTTrainer(TrlTestCase):
         "model_id, expect_coef, expect_aux_loss",
         [
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True, id="qwen3-moe"),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
             pytest.param(
                 "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
                 0.0,
                 False,
+                id="deepseek-v3",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="FP8 dequantization requires transformers>=5.0.0",
@@ -939,13 +987,14 @@ class TestSFTTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
                 False,
+                id="beam",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.1"),
                     reason="Beam was introduced in transformers-5.20.1",
                 ),
             ),
             # Dense model: no coefficient to inherit
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False, id="qwen2.5"),
         ],
     )
     def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
@@ -2295,16 +2344,34 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.23.0"),
+                        reason="Inkling 2 models were introduced in transformers-5.23.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__) < Version("5.24.0.dev0"),
+                        reason="transformers < 5.24 loads the dequantized FP8 checkpoint in mixed dtypes "
+                        "(huggingface/transformers#50595, huggingface/transformers#50975)",
+                        strict=True,
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
                     reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
@@ -2314,25 +2381,28 @@ class TestSFTTrainer(TrlTestCase):
             # "trl-internal-testing/tiny-Idefics3ForConditionalGeneration",  high memory peak, skipped for now
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                id="lfm2.5-vl",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2.5-VL requires transformers>=5.0.0",
                 ),
             ),
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava"),
+            pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava-next"),
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+                id="muse-glimmer",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.15.0"),
                     reason="Muse Glimmer was introduced in transformers-5.15.0",
                 ),
             ),
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                id="qwen3-vl",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("4.57.0"),
@@ -2342,6 +2412,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen3.5-nothink",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2349,6 +2420,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.2.0"),
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
@@ -2356,6 +2428,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                id="muse-spark",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.0"),
                     reason="Muse Spark Open was introduced in transformers-5.20.0",
@@ -2403,42 +2476,49 @@ class TestSFTTrainer(TrlTestCase):
         [
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                id="lfm2.5-vl",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
                         reason="LFM2.5-VL requires transformers>=5.0.0",
                     ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
+                    # transformers main has the SigLIP2 fix (#8504), but no release has it yet: strict, so a release with the
+                    # fix fails loudly
+                    pytest.mark.xfail(
+                        Version("5.24.0") <= Version(transformers.__version__) < Version("5.25.0")
+                        and not Version(transformers.__version__).is_devrelease,
+                        reason="transformers 5.24 refuses Flash Attention kernels for the SigLIP2 vision tower (see #8504)",
+                        strict=True,
+                    ),
                 ],
             ),
             pytest.param(
-                "trl-internal-testing/tiny-LlavaForConditionalGeneration", marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                id="llava",
+                marks=_HEAD_SIZE_NOT_MULTIPLE_OF_8,
             ),
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava-next"),
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.15.0"),
-                        reason="Muse Glimmer was introduced in transformers-5.15.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                id="muse-glimmer",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.15.0"),
+                    reason="Muse Glimmer was introduced in transformers-5.15.0",
+                ),
             ),
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", id="qwen2-vl"),
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("4.57.0"),
-                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                    ),
-                    _HEAD_SIZE_NOT_MULTIPLE_OF_8,
-                ],
+                id="qwen3-vl",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen3.5-nothink",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.2.0"),
@@ -2449,6 +2529,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen3.6-moe",
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.2.0"),
@@ -2459,6 +2540,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                id="muse-spark",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.0"),
                     reason="Muse Spark Open was introduced in transformers-5.20.0",
@@ -2545,7 +2627,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
         ],
     )
     @pytest.mark.xfail(
@@ -2588,18 +2670,28 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
             # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator:
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", id="gemma3"),
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+                id="gemma4",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.5.0"),
                     reason="Gemma4 models were introduced in transformers-5.5.0",
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Inkling2ForConditionalGeneration",
+                id="inkling2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0"),
+                    reason="Inkling 2 models were introduced in transformers-5.23.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration",
+                id="inkling2-loop",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.24.0"),
                     reason="Inkling 2 Mini models were introduced in transformers-5.24.0",
@@ -2635,10 +2727,31 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @require_vision
+    def test_train_vlm_prompt_completion_pad_to_multiple_of(self):
+        # Regression test for #8551: padding to a multiple raised for VLMs, and it is the default on Neuron
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            pad_to_multiple_of=128,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        assert batch["input_ids"].shape[1] % 128 == 0
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            pytest.param("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", id="qwen2.5-vl"),
         ],
     )
     @pytest.mark.parametrize(
@@ -2900,7 +3013,7 @@ class TestSFTTrainer(TrlTestCase):
         [
             ([151645, 151643], [151644, 151645, 151643]),  # a list of ids, as Qwen and Llama ship
             (151645, [151644, 151645]),  # a single id, as Mistral and GPT-2 ship
-            (None, [151644]),  # no id at all
+            (None, [151644, 151645]),  # no id at all: <|im_end|> added (#8564)
             ([151644, 151645], [151644, 151645]),  # a list that already holds the requested token
         ],
     )
@@ -2921,6 +3034,35 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
+
+    @pytest.mark.parametrize("dataset_format", ["messages", "from_value"])
+    def test_end_of_turn_token_added_to_generation_config(self, dataset_format):
+        # The generation config stops only on <eos> (1), not on the template's <end_of_turn> (107) (#8564)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        if dataset_format == "from_value":
+            dataset = dataset.map(
+                lambda example: {
+                    "conversations": [{"from": m["role"], "value": m["content"]} for m in example["messages"]]
+                },
+                remove_columns="messages",
+            )
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
+    def test_pretokenized_conversational_data_without_chat_template(self):
+        # No chat template, and the pre-tokenized dataset keeps its `messages` column (#8564)
+        model_id = "trl-internal-testing/tiny-GPT2LMHeadModel"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        dataset = dataset.map(lambda example: tokenizer(" ".join(m["content"] for m in example["messages"])))
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.model.generation_config.eos_token_id == tokenizer.eos_token_id
 
     @pytest.mark.parametrize(
         "trainer_cls, topic",

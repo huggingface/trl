@@ -24,7 +24,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -75,6 +75,7 @@ from .utils import (
     get_config_model_id,
     identity,
     model_accepts_images,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -104,6 +105,13 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
+
+
+class _SupportsReset(Protocol):
+    def reset(self, **kwargs) -> str | None: ...
+
+
+EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 def _chunked_divergence_loss(
@@ -258,11 +266,12 @@ class DistillationTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
+        teacher_model (`str`, [`~transformers.PreTrainedModel`] or `dict[str, str | PreTrainedModel]`, *optional*):
             Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
-            (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
-            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses
-            that supply the teacher another way (e.g. a remote server).
+            (loaded like `model`, using `args.teacher_model_init_kwargs`), an instantiated
+            [`~transformers.PreTrainedModel`], or a mapping from teacher ID to either of those, in which case the
+            `teacher_id` column of each row selects its teacher. Every teacher must share the student's vocabulary. May
+            be omitted by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -304,6 +313,22 @@ class DistillationTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
+        environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
+            A callable that creates and returns an environment instance, or a dictionary mapping environment names to
+            such callables. The environment class should define methods that can be invoked as tools during generation.
+            Each method should comply with the same requirements as the `tools` described above. The environment must
+            also implement a callable `reset` method that can be used to reset state between generations. The `reset`
+            method should return either `None` or a string: when it returns a string, that string is appended to the
+            last user message before generation. Tool-result tokens are excluded from the loss, but they count toward
+            `max_completion_length`, which is the budget for the whole episode. If the environment defines a
+            `get_reward` method taking no argument and returning a `float`, it is called once per rollout and only
+            logged, never used in the loss, so an expensive `get_reward` adds to the time of every step.
+
+            With a single callable, every example uses the same environment, with one instance per rollout so their
+            interactions stay isolated. With a dictionary, each example must carry an `environment` field selecting its
+            environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
+            tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
+            any time without prior notice.
     """
 
     loss_is_scaled_for_ga = True
@@ -328,7 +353,7 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel | None = None,
+        teacher_model: str | PreTrainedModel | dict[str, str | PreTrainedModel] | None = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -338,6 +363,7 @@ class DistillationTrainer(_BaseTrainer):
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
+        environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -455,6 +481,15 @@ class DistillationTrainer(_BaseTrainer):
             if tid != self._tokenizer.unk_token_id:
                 self._video_pad_token_id = tid
 
+        if environment_factory is not None and os.environ.get("TRL_EXPERIMENTAL_SILENCE", "0") != "1":
+            warnings.warn(
+                "You are using 'environment_factory', which is an experimental feature. This API may change or be "
+                "removed at any time without prior notice. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Tools
         if tools:
             if not Version(transformers.__version__) >= Version("5.0.0"):
@@ -462,6 +497,13 @@ class DistillationTrainer(_BaseTrainer):
                     "Using tools with DistillationTrainer requires transformers version 5.0.0 or higher. Please "
                     "upgrade transformers with `pip install --upgrade transformers` to use this feature."
                 )
+        if environment_factory:
+            if not Version(transformers.__version__) >= Version("5.2.0"):
+                raise ImportError(
+                    "Using `environment_factory` with DistillationTrainer requires transformers version 5.2.0 or "
+                    "higher. Please upgrade transformers with `pip install --upgrade transformers` to use this feature."
+                )
+        if tools or environment_factory:
             # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
             # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
             if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
@@ -475,12 +517,75 @@ class DistillationTrainer(_BaseTrainer):
                     "The provided chat template does not support tool calling. The template must be able to render a "
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
-            # Async tools are deferred to a future PR; reject them now rather than fail cryptically in the tool loop.
-            if any(inspect.iscoroutinefunction(tool) for tool in tools):
-                raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
-        self.tools = tools or []
-        # Tools are constant across examples, so the tool dict is built once here.
-        self._tool_dict = {tool.__name__: tool for tool in self.tools}
+
+        # Set up the environments and extract their methods to be used as tools.
+        tools = tools or []
+        self._standalone_tools = tools  # tools that are not bound to an environment
+
+        # Normalize `environment_factory` to a `{name: factory}` mapping. A single callable is the special case of one
+        # unnamed (`None`) environment shared by every example; a dict maps the `environment` field of each example to
+        # its factory. `_multi_environment` records which case we are in: only then is the `environment` field read.
+        self._multi_environment = isinstance(environment_factory, dict)
+        if environment_factory is None:
+            self.environment_factories = None
+        elif self._multi_environment:
+            self.environment_factories = environment_factory
+        else:
+            self.environment_factories = {None: environment_factory}
+
+        # Environment classes that define `get_reward`, only logged after each rollout
+        self._env_reward_types = []
+        if self.environment_factories is not None:
+            # The environment an example uses is only known at batch time (it depends on the data). Here we just probe
+            # one instance of each environment to validate its `reset` method and extract its tool methods, used to
+            # render the per-example tool schema in the prompt. Instances are pooled and reused (reset) across batches;
+            # the probe seeds the pool so it is not wasted. The pool grows only when a batch needs more concurrent
+            # instances of an environment than have been created so far, preserving the "construct once, reset often"
+            # contract even when batches mix environments.
+            self._env_tools = {}  # {environment name: tools exposed when this environment is selected}
+            self._environment_pool = {}  # {environment name: list of reusable instances}
+            # `self.tools` is the union of every environment's tools, accumulated below as each environment is probed.
+            # Used where only the presence of a tool matters (chat template validation, async check, tool metrics);
+            # the per-example schema is rendered in `_tokenize_prompts`.
+            self.tools = list(tools)
+            for name, factory in self.environment_factories.items():
+                instance = factory()
+                has_reset = False
+                has_reward = False
+                methods = []
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
+                    if member_name == "reset":
+                        has_reset = True
+                    elif member_name == "get_reward":
+                        has_reward = True
+                    elif not member_name.startswith("_"):
+                        methods.append(getattr(instance, member_name))
+                if not has_reset:
+                    raise ValueError(
+                        "Each environment instance returned by `environment_factory` must define a callable `reset`."
+                    )
+                self._env_tools[name] = tools + methods
+                self._environment_pool[name] = [instance]
+                self.tools += [method for method in methods if method not in self.tools]
+                # One entry per env class, since a dict factory may map several names to the same class
+                if has_reward and type(instance) not in self._env_reward_types:
+                    if inspect.iscoroutinefunction(instance.get_reward):
+                        raise ValueError(
+                            "Async `get_reward` is not yet supported by `DistillationTrainer`. Define a synchronous "
+                            "`get_reward`."
+                        )
+                    self._env_reward_types.append(type(instance))
+        else:
+            self.tools = tools
+
+        # Async tools are deferred to a future PR; reject them now rather than fail cryptically in the tool loop.
+        if any(inspect.iscoroutinefunction(tool) for tool in self.tools):
+            raise ValueError("Async tools are not yet supported by `DistillationTrainer`. Pass synchronous tools.")
+
+        # The per-rollout environment instances and tool dicts both depend on the batch (which environment each example
+        # selects), so they are built in `_generate_and_score_completions`, right before generation.
+        self.environments = None
 
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
         # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
@@ -671,22 +776,39 @@ class DistillationTrainer(_BaseTrainer):
         self._forward_redirection = _ForwardRedirection()
 
         # Teacher model setup
-        # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way.
-        if teacher_model is not None:
-            if isinstance(teacher_model, str):
-                dtype = teacher_model_init_kwargs.get("dtype")
-                teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
+        # `teacher_model` may be None: subclasses (e.g. ServerDistillationTrainer) supply the teacher another way. A
+        # single teacher is a one-entry mapping keyed by `None`, so one or several teachers share one code path.
+        if teacher_model is None:
+            teacher_models, teacher_models_init_kwargs = {}, {}
+        elif isinstance(teacher_model, dict):
+            teacher_models, teacher_models_init_kwargs = dict(teacher_model), teacher_model_init_kwargs
+            unknown = set(teacher_models_init_kwargs) - set(teacher_models)
+            if unknown:
+                raise ValueError(
+                    f"`teacher_model_init_kwargs` has entries for unknown teacher IDs {sorted(unknown)}. Use the IDs "
+                    f"of `teacher_model`: {list(teacher_models)}."
+                )
+        else:
+            teacher_models = {None: teacher_model}
+            teacher_models_init_kwargs = (
+                {None: teacher_model_init_kwargs} if args.teacher_model_init_kwargs is not None else {}
+            )
+        for teacher_id, teacher in teacher_models.items():
+            if isinstance(teacher, str):
+                init_kwargs = dict(teacher_models_init_kwargs.get(teacher_id, {}))
+                dtype = init_kwargs.get("dtype")
+                init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
                 if args.teacher_model_revision is not None:
-                    teacher_model_init_kwargs.setdefault("revision", args.teacher_model_revision)
+                    init_kwargs.setdefault("revision", args.teacher_model_revision)
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
-                    teacher_model_init_kwargs["device_map"] = None
-                teacher_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-                teacher_model = create_model_from_path(teacher_model, **teacher_model_init_kwargs)
-            elif args.teacher_model_init_kwargs is not None:
+                    init_kwargs["device_map"] = None
+                init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                teacher_models[teacher_id] = create_model_from_path(teacher, **init_kwargs)
+            elif teacher_id in teacher_models_init_kwargs:
                 raise ValueError(
                     "You passed teacher_model_init_kwargs to the config, but your teacher_model is already "
-                    "instantiated."
+                    "instantiated. Pass the teacher as a model id, or remove its `teacher_model_init_kwargs`."
                 )
 
         # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
@@ -753,25 +875,34 @@ class DistillationTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        # Prepare teacher model (after super().__init__ so accelerator is ready)
-        if teacher_model is not None:
+        # Prepare teacher models (after super().__init__ so accelerator is ready)
+        self._multi_teacher = isinstance(teacher_model, dict)
+        if self._multi_teacher and self._is_vlm:
+            raise ValueError(
+                "Multiple teachers are not supported with vision-language models. Pass a single `teacher_model`."
+            )
+        if self._multi_teacher and self._dist.is_fsdp:
+            raise ValueError(
+                "FSDP is not supported with a `teacher_model` mapping. Use DDP or DeepSpeed for multi-teacher "
+                "distillation."
+            )
+        self.teacher_models = {}
+        for teacher_id, teacher in teacher_models.items():
             # The divergence compares the full next-token distribution of the student against the teacher's, so both
             # must be defined over the same vocabulary.
             student_vocab_size = self.model.config.get_text_config().vocab_size
-            teacher_vocab_size = teacher_model.config.get_text_config().vocab_size
+            teacher_vocab_size = teacher.config.get_text_config().vocab_size
             if student_vocab_size != teacher_vocab_size:
                 raise ValueError(
-                    f"The student model has vocab_size {student_vocab_size} but the teacher model has vocab_size "
-                    f"{teacher_vocab_size}. Distillation compares the teacher's full next-token distribution, which "
-                    f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for "
-                    f"cross-tokenizer distillation."
+                    f"The student model has vocab_size {student_vocab_size} but the teacher model "
+                    f"{'' if teacher_id is None else f'{teacher_id!r} '}has vocab_size {teacher_vocab_size}. "
+                    f"Distillation compares the teacher's full next-token distribution, which requires a shared "
+                    f"vocabulary. Use a teacher with the same vocab_size, or GOLD for cross-tokenizer distillation."
                 )
             if self.is_deepspeed_enabled:
-                self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+                self.teacher_models[teacher_id] = prepare_deepspeed(teacher, self.accelerator)
             else:
-                self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
-        else:
-            self.teacher_model = None
+                self.teacher_models[teacher_id] = self.accelerator.prepare_model(teacher, evaluation_mode=True)
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
@@ -788,6 +919,9 @@ class DistillationTrainer(_BaseTrainer):
             args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
         )
         self.chat_template_kwargs = args.chat_template_kwargs or {}
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -904,7 +1038,7 @@ class DistillationTrainer(_BaseTrainer):
         # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
         # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "teacher_id", "environment"]
 
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
@@ -1046,6 +1180,34 @@ class DistillationTrainer(_BaseTrainer):
                                 has_images = True
                 images.append(prompt_images if prompt_images else None)
             images = images if has_images else None
+
+            if self.environment_factories is not None:
+                # Tools differ per example across environments, so render each prompt with its own tool schema.
+                prompt_ids = []
+                multimodal_fields = {}
+                for prompt, name in zip(prompts, self._batch_environments, strict=True):
+                    tokenized = self.processing_class.apply_chat_template(
+                        conversation=[prompt],
+                        tools=self._env_tools[name] or None,  # `or None`: Llama bug: tool boilerplate for tools=[]
+                        chat_template=self.chat_template,
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        **self.chat_template_kwargs,
+                    )
+                    prompt_ids.append(tokenized["input_ids"][0])
+                    # For VLMs, the processor returns extra multimodal fields (pixel_values, image_grid_thw, etc.)
+                    for k, v in tokenized.items():
+                        if k not in ("input_ids", "attention_mask"):
+                            multimodal_fields.setdefault(k, []).append(v)
+                # Merge the per-prompt fields so the result matches the single batched `apply_chat_template` call used
+                # when there are no environments: image fields (pixel_values, image_grid_thw, ...) are flattened over
+                # patches/images and concatenated; per-token fields (e.g. token_type_ids) stay batched per prompt.
+                multimodal_fields = {
+                    k: torch.cat(v) if isinstance(v[0], torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                    for k, v in multimodal_fields.items()
+                }
+                return prompt_ids, images, multimodal_fields
 
             # Workaround for a bug in transformers 5.3.0 where some processors (e.g. Qwen2.5-VL) crash on
             # batched unpadded input (transformers#44514).
@@ -1221,17 +1383,20 @@ class DistillationTrainer(_BaseTrainer):
                 prefix_ids = prefix_ids.tolist()
                 full_ids = full_ids.tolist()
 
-        # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
-        # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
-        # EOS (not EOS + newline). Templates that don't use EOS as end-of-turn (e.g. Gemma uses
-        # <turn|>) skip this trimming.
-        eos_positions = [i for i, tok_id in enumerate(prefix_ids) if tok_id == self._tokenizer.eos_token_id]
-        if eos_positions:
-            prefix_ids = prefix_ids[: eos_positions[-1] + 1]
+        # Some chat templates render whitespace after the token that ends the assistant turn (e.g. Qwen3 renders
+        # "<|im_end|>\n"). The model stops generating at that token, so drop the whitespace to start the suffix right
+        # after it.
+        while not self._tokenizer.decode(prefix_ids[-1:]).strip():
+            prefix_ids = prefix_ids[:-1]
 
         if full_ids[: len(prefix_ids)] != prefix_ids:
-            raise ValueError("Unexpected tokenization: the EOS-trimmed prefix IDs are not a prefix of the full IDs.")
-        return full_ids[len(prefix_ids) :]
+            raise ValueError("Unexpected tokenization: the trimmed prefix IDs are not a prefix of the full IDs.")
+        suffix_ids = full_ids[len(prefix_ids) :]
+        # Some chat templates (e.g. GLM) open the tool result with the token the model stops on. The completion already
+        # ends with it, so drop it.
+        if suffix_ids[0] in self.eos_token_ids:
+            suffix_ids = suffix_ids[1:]
+        return suffix_ids
 
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, images, multimodal_fields):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
@@ -1257,6 +1422,7 @@ class DistillationTrainer(_BaseTrainer):
                 idx_with_tool = idxs_with_tool[idx]
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
+                tool_dict = self._tool_dicts[idx_with_tool]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
                 prompt_completion_tool.append(completions[idx_with_tool][-1])
                 tool_call_results = []
@@ -1266,8 +1432,8 @@ class DistillationTrainer(_BaseTrainer):
                         function = tool_call["function"]
                         name = function["name"]
                         try:
-                            if name in self._tool_dict:
-                                tool_call_results.append((name, self._tool_dict[name](**function["arguments"])))
+                            if name in tool_dict:
+                                tool_call_results.append((name, tool_dict[name](**function["arguments"])))
                             else:
                                 raise ValueError(f"Tool {name} not found.")
                         except Exception as e:
@@ -1425,9 +1591,15 @@ class DistillationTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions
+            # Decode post-tool completions, each with the tools its prompt was rendered with
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[self._batch_environments[i]] for i in idxs_with_tool]
+            else:
+                per_prompt_tools = [self.tools] * len(idxs_with_tool)
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=self.tools)
+                parse_response(
+                    self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=per_prompt_tools[idx]
+                )
                 if ids
                 else {}
                 for idx, ids in enumerate(post_tool_ids)
@@ -1466,8 +1638,13 @@ class DistillationTrainer(_BaseTrainer):
                     getattr(self._tokenizer, "response_template", None) is not None  # new-style
                     or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
                 ):
+                    # Parse each completion with the tools its prompt was rendered with
+                    if self.environment_factories is not None:
+                        per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+                    else:
+                        per_prompt_tools = [self.tools] * len(prompts)
                     completions = [
-                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=self.tools)]
+                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=per_prompt_tools[i])]
                         for i, ids in enumerate(completion_ids)
                     ]
                 else:
@@ -1613,8 +1790,74 @@ class DistillationTrainer(_BaseTrainer):
     # Name kept aligned with GRPO/RLOO for consistency; distillation has no rewards, so nothing is actually scored.
     def _generate_and_score_completions(self, inputs: list[dict[str, torch.Tensor | Any]]) -> dict[str, Any]:
         device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+
+        # Check the routing before generating, so a bad `teacher_id` does not cost a generation pass
+        if self._multi_teacher:
+            teacher_ids = [x.get("teacher_id") for x in inputs]
+            for teacher_id in set(teacher_ids):
+                if teacher_id not in self.teacher_models:
+                    raise ValueError(
+                        f"Example has `teacher_id={teacher_id!r}`, which is not among the teachers passed to "
+                        f"`teacher_model`. Expected one of: {list(self.teacher_models)}."
+                    )
+
+        # Resolve each example's environment and draw one reusable instance per rollout from the pool, creating more
+        # only when this batch needs more concurrent instances of an environment than exist. `_batch_environments`
+        # records each example's environment so `_tokenize_prompts` can render the matching tool schema.
+        if self.environment_factories is not None:
+            self._batch_environments = [x.get("environment") if self._multi_environment else None for x in inputs]
+            if self._multi_environment:
+                for name in set(self._batch_environments):
+                    if name not in self.environment_factories:
+                        raise ValueError(
+                            f"Example has `environment={name!r}`, which is not among the environments passed to "
+                            f"`environment_factory`. Expected one of: {list(self.environment_factories)}."
+                        )
+            self.environments = []
+            pool_cursor = {}  # how many instances of each environment have been handed out so far this batch
+            for name in self._batch_environments:
+                pool = self._environment_pool[name]
+                index = pool_cursor.get(name, 0)
+                if index == len(pool):
+                    pool.append(self.environment_factories[name]())
+                pool_cursor[name] = index + 1
+                self.environments.append(pool[index])
+
+        # Build the per-rollout tool dicts for this batch: the standalone tools plus, for each rollout, the methods of
+        # its environment. Done here (not at init) because each example's environment, hence its tools, is data-dependent.
+        if self.tools:
+            self._tool_dicts = []
+            for i in range(len(inputs)):
+                methods = []
+                if self.environments:
+                    environment = self.environments[i]
+                    methods = [
+                        getattr(environment, member_name)
+                        for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
+                        if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
+                    ]
+                self._tool_dicts.append({tool.__name__: tool for tool in self._standalone_tools + methods})
+
+        if self.environments:
+            for i, (prompt, environment, x) in enumerate(zip(prompts, self.environments, inputs, strict=True)):
+                # `environment` is a control field in multi-environment mode, so it is not forwarded to `reset`.
+                reset_kwargs = {k: v for k, v in x.items() if k != "environment"} if self._multi_environment else x
+                # `teacher_id` is a control field in multi-teacher mode, so it is not forwarded to `reset` either.
+                if self._multi_teacher:
+                    reset_kwargs = {k: v for k, v in reset_kwargs.items() if k != "teacher_id"}
+                observation = environment.reset(**reset_kwargs)
+                if observation is None:
+                    continue
+                content = prompt[-1]["content"]
+                if isinstance(observation, list) and isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if isinstance(observation, str) and isinstance(content, list):
+                    observation = [{"type": "text", "text": observation}]
+                # Rebuild the last message rather than mutating it in place, so the input example is left untouched.
+                prompts[i] = prompt[:-1] + [{**prompt[-1], "content": content + observation}]
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -1643,6 +1886,16 @@ class DistillationTrainer(_BaseTrainer):
             ]
 
         prompt_ids_list, completion_ids_list, tool_mask_list, images, tool_images = self._generate(prompts)
+
+        # Distillation has no reward: `get_reward` is logged under the environment's class name, never used in the loss
+        for env_type in self._env_reward_types:
+            env_rewards = [e.get_reward() if type(e) is env_type else None for e in self.environments]
+            env_rewards = torch.tensor(
+                [torch.nan if r is None else r for r in env_rewards], dtype=torch.float32, device=device
+            )
+            env_rewards = self.accelerator.gather(env_rewards)
+            self._metrics[mode][f"rewards/{env_type.__name__}/mean"].append(torch.nanmean(env_rewards).item())
+            self._metrics[mode][f"rewards/{env_type.__name__}/std"].append(nanstd(env_rewards).item())
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
@@ -1690,11 +1943,15 @@ class DistillationTrainer(_BaseTrainer):
             image_inputs = super()._prepare_inputs(image_inputs)
             forward_kwargs = dict(image_inputs)
         elif images is not None:
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+            else:
+                per_prompt_tools = [self.tools] * len(prompts)
             prompts_text = [
                 apply_chat_template(
-                    {"prompt": prompt}, self.processing_class, tools=self.tools or None, **self.chat_template_kwargs
+                    {"prompt": prompt}, self.processing_class, tools=tools or None, **self.chat_template_kwargs
                 )["prompt"]
-                for prompt in prompts
+                for prompt, tools in zip(prompts, per_prompt_tools, strict=True)
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
@@ -1837,6 +2094,8 @@ class DistillationTrainer(_BaseTrainer):
                 output["num_tiles"] = num_tiles
         if tool_mask is not None:
             output["tool_mask"] = tool_mask
+        if self._multi_teacher:
+            output["teacher_id"] = teacher_ids
         return output
 
     @profiling_decorator
@@ -1884,7 +2143,7 @@ class DistillationTrainer(_BaseTrainer):
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
+        loss, entropy_sum, num_valid_tokens, teacher_stats = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
 
@@ -1892,6 +2151,13 @@ class DistillationTrainer(_BaseTrainer):
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
         # ordering risk). Mirrors `SFTTrainer.compute_loss`.
         mode = "train" if self.model.training else "eval"
+        if self._multi_teacher:
+            # Per-teacher divergence and share of tokens; NaN divergence for a teacher absent from this micro-batch
+            divergence_sums, counts = self.accelerator.reduce(teacher_stats, reduction="sum")
+            for teacher_id, divergence_sum, count in zip(self.teacher_models, divergence_sums, counts, strict=True):
+                jsd = (divergence_sum / count).item() if count > 0 else float("nan")
+                self._metrics[mode][f"teacher/{teacher_id}/jsd"].append(jsd)
+                self._metrics[mode][f"teacher/{teacher_id}/token_frac"].append((count / counts.sum()).item())
         num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
@@ -1927,40 +2193,12 @@ class DistillationTrainer(_BaseTrainer):
             unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
-        # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
-        # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
-        self.teacher_model.eval()
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        with torch.no_grad():
-            teacher_hidden_states = self._forward_redirection(
-                self.teacher_model,
-                unwrapped_teacher,
-                self._get_last_hidden_state,
-                unwrapped_teacher,
-                input_ids,
-                attention_mask,
-                logits_to_keep,
-                **multimodal_inputs,
-            )
-
         student_lm_head = unwrapped_student.get_output_embeddings()
-        teacher_lm_head = unwrapped_teacher.get_output_embeddings()
-
-        # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
-        if student_lm_head.weight.device != teacher_lm_head.weight.device:
-            raise ValueError(
-                f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
-                f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
-            )
-
         # With the model split across devices (`device_map`), the backbone can end on another device than the head
         student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
-        teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
         loss_mask = loss_mask.to(student_lm_head.weight.device)
-
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
-        teacher_config = unwrapped_teacher.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
         # as-is. Muse Glimmer applies the same pre-softcap multiplier under the name `output_multiplier`.
         student_logit_scale = getattr(student_config, "logit_scale", None)
@@ -1973,37 +2211,87 @@ class DistillationTrainer(_BaseTrainer):
         if student_logit_scale is None and getattr(student_config, "logits_scaling", None) is not None:
             logits_scaling = student_config.logits_scaling
             student_logit_scale = logits_scaling if student_config.model_type == "hyperclovax" else 1 / logits_scaling
-        teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
-        if teacher_logit_scale is None:
-            teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
-        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
-        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
-        if teacher_logit_scale is None:
-            teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
-        if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
-            logits_scaling = teacher_config.logits_scaling
-            teacher_logit_scale = logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
-        teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
-        loss, entropy_sum, n_valid = _chunked_divergence_loss(
-            student_hidden_states,
-            teacher_hidden_states,
-            student_lm_head.weight,
-            teacher_lm_head.weight,
-            loss_mask,
-            self.beta,
-            num_items_in_batch=num_items_in_batch,
-            student_lm_head_bias=student_lm_head.bias,
-            teacher_lm_head_bias=teacher_lm_head.bias,
-            student_logit_scale=student_logit_scale,
-            teacher_logit_scale=teacher_logit_scale,
-            student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
-            teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
-            temperature=self.temperature,
-        )
-        # Return the raw entropy sum and valid-token count for `compute_loss` to aggregate and log after the forward
-        # returns (see there). Detached: the metric is gradient-free.
-        return loss, entropy_sum.detach(), n_valid
+
+        # The per-teacher losses are summed, so they share one denominator: the local valid-token count in evaluation
+        denominator = loss_mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch
+        teacher_ids = inputs["teacher_id"] if self._multi_teacher else [None] * input_ids.size(0)
+        loss, entropy_sum, n_valid = 0.0, 0.0, 0
+        teacher_stats = torch.zeros(2, len(self.teacher_models), device=student_hidden_states.device)
+        zero3 = self.args.deepspeed_plugin is not None and self.args.deepspeed_plugin.zero_stage == 3
+        for teacher_index, (teacher_id, teacher_model) in enumerate(self.teacher_models.items()):
+            rows = [i for i, t in enumerate(teacher_ids) if t == teacher_id]
+            # Under ZeRO-3 the teacher forward is a collective, so every rank scores every teacher, on one masked-out
+            # row when it has none
+            if not rows and not zero3:
+                continue
+            scored = rows or [0]
+
+            # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
+            # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
+            teacher_model.eval()
+            unwrapped_teacher = self.accelerator.unwrap_model(teacher_model)
+            with torch.no_grad():
+                teacher_hidden_states = self._forward_redirection(
+                    teacher_model,
+                    unwrapped_teacher,
+                    self._get_last_hidden_state,
+                    unwrapped_teacher,
+                    input_ids[scored],
+                    attention_mask[scored],
+                    logits_to_keep,
+                    **multimodal_inputs,
+                )
+
+            teacher_lm_head = unwrapped_teacher.get_output_embeddings()
+            # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
+            if student_lm_head.weight.device != teacher_lm_head.weight.device:
+                raise ValueError(
+                    f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
+                    f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
+                )
+            # ZeRO-3 gathers the output heads in both passes of the chunked loss, so the loss also runs on the
+            # masked-out row
+            teacher_loss_mask = loss_mask[scored] if rows else torch.zeros_like(loss_mask[:1])
+            teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
+
+            # Read the teacher's logit post-processing the same way as the student's, above
+            teacher_config = unwrapped_teacher.config.get_text_config()
+            teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
+            if teacher_logit_scale is None:
+                teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+            if teacher_logit_scale is None:
+                teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
+            if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
+                logits_scaling = teacher_config.logits_scaling
+                teacher_logit_scale = (
+                    logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
+                )
+            teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
+            teacher_loss, teacher_entropy_sum, teacher_n_valid = _chunked_divergence_loss(
+                student_hidden_states[scored],
+                teacher_hidden_states,
+                student_lm_head.weight,
+                teacher_lm_head.weight,
+                teacher_loss_mask,
+                self.beta,
+                num_items_in_batch=denominator,
+                student_lm_head_bias=student_lm_head.bias,
+                teacher_lm_head_bias=teacher_lm_head.bias,
+                student_logit_scale=student_logit_scale,
+                teacher_logit_scale=teacher_logit_scale,
+                student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
+                teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+                temperature=self.temperature,
+            )
+            loss = loss + teacher_loss
+            entropy_sum = entropy_sum + teacher_entropy_sum
+            n_valid = n_valid + teacher_n_valid
+            teacher_stats[0, teacher_index] = teacher_loss.detach() * denominator
+            teacher_stats[1, teacher_index] = teacher_n_valid
+        # Return the raw entropy sum, valid-token count and per-teacher statistics for `compute_loss` to aggregate and
+        # log after the forward returns (see there). Detached: the metrics are gradient-free.
+        return loss, entropy_sum.detach(), n_valid, teacher_stats
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
