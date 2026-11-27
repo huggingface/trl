@@ -211,13 +211,11 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTor
 
 ## cuDNN attention on H100 and B200 GPUs
 
-On GPUs with compute capability 9.x or 10.x (H100, H200, B200, B300), PyTorch runs `attn_implementation="sdpa"` with cuDNN by default. cuDNN keeps a few megabytes of host memory for every new sequence length and never frees them ([pytorch/pytorch#202607](https://github.com/pytorch/pytorch/issues/202607)), so host memory keeps growing when sequence lengths vary: generation with transformers, or batches padded to their longest sequence. Make PyTorch prefer another attention backend:
+On GPUs with compute capability 9.x or 10.x (H100, H200, B200, B300), PyTorch runs `attn_implementation="sdpa"` with cuDNN by default. cuDNN keeps a few megabytes of host memory for every new sequence length and never frees them ([pytorch/pytorch#202607](https://github.com/pytorch/pytorch/issues/202607)), so host memory keeps growing when sequence lengths vary. In training, the default [`pad_to_multiple_of="auto"`](#padding-sequences-to-a-multiple) pads to a multiple of 128 on these GPUs, which bounds the number of lengths. Generation with transformers still sees a new length at every step: make PyTorch prefer another attention backend:
 
 ```bash
 export TORCH_CUDNN_SDPA_DEPRIORITIZED=1
 ```
-
-Or reduce the number of distinct lengths with [`pad_to_multiple_of`](#padding-sequences-to-a-multiple).
 
 ## Disabling model gathering for generation in online methods
 
