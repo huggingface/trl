@@ -62,7 +62,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
-from transformers.utils import is_peft_available
+from transformers.utils import is_kernels_available, is_peft_available
 
 from ..chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
@@ -3179,6 +3179,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
                 "support."
             )
+
+        # RMSNorm layers, and only them, run the fused Liger kernel from the Hub: tree packing wraps the recurrent and
+        # convolution functions that the Hub's other training kernels replace
+        if is_kernels_available():
+            from kernels import LayerRepository, Mode, kernelize, use_kernel_mapping
+
+            rms_norm = LayerRepository(repo_id="kernels-community/liger-kernels", layer_name="LigerRMSNorm", version=4)
+            with use_kernel_mapping({"RMSNorm": {"cuda": rms_norm, "rocm": rms_norm}}, inherit_mapping=False):
+                kernelize(model, mode=Mode.TRAINING, device="rocm" if torch.version.hip else "cuda")
 
         # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
         # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
