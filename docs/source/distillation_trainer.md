@@ -93,7 +93,11 @@ While training and evaluating, we record the following metrics:
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `tools/call_frequency`: The average number of tool calls per completion in the generation batch. Logged only when `tools` are provided.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found, raised an exception, or the call type is unsupported). It is `0.0` when no tool was called. Logged only when `tools` are provided.
+- `rewards/{EnvironmentClass}/mean`: The average value returned by the environment's `get_reward` over the rollouts bound to that environment class. Logged only when an `environment_factory` defines `get_reward`, and never used in the loss.
+- `rewards/{EnvironmentClass}/std`: The standard deviation of the value returned by `get_reward`, over the same rollouts.
 - `entropy`: Average entropy of token predictions across generated completions (in nats).
+- `teacher/<id>/jsd`: The mean per-token divergence against teacher `<id>`, or NaN when no example was routed to it. Logged only when several teachers are passed.
+- `teacher/<id>/token_frac`: The fraction of completion tokens scored by teacher `<id>`. Logged only when several teachers are passed.
 
 ## Customization
 
@@ -176,6 +180,36 @@ trainer.train()
 > [!WARNING]
 > The distillation loss reads `lm_head.weight` directly and runs the student backbone without going through `PeftModel.forward()`. Adapters on `lm_head` (via `target_modules`) and prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) are therefore rejected, since they would be silently ignored. To train the head, use `modules_to_save=["lm_head"]` instead.
 
+### Multiple teachers
+
+To distill several frozen domain experts (e.g. a math expert and a code expert) into a single student, as in [MOPD](https://huggingface.co/papers/2606.30406), pass a dictionary mapping teacher IDs to teachers instead of a single teacher. Each example selects its teacher through a `teacher_id` column, and its completion is scored by that teacher only. Every teacher must share the student's vocabulary, and is prepared like a single teacher, so DeepSpeed ZeRO-3 shards (and optionally offloads) each of them. FSDP is not supported with a teacher mapping.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            [{"role": "user", "content": "What is the derivative of x^2?"}],
+            [{"role": "user", "content": "Write a function that reverses a string."}],
+        ],
+        "teacher_id": ["math", "code"],
+    }
+)
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    teacher_model={
+        "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    },
+    args=DistillationConfig(output_dir="mopd-student", teacher_model_init_kwargs={"code": {"dtype": "bfloat16"}}),
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
 ## Agent Training
 
 [`DistillationTrainer`] supports **agent training**: the student calls tools during generation and is distilled on the resulting trajectory. Tool-result tokens are masked out of the loss, so the student is only trained on the tokens it generated itself.
@@ -227,6 +261,80 @@ trainer = DistillationTrainer(
 
 > [!WARNING]
 > Async tools are not supported yet — pass synchronous functions.
+
+### Environments
+
+You can also provide tools through `environment_factory`. In this mode, [`DistillationTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools. The student runs a multi-turn episode against its own instance, the teacher scores every token the student generated with the whole episode (tool results included) as context, and the tool-result tokens are masked out of the loss.
+
+> [!IMPORTANT]
+> `environment_factory` requires `transformers>=5.2.0`.
+
+> [!NOTE]
+> The trainer keeps one environment instance per rollout in the generation batch, so `per_device_train_batch_size × gradient_accumulation_steps × num_processes` instances exist at once across processes (more if `per_device_eval_batch_size` is larger), reused between batches. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
+
+Per rollout, the trainer samples one row of the `train_dataset`, uses its `"prompt"` column as the prompt, and passes the row's other columns to `reset()` as keyword arguments, so the environment reads the task from the dataset.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+# Each row carries the prompt and the task data (here, the counter target to reach).
+targets = [i % 6 + 1 for i in range(64)]
+dataset = Dataset.from_dict(
+    {
+        "prompt": [[{"role": "user", "content": f"Increment the counter to {t}."}] for t in targets],
+        "target": targets,
+    }
+)
+
+class IncrementEnv:
+    # Reserved methods
+    def reset(self, target, **kwargs) -> str | None:  # required; the row's `target` column arrives as a keyword argument
+        self.counter = 0
+        self.target = target
+        return None  # a returned string is appended to the last user message
+
+    def get_reward(self) -> float:  # optional: logged, never used in the loss
+        return float(self.counter == self.target)
+
+    # Public methods (exposed as tools)
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self.counter += step
+        return self.counter
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen3-0.6B",
+    teacher_model="Qwen/Qwen3-4B",
+    args=DistillationConfig(max_tool_calling_iterations=4, chat_template_kwargs={"enable_thinking": False}),
+    train_dataset=dataset,
+    environment_factory=IncrementEnv,
+)
+trainer.train()
+```
+
+The counter task is solved in one tool call, so it only shows the API. For a task where the later turns matter, see the [`distillation_data_analysis_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_data_analysis_env) example and its comparison of whole episodes against the first turn.
+
+An environment class has two reserved methods: `reset` and `get_reward`. Unlike any other public methods, these are not exposed to the model as tools.
+
+- `reset` (required) is called when the rollout starts. It can return either `None` or a string. In distillation, when it returns a string, that string is appended to the last user message.
+- `get_reward` (optional) takes no argument and returns a `float`. Distillation has no reward, so it is called once per completed rollout only to log the episode's score as `rewards/{EnvironmentClass}/mean`, which is handy to follow task success while the loss goes down. It also lets an environment release per-episode resources. It runs on every rollout, so an expensive `get_reward` (for example one that runs a test suite) adds to the time of every step.
+
+> [!IMPORTANT]
+> With tools, `max_completion_length` is the budget for the **whole episode**: every model turn plus every tool result. Tool results are masked out of the loss but still count toward it, and they can take most of it, for example when tools return tables or tracebacks, as in the [`distillation_data_analysis_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_data_analysis_env) example. Size it for the episode rather than for a single answer. A tool result that would overflow the budget is dropped and the episode ends there.
+
+To mix several environments in one run, pass a dictionary mapping environment names to factories and add an `environment` column to the dataset, as for [`GRPOTrainer`](grpo_trainer#multiple-environments): each rollout only sees the tools of its own environment, and the `environment` field is not forwarded to `reset`, nor is the `teacher_id` field with [multiple teachers](#multiple-teachers). Instances are reused across steps (reset between episodes), so an expensive `__init__` is paid once. The [`distillation_data_analysis_env`](https://github.com/huggingface/trl/tree/main/examples/distillation_data_analysis_env) example distills a data-analysis agent in OpenEnv's data-analysis environment.
+
+> [!WARNING]
+> Async environment methods (tools or `get_reward`) are not supported yet, and the `train_dataset` is required: the environment cannot own the data as with [`GRPOTrainer`].
 
 ### Multimodal Tool Responses
 

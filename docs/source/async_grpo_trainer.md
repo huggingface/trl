@@ -48,7 +48,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B --gpu-m
     --max-model-len 4096
 ```
 
-With score centering enabled and either `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
+With `temperature != 1.0` or top-k/top-p filtering active, the server must use `--logprobs-mode processed_logprobs`. Raw log-probabilities describe the policy before temperature scaling or filtering, so they give incorrect importance ratios and, with score centering, incorrect centering weights. The trainer checks this before collecting rollouts and raises an error if the server uses another mode.
 
 Then execute the script on GPU 1 using the following command:
 
@@ -492,6 +492,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
 > Reward functions run in the rollout worker, a separate process, so everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
 >
 > The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A GPU-backed reward model (e.g. an `AutoModelForSequenceClassification` scorer) loads without error but silently falls back to the CPU. Keep reward functions lightweight (verifiers like `accuracy_reward`, format or length checks). If you need a GPU reward model, serve it behind its own inference engine (vLLM, TGI, ...) on separate GPUs and have a picklable reward function call it over HTTP.
+>
+> The rollout worker is a daemonic process, so reward functions, tools and environments cannot start child processes with `multiprocessing` (a `Pool` or `ProcessPoolExecutor` fails with `daemonic processes are not allowed to have children`). Use threads, `async` functions or `subprocess` instead.
 
 #### Example 1: Reward longer completions
 
@@ -724,6 +726,8 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
+For a larger example, [`async_grpo_s3_aggregation`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_s3_aggregation) trains a multi-agent team: its `generate_one` runs a whole team episode (several agents sampling through `generate_one_turn` and messaging each other) as one rollout, and its `compute_advantages` and `compute_loss` make every team count equally in the loss.
+
 Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`~trainer.async_grpo_trainer.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level and keep the training code under `if __name__ == "__main__":`. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
 ### Resuming from a checkpoint
@@ -802,6 +806,9 @@ trainer = AsyncGRPOTrainer(
 ### Environments
 
 You can also provide tools through `environment_factory`. In this mode, [`AsyncGRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.
+
+> [!NOTE]
+> The trainer keeps one environment instance per running rollout, reused between rollouts, so up to `max_concurrent_rollouts` instances exist at once. If each instance opens a session on a remote environment server (as with [OpenEnv](openenv)), that server must accept that many concurrent sessions. See [Server concurrency](openenv#server-concurrency).
 
 When you use an `environment_factory`, the environment owns the data: there is no external `train_dataset`. On each rollout, `reset()` produces the task — self-sampling from a corpus the environment holds, or generating a state procedurally — and returns the prompt. `max_steps` sets the training length. The following is a minimal example of an environment that self-samples a target and exposes an `increment` method (exposed as a tool).
 

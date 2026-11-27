@@ -913,7 +913,11 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
 
 
 @pytest.mark.parametrize(
-    "model_id", ["trl-internal-testing/tiny-SmolLM3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"]
+    "model_id",
+    [
+        pytest.param("trl-internal-testing/tiny-SmolLM3ForCausalLM", id="smollm3"),
+        pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
+    ],
 )
 def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_id):
     """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
@@ -3245,7 +3249,9 @@ class TestXTokenLoss(TrlTestCase):
         torch.testing.assert_close(loss, expected)
 
 
-@pytest.mark.parametrize("teacher_id", [_TINY_LLAMA, _TINY_QWEN2])
+@pytest.mark.parametrize(
+    "teacher_id", [pytest.param(_TINY_LLAMA, id="llama3.2"), pytest.param(_TINY_QWEN2, id="qwen2.5")]
+)
 @pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
 def test_xtoken_train_step_smoke(tmp_path, loss_type, teacher_id):
     """X-Token off-policy training runs one step end to end."""

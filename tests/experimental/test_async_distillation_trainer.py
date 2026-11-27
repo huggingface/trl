@@ -1083,9 +1083,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "instantiated"),
         [
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False),
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False, id="qwen2.5"),
+            # an already instantiated model
+            pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", True, id="qwen2.5-instantiated"),
+            # MoE: the load-balancing loss is on
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False, id="qwen3-moe"),
         ],
     )
     def test_train(self, model_id, instantiated):
@@ -1525,12 +1527,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             if "lora_" in name:
                 assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
             else:
-                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
-                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
-                # learning rate would move them by orders of magnitude more.
-                torch.testing.assert_close(
-                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
-                )
+                assert torch.equal(param, new_param), f"Base parameter {name} has changed."
 
     @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
     def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
@@ -1653,27 +1650,37 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
         assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
 
-    def test_adapters_are_unmerged_when_the_send_raises(self, fake_vllm):
-        merged_during_send = []
+    def test_merged_sync_and_lora_bias_raises(self, fake_vllm):
+        # The merged sync sends vLLM the base weights with the LoRA deltas merged in, which can't express a LoRA bias
+        with pytest.raises(ValueError, match="LoRA adapters without `lora_bias` only"):
+            self._build(fake_vllm, self._lora_config(lora_bias=True))
 
-        class _RaisingWeightTransfer(_StubWeightTransfer):
+    def test_merged_sync_sends_merged_lora_weights(self, fake_vllm):
+        from peft.tuners.lora import LoraLayer
+
+        sent = {}
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
             def send_weights(self, iterator):
-                merged_during_send.append(_any_adapter_merged(trainer.model))
-                raise RuntimeError("transfer blew up")
+                sent.update((name, tensor.clone()) for name, tensor in iterator)
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            trainer._sync_weight()
+        # Non-zero adapters, so that the merged weights differ from the base ones
+        trainer = self._build(
+            fake_vllm, self._lora_config(init_lora_weights=False), weight_transfer=_RecordingWeightTransfer
+        )
+        lora_layers = {
+            name.removeprefix("base_model.model.") + ".weight": module
+            for name, module in trainer.model.named_modules()
+            if isinstance(module, LoraLayer)
+        }
+        base_weights = {name: module.get_base_layer().weight.clone() for name, module in lora_layers.items()}
+        trainer._sync_weight()
 
-        # Leaving the adapter merged would silently train merged weights from the next step on.
-        assert merged_during_send == [True]
-        assert not _any_adapter_merged(trainer.model)
-
-
-def _any_adapter_merged(model) -> bool:
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
-    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+        for name, module in lora_layers.items():
+            # vLLM gets the base weight with the adapter merged in, and the training model keeps its base weight
+            expected = base_weights[name] + module.get_delta_weight("default")
+            assert torch.equal(sent[name], expected.to(sent[name].dtype)), name
+            assert torch.equal(module.get_base_layer().weight, base_weights[name]), name
 
 
 def _tensors_handed_to_producer(info, stream):

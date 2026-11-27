@@ -33,7 +33,7 @@ from trl import (
 )
 from trl.scripts.utils import DatasetConfig
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_no_cudnn_sdpa
 
 
 @dataclass
@@ -74,10 +74,18 @@ class TestTrlParser(TrlTestCase):
         "config_cls", [DistillationConfig, DPOConfig, GRPOConfig, KTOConfig, RewardConfig, RLOOConfig, SFTConfig]
     )
     @pytest.mark.parametrize(
-        ("value", "expected"), [("128", 128), ("None", None), ("none", None), ("null", None), ("auto", None)]
+        ("value", "expected"),
+        [
+            ("128", 128),
+            ("None", None),
+            ("none", None),
+            ("null", None),
+            pytest.param("auto", None, marks=require_no_cudnn_sdpa),
+        ],
     )
     def test_pad_to_multiple_of_from_command_line(self, config_cls, value, expected):
-        """`pad_to_multiple_of` arrives as a string on the command line; `"auto"` resolves to `None` off Neuron."""
+        """`pad_to_multiple_of` arrives as a string on the command line; `"auto"` resolves to `None` off Neuron and
+        cuDNN SDPA GPUs."""
         parser = TrlParser(dataclass_types=[config_cls])
         (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", "--pad_to_multiple_of", value])
         assert config.pad_to_multiple_of == expected

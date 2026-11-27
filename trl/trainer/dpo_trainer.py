@@ -302,11 +302,6 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        if self.pad_to_multiple_of is not None:
-            raise NotImplementedError(
-                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data."
-            )
         if "image" in examples[0]:
             for example in examples:
                 example["images"] = [example.pop("image")]
@@ -395,6 +390,38 @@ class DataCollatorForVisionPreference(DataCollatorMixin):
                 token_type_ids = token_type_ids[:, : self.max_length]
             if "mm_token_type_ids" in processed_prompts:
                 mm_token_type_ids = mm_token_type_ids[:, : self.max_length]
+
+        # Pad to a multiple of `pad_to_multiple_of` if necessary
+        if self.pad_to_multiple_of is not None:
+            input_ids = pad(
+                list(input_ids),
+                padding_value=self.processor.tokenizer.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                list(attention_mask), padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            completion_mask = pad(
+                list(completion_mask),
+                padding_value=0,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            if "token_type_ids" in processed_prompts:
+                token_type_ids = pad(
+                    list(token_type_ids),
+                    padding_value=0,
+                    padding_side="right",
+                    pad_to_multiple_of=self.pad_to_multiple_of,
+                )
+            if "mm_token_type_ids" in processed_prompts:
+                mm_token_type_ids = pad(
+                    list(mm_token_type_ids),
+                    padding_value=0,
+                    padding_side="right",
+                    pad_to_multiple_of=self.pad_to_multiple_of,
+                )
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
@@ -789,6 +816,10 @@ class DPOTrainer(_BaseTrainer):
             for name, param in model.named_parameters():
                 if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
+
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
 
         # Data collator
         self.padding_free = args.padding_free
