@@ -30,14 +30,33 @@ class SDFTConfig(_BaseConfig):
 
         distillation_alpha (`float`, *optional*, defaults to `0.5`):
             Divergence interpolation coefficient for SDFT top-k logit distillation.
-        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits"]`, *optional*, defaults to `"topk_logits"`):
-            Distillation objective mode. SDFT defaults to top-k logit distillation.
+        distillation_mode (`Literal["sampled_token", "full_logits", "topk_logits", "dopd"]`, *optional*, defaults to `"topk_logits"`):
+            Distillation objective mode. SDFT defaults to top-k logit distillation. `dopd` routes each token between
+            four regimes based on the teacher/student advantage gap, following DOPD
+            (https://huggingface.co/papers/2606.30626); see the `distillation_dopd_*` parameters.
         distillation_topk (`int`, *optional*, defaults to `100`):
             Number of top tokens used by the default SDFT top-k logit objective.
         distillation_is_clip (`float`, *optional*, defaults to `2.0`):
             Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
         distillation_add_tail (`bool`, *optional*, defaults to `False`):
             Whether to add a tail bucket for non-top-k probability mass.
+        distillation_dopd_gap_threshold (`float`, *optional*, defaults to `2.0`):
+            Advantage-gap threshold (in nats, on the realized token's log-probability difference) separating the "low
+            gap" and "high gap" DOPD regimes. Only used when `distillation_mode="dopd"`.
+        distillation_dopd_confidence_threshold (`float`, *optional*, defaults to `0.5`):
+            Per-token max-probability threshold separating "confident" from "unsure" for both teacher and student. Only
+            used when `distillation_mode="dopd"`.
+        distillation_dopd_light_topk (`int`, *optional*, defaults to `8`):
+            Top-k support size used by the DOPD regimes that apply a "light" distillation signal (low-gap /
+            high-gap-student-confident). Only used when `distillation_mode="dopd"`.
+        distillation_dopd_self_reg_weight (`float`, *optional*, defaults to `0.01`):
+            Weight of the weak self-regularization term (paper's beta_w) applied to low-confidence tokens: top-k
+            reverse KL of the bare student against a stop-gradient *privileged*-student anchor. Only used when
+            `distillation_mode="dopd"`.
+        distillation_dopd_student_consistency_weight (`float`, *optional*, defaults to `0.1`):
+            Weight of the light privileged-student consistency term (paper's beta_l) applied to high-gap,
+            student-confident tokens: top-k reverse KL of the bare student against a stop-gradient *privileged*-student
+            anchor. Only used when `distillation_mode="dopd"`.
         num_loss_tokens_to_skip (`int`, *optional*, defaults to `0`):
             Number of initial completion tokens to exclude from the distillation loss.
 
@@ -45,7 +64,7 @@ class SDFTConfig(_BaseConfig):
 
         teacher_model_kind (`str`, *optional*, defaults to `"base"`):
             Semantic teacher choice for SDFT. `base` uses the initial student, `live` uses the current student, and
-            `ema` uses an exponentially averaged teacher.
+            `ema` uses an exponentially averaged teacher. `live` is not supported with `distillation_mode="dopd"`.
         teacher_update_rate (`float`, *optional*, defaults to `0.05`):
             EMA update rate used when `teacher_model_kind="ema"`. A value of `1.0` reduces the update to a hard
             overwrite, periodically resyncing the teacher to the current student weights.
@@ -395,7 +414,7 @@ class SDFTConfig(_BaseConfig):
         default=0.5,
         metadata={"help": "Divergence interpolation coefficient for SDFT top-k logit distillation."},
     )
-    distillation_mode: Literal["sampled_token", "full_logits", "topk_logits"] = field(
+    distillation_mode: Literal["sampled_token", "full_logits", "topk_logits", "dopd"] = field(
         default="topk_logits",
         metadata={"help": "Distillation objective mode. SDFT defaults to top-k logit distillation."},
     )
@@ -412,6 +431,41 @@ class SDFTConfig(_BaseConfig):
     distillation_add_tail: bool = field(
         default=False,
         metadata={"help": "Whether to add a tail bucket for non-top-k probability mass."},
+    )
+    distillation_dopd_gap_threshold: float = field(
+        default=2.0,
+        metadata={
+            "help": "Advantage-gap threshold (nats) separating the 'low gap' and 'high gap' DOPD regimes. Only "
+            "used when `distillation_mode='dopd'`."
+        },
+    )
+    distillation_dopd_confidence_threshold: float = field(
+        default=0.5,
+        metadata={
+            "help": "Per-token max-probability threshold separating 'confident' from 'unsure'. Only used when "
+            "`distillation_mode='dopd'`."
+        },
+    )
+    distillation_dopd_light_topk: int = field(
+        default=8,
+        metadata={
+            "help": "Top-k support size for the DOPD regimes that apply a light distillation signal. Only used "
+            "when `distillation_mode='dopd'`."
+        },
+    )
+    distillation_dopd_self_reg_weight: float = field(
+        default=0.01,
+        metadata={
+            "help": "Weight of the stop-gradient self-regularization term for low-confidence tokens. Only used "
+            "when `distillation_mode='dopd'`."
+        },
+    )
+    distillation_dopd_student_consistency_weight: float = field(
+        default=0.1,
+        metadata={
+            "help": "Weight of the stop-gradient student-consistency term for high-gap, student-confident tokens. "
+            "Only used when `distillation_mode='dopd'`."
+        },
     )
     generate_from_teacher: bool = field(
         default=False,
@@ -436,6 +490,13 @@ class SDFTConfig(_BaseConfig):
             raise ValueError(
                 "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
                 f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
+            )
+        if self.distillation_mode == "dopd" and self.teacher_model_kind == "live":
+            raise ValueError(
+                "`distillation_mode='dopd'` is not supported with `teacher_model_kind='live'`, because the "
+                "privileged teacher and privileged-student forwards would use the same weights on the same "
+                "privileged input, collapsing the advantage gap to ~0 and leaving the high-gap routing regimes "
+                "unreachable. Use `teacher_model_kind` in {'base', 'ema'}."
             )
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
