@@ -250,11 +250,11 @@ class CPOTrainer(_BaseTrainer):
                 # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
                 self._peft_has_been_casted_to_bf16 = True
 
-        # For models that use gradient_checkpointing, we need to attach a hook that enables input
-        # to explicitly have `requires_grad=True`, otherwise training will either silently
-        # fail or completely fail. transformers handles this from 5.0.0
-        # (https://github.com/huggingface/transformers/pull/42558)
-        elif args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+        # Reentrant checkpointing (default before transformers 5.0.0, see transformers#43203) needs input gradients
+        elif args.gradient_checkpointing and (
+            Version(transformers.__version__) < Version("5.0.0")
+            or (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
             model.enable_input_require_grads()
 
         if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
