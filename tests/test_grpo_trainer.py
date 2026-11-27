@@ -593,6 +593,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
+            if ".indexer." in n:  # The sparse attention indexer runs under no_grad
+                continue
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
