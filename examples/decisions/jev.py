@@ -37,6 +37,7 @@ def main(script_args, training_args, model_args):
     set_seed(training_args.seed)
     if training_args.per_device_train_batch_size != 1 or training_args.per_device_eval_batch_size != 1:
         raise ValueError("JEV requires per-device train and eval batch sizes of one")
+
     model = AutoModelForDecision.from_pretrained(
         model_args.model_name_or_path,
         revision=model_args.model_revision,
@@ -48,6 +49,7 @@ def main(script_args, training_args, model_args):
         tokenizer, model.decision_config, prepare_inputs_for_decision=model.prepare_inputs_for_decision
     )
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+
     trainer = DecisionTrainer(
         model,
         args=training_args,
@@ -56,6 +58,7 @@ def main(script_args, training_args, model_args):
         processing_class=tokenizer,
         data_collator=collator,
     )
+
     result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
     trainer.save_model(training_args.output_dir)
     trainer.save_metrics("train", result.metrics)

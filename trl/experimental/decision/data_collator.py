@@ -142,6 +142,7 @@ class DataCollatorForDecision(DataCollatorMixin):
         inputs, questions, targets = zip(*(self.prepare_example(example) for example in features), strict=True)
         prompts = [(prompt, [question]) for prompt, question in zip(inputs, questions, strict=True)]
         batch = self.prepare_inputs_for_decision(prompts, targets=targets)
+
         return {**batch, "is_choice": torch.tensor([question.type == "choice" for question in questions])}
 
     def prepare_example(self, example: dict[str, Any]):
