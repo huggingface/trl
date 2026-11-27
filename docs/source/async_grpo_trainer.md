@@ -470,6 +470,9 @@ vLLM loads adapters from disk rather than over the network, so the trainer write
 > [!TIP]
 > Adapter sync is not always faster. vLLM generates roughly 1.33 to 1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
+> [!NOTE]
+> Merged sync does not send vLLM exactly the policy being trained. The merge adds the adapter's update to the bf16 base weights, and rounding the sum to bf16 drops the part of the update that is smaller than a weight's precision. With a random rank-32 adapter on Qwen3-4B-Instruct-2507, the merged model kept about three quarters of the adapter's change to a 35-token continuation's log-probability, both in Transformers and in vLLM, while vLLM serving the adapter matched PEFT. In a 40-step LoRA run (`r=32`, `learning_rate=3e-5`) with merged sync, the same checkpoint played very differently served as an adapter and merged into the base model, because the policy vLLM had sampled during training was the merged one. The importance sampling correction compensates the per-token difference (watch `sampling/sampling_logp_difference`), but if you evaluate or deploy the adapter on its own, train with adapter sync, or evaluate the merged weights.
+
 ### Using a custom reward function
 
 The [`AsyncGRPOTrainer`] supports using custom reward functions. To ensure compatibility, your reward function must satisfy the following requirements:
