@@ -89,8 +89,6 @@ from trl.chat_template_utils import (
     qwen3_6_v2_chat_template,
     qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
-    qwen3_coder_chat_template,
-    qwen3_coder_next_chat_template,
     qwen3_coder_v2_chat_template,
     qwen3_instruct_2507_v2_chat_template,
     qwen3_thinking_2507_chat_template,
@@ -1969,10 +1967,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
             id="qwen3-thinking-2507",
         ),
-        pytest.param(("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_chat_template), id="qwen3-coder"),
-        pytest.param(
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template), id="qwen3-coder-next"
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", id="qwen3-coder"),
+        pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", id="qwen3-coder-next"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             id="qwen3-vl",
