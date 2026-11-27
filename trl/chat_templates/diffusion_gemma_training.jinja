@@ -1,8 +1,9 @@
 {#- Training variant of the DiffusionGemma chat template (see diffusion_gemma.jinja for the original).
     Modifications vs the original:
     - Added {% generation %} / {% endgeneration %} around the model-emitted parts of assistant turns (thinking
-      channel, tool calls, content, and the closing '<turn|>') to support assistant-only loss masking in SFT
-      training. Tool responses embedded in the turn are environment-provided and stay outside the span.
+      channel, tool calls with the '<|tool_response>' that the model emits after them, content, and the closing
+      '<turn|>') to support assistant-only loss masking in SFT training. Tool responses embedded in the turn are
+      environment-provided and stay outside the span.
 -#}
 {#
   Template: Google Gemma 4 Canonical Chat Template
@@ -171,8 +172,8 @@
     {{- ns.result | trim -}}
 {%- endmacro -%}
 
-{%- macro format_tool_response_block(tool_name, response) -%}
-    {{- '<|tool_response>' -}}
+{%- macro format_tool_response_block(tool_name, response, skip_opener=false) -%}
+    {%- if not skip_opener -%}{{- '<|tool_response>' -}}{%- endif -%}
     {%- if response is mapping -%}
         {{- 'response:' + tool_name + '{' -}}
         {%- for key, value in response | dictsort -%}
@@ -250,6 +251,7 @@
         {%- endgeneration %}
     {%- endif -%}
 
+            {%- set ns_tr_opener = namespace(pending=false) -%}
             {%- if message.get('tool_calls') -%}
                 {%- generation %}
                 {%- for tool_call in message.get('tool_calls') -%}
@@ -272,6 +274,10 @@
                     {%- endif -%}
                     {{- '}<tool_call|>' -}}
                 {%- endfor -%}
+                {%- if message.get('tool_responses') or (loop.index0 + 1 < loop_messages | length and loop_messages[loop.index0 + 1]['role'] == 'tool') -%}
+                    {{- '<|tool_response>' -}}
+                    {%- set ns_tr_opener.pending = true -%}
+                {%- endif -%}
                 {%- endgeneration %}
                 {%- set ns.prev_message_type = 'tool_call' -%}
             {%- endif -%}
@@ -280,7 +286,7 @@
             {%- if message.get('tool_responses') -%}
                 {#- Legacy: tool_responses embedded on the assistant message (Google/Gemma native) -#}
                 {%- for tool_response in message.get('tool_responses') -%}
-                    {{- format_tool_response_block(tool_response['name'] | default('unknown', true), tool_response['response']) -}}
+                    {{- format_tool_response_block(tool_response['name'] | default('unknown', true), tool_response['response'], ns_tr_opener.pending) -}}{%- set ns_tr_opener.pending = false -%}
                     {%- set ns_tr_out.flag = true -%}
                     {%- set ns.prev_message_type = 'tool_response' -%}
                 {%- endfor -%}
@@ -303,7 +309,7 @@
                         {#- Handle content as string or content-parts array -#}
                         {%- set tool_body = follow.get('content') -%}
                         {%- if tool_body is string -%}
-                            {{- format_tool_response_block(ns_tname.name, tool_body) -}}
+                            {{- format_tool_response_block(ns_tname.name, tool_body, ns_tr_opener.pending) -}}{%- set ns_tr_opener.pending = false -%}
                         {%- elif tool_body is sequence and tool_body is not string -%}
                             {%- set ns_txt = namespace(s='') -%}
                             {%- for part in tool_body -%}
@@ -311,7 +317,7 @@
                                     {%- set ns_txt.s = ns_txt.s + (part.get('text') | default('')) -%}
                                 {%- endif -%}
                             {%- endfor -%}
-                            {{- format_tool_response_block(ns_tname.name, ns_txt.s) -}}
+                            {{- format_tool_response_block(ns_tname.name, ns_txt.s, ns_tr_opener.pending) -}}{%- set ns_tr_opener.pending = false -%}
                             {%- for part in tool_body -%}
                                 {%- if part.get('type') in ['image', 'image_url'] -%}
                                     {{- '<|image|>' -}}
@@ -322,7 +328,7 @@
                                 {%- endif -%}
                             {%- endfor -%}
                         {%- else -%}
-                            {{- format_tool_response_block(ns_tname.name, tool_body) -}}
+                            {{- format_tool_response_block(ns_tname.name, tool_body, ns_tr_opener.pending) -}}{%- set ns_tr_opener.pending = false -%}
                         {%- endif -%}
                         {%- set ns_tr_out.flag = true -%}
                         {%- set ns.prev_message_type = 'tool_response' -%}
@@ -383,7 +389,9 @@
         ) -%}
         
         {%- if ns.prev_message_type == 'tool_call' and not ns_tr_out.flag -%}
+            {%- generation %}
             {{- '<|tool_response>' -}}
+            {%- endgeneration %}
         {%- elif continues_into_next -%}
         {%- elif not (ns_tr_out.flag and not has_content and not next_nt.found) -%}
             {%- if role == 'model' -%}

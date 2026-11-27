@@ -3025,16 +3025,17 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert (grads[0] - grads[index]).norm() < 5e-2 * grads[0].norm()
 
     @pytest.mark.parametrize(
-        ("temperature", "logprobs_mode", "top_k"),
+        ("temperature", "logprobs_mode", "top_k", "score_centering"),
         [
-            (0.7, "processed_logprobs", 0),
-            (0.7, "raw_logprobs", 0),
-            (1.0, "raw_logprobs", 0),
-            (1.0, "processed_logprobs", 3),
-            (1.0, "raw_logprobs", 3),
+            (0.7, "processed_logprobs", 0, True),
+            (0.7, "raw_logprobs", 0, True),
+            (1.0, "raw_logprobs", 0, True),
+            (1.0, "processed_logprobs", 3, True),
+            (1.0, "raw_logprobs", 3, True),
+            (0.7, "raw_logprobs", 0, False),  # the importance sampling ratio needs them too (#8555)
         ],
     )
-    def test_score_centering_checks_sampler_logprobs(self, temperature, logprobs_mode, top_k, make_vllm_server):
+    def test_checks_sampler_logprobs(self, temperature, logprobs_mode, top_k, score_centering, make_vllm_server):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         server = make_vllm_server(model_id, logprobs_mode=logprobs_mode)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -3046,6 +3047,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 dtype="bfloat16",
                 temperature=temperature,
                 top_k=top_k,
+                score_centering=score_centering,
                 num_generations=2,
                 max_concurrent_rollouts=2,
                 max_completion_length=8,
@@ -5286,7 +5288,7 @@ class TestGenerateOneTurn(TrlTestCase):
                 if url.endswith("/version"):
                     body = {"version": version}
                 elif url.endswith("/server_info"):
-                    body = {"vllm_config": {"model_config": model_config}}
+                    body = {"vllm_config": {"model_config": {"logprobs_mode": "processed_logprobs", **model_config}}}
                 else:
                     body = {"paths": paths}
 
