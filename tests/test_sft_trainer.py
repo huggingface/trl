@@ -521,6 +521,14 @@ class TestSFTTrainer(TrlTestCase):
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+                id="qwen4-exp",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="Qwen4-Exp models were introduced in transformers-5.17.0",
+                ),
+            ),
         ],
     )
     def test_train_model(self, model_id):
@@ -540,7 +548,12 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            if model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
+                assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_dft_loss_matches_reference(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -2427,6 +2440,14 @@ class TestSFTTrainer(TrlTestCase):
                 ),
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+                id="qwen4-exp",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="Qwen4-Exp models were introduced in transformers-5.17.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
                 id="muse-spark",
                 marks=pytest.mark.skipif(
@@ -2467,6 +2488,10 @@ class TestSFTTrainer(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
             elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
+            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
@@ -2539,6 +2564,21 @@ class TestSFTTrainer(TrlTestCase):
                 ],
             ),
             pytest.param(
+                "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+                id="qwen4-exp",
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="Qwen4-Exp models were introduced in transformers-5.17.0",
+                    ),
+                    pytest.mark.xfail(
+                        raises=ValueError,
+                        reason="Qwen4-Exp doesn't support Flash Attention yet (huggingface/transformers#51369)",
+                        strict=True,
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
                 id="muse-spark",
                 marks=pytest.mark.skipif(
@@ -2593,6 +2633,10 @@ class TestSFTTrainer(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
             elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
+            # Qwen4-Exp: the QSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration" and ".indexer." in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"

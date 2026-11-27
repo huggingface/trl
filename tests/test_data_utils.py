@@ -538,6 +538,14 @@ class TestApplyChatTemplate(TrlTestCase):
             ),
         ),
         pytest.param(
+            "trl-internal-testing/tiny-Qwen4ExpForConditionalGeneration",
+            id="qwen4-exp",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.17.0"),
+                reason="Qwen4-Exp models were introduced in transformers-5.17.0",
+            ),
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
             id="qwen3.8",
             marks=pytest.mark.skipif(
