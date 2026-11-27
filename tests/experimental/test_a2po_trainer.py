@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, load_dataset
 
 from trl.experimental.a2po import A2POConfig, A2POTrainer
 
@@ -46,6 +46,19 @@ class TestA2POTrainer(TrlTestCase):
             train_dataset=dataset,
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = A2POTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            reward_funcs=completion_parity_reward,
+            args=A2POConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
 
     def test_train(self):
         # Main two-stage smoke test: Stage 1 estimates V*, Stage 2 regresses on a single on-policy generation.
