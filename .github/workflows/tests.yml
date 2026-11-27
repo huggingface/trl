@@ -372,6 +372,7 @@ jobs:
       # The pod sees 160 CPUs but its quota is 19 (`cpu.max`): one worker per CPU of the quota, one thread per worker
       PYTEST_XDIST_AUTO_NUM_WORKERS: 19
       OMP_NUM_THREADS: 1
+      UV_CACHE_DIR: .uv-cache  # Same filesystem as .venv, so uv hardlinks ROCm torch instead of copying it (#8581)
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -446,6 +447,8 @@ jobs:
       run:
         shell: bash
     if: github.event.pull_request.draft == false
+    env:
+      UV_CACHE_DIR: .uv-cache  # Same filesystem as .venv, so uv hardlinks ROCm torch instead of copying it (#8581)
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
