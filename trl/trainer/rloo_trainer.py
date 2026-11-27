@@ -41,6 +41,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
+    Gemma3Processor,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -1634,17 +1635,21 @@ class RLOOTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]). Models with
-        # `image_grid_thw` (e.g. Inkling 2) also return more rows than images, but their grid splits them.
+        # Recover counts for crop- or tile-indexed pixels (Gemma pan-and-scan and InternVL).
+        # Models with `image_grid_thw` (e.g. Inkling 2) are split by their grid instead.
         elif (
             images is not None
             and "image_grid_thw" not in forward_kwargs
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
-            num_patches = self.processing_class.image_processor(
-                images=images, crop_to_patches=True, return_tensors="pt"
-            )["num_patches"]
+            if isinstance(self.processing_class, Gemma3Processor):
+                image_info = self.processing_class.image_processor(images=images, return_tensors="pt")
+                num_patches = torch.as_tensor(image_info["num_crops"]) + 1
+            else:
+                num_patches = self.processing_class.image_processor(
+                    images=images, crop_to_patches=True, return_tensors="pt"
+                )["num_patches"]
             num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
