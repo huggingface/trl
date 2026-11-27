@@ -1,6 +1,6 @@
 # Decision model with an SFTTrainer subclass
 
-This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) as a [decision model](https://huggingface.co/blog/decision) with an [`SFTTrainer`] subclass: it goes from 56.0% to 67.3% accuracy on typed-decisions (Brier 0.331 → 0.137).
+This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) as a [decision model](https://huggingface.co/blog/decision) with an [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) subclass: it goes from 56.0% to 67.3% accuracy on typed-decisions (Brier 0.331 → 0.137).
 
 `transformers serve` answers decision questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. The training prompts are built by `transformers.decision`, like the ones of the endpoint, so that the trained model is served as is.
 
@@ -13,7 +13,7 @@ pip install causal-conv1d --no-build-isolation  # compiled against the installed
 
 ## 1. Training
 
-[`1_sft.py`](1_sft.py) is an [`SFTTrainer`] subclass whose `compute_loss` keeps the logits of the labels at the last token of each prompt and computes a cross-entropy with the target probabilities of the options. Three settings make it work:
+[`1_sft.py`](1_sft.py) is an [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) subclass whose `compute_loss` keeps the logits of the labels at the last token of each prompt and computes a cross-entropy with the target probabilities of the options. Three settings make it work:
 
 - `remove_unused_columns=False` and a collator built on `DataCollatorForLanguageModeling` carry the token ids of the labels (`label_ids`) and the targets through to `compute_loss`.
 - The collator is padding-free: the prompts of a batch are one sequence, and `logits_to_keep` asks the model for the logits at the last token of each prompt only, instead of the logits of every token over a 248k-token vocabulary.
