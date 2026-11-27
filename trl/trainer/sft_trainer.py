@@ -1004,6 +1004,10 @@ class SFTTrainer(_BaseTrainer):
                 if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
+        # cuDNN SDPA (H100, B200) caches a graph per input shape: padding bounds them (#8439)
+        if args.pad_to_multiple_of == "auto":
+            args.pad_to_multiple_of = 128 if model.config.get_text_config()._attn_implementation == "sdpa" else None
+
         # Data collator
         # Recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as they are to varlen kernels
         # that only take a single row, so BFD-packed batches are flattened for these models

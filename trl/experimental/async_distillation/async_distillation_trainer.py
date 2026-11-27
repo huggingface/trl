@@ -50,6 +50,8 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
+from ...chat_template_utils import get_chat_template_end_of_turn_token_id
+from ...data_utils import is_conversational
 from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
@@ -1253,6 +1255,17 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # configs.
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
+
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if train_dataset is not None and is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
 
         # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
         eos_token_ids = model.generation_config.eos_token_id

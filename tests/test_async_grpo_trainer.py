@@ -886,6 +886,18 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    @pytest.mark.usefixtures("stub_weight_transfer")
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            reward_funcs=str_length_reward,
+            train_dataset=dataset,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -2896,16 +2908,17 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert torch.equal(module.get_base_layer().weight.full_tensor(), base_weights[name]), name
 
     @pytest.mark.parametrize(
-        ("temperature", "logprobs_mode", "top_k"),
+        ("temperature", "logprobs_mode", "top_k", "score_centering"),
         [
-            (0.7, "processed_logprobs", 0),
-            (0.7, "raw_logprobs", 0),
-            (1.0, "raw_logprobs", 0),
-            (1.0, "processed_logprobs", 3),
-            (1.0, "raw_logprobs", 3),
+            (0.7, "processed_logprobs", 0, True),
+            (0.7, "raw_logprobs", 0, True),
+            (1.0, "raw_logprobs", 0, True),
+            (1.0, "processed_logprobs", 3, True),
+            (1.0, "raw_logprobs", 3, True),
+            (0.7, "raw_logprobs", 0, False),  # the importance sampling ratio needs them too (#8555)
         ],
     )
-    def test_score_centering_checks_sampler_logprobs(self, temperature, logprobs_mode, top_k, make_vllm_server):
+    def test_checks_sampler_logprobs(self, temperature, logprobs_mode, top_k, score_centering, make_vllm_server):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         server = make_vllm_server(model_id, logprobs_mode=logprobs_mode)
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
@@ -2917,6 +2930,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 dtype="bfloat16",
                 temperature=temperature,
                 top_k=top_k,
+                score_centering=score_centering,
                 num_generations=2,
                 max_concurrent_rollouts=2,
                 max_completion_length=8,
@@ -5087,7 +5101,7 @@ class TestGenerateOneTurn(TrlTestCase):
                 if url.endswith("/version"):
                     body = {"version": version}
                 elif url.endswith("/server_info"):
-                    body = {"vllm_config": {"model_config": model_config}}
+                    body = {"vllm_config": {"model_config": {"logprobs_mode": "processed_logprobs", **model_config}}}
                 else:
                     body = {"paths": paths}
 

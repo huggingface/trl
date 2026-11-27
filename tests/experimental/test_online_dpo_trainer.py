@@ -117,6 +117,20 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.eos_token_ids == [32007, 32001, 32000]
         assert trainer.generation_config.eos_token_id == trainer.eos_token_ids
 
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = OnlineDPOTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            reward_funcs=self.reward_model,
+            args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
         # Streaming datasets are not yet supported in OnlineDPO

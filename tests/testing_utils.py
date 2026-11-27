@@ -80,6 +80,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-GemmaForCausalLM": "08058fb469384b006af92d452849b0371f593a9a",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM": "9c73ba05132e99afd6e5bc13468e1f72c10c7c1a",
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration": "9339c1e41517bf775383d28e286be70bcaef8334",
+    "trl-internal-testing/tiny-GlmMoeDsaForCausalLM": "63e79bf555786c95017516674a6a8f9a49c02ad5",
     "trl-internal-testing/tiny-GptOssForCausalLM": "cb95c03d6ab62791e09ef922fc28856d18b45909",
     "trl-internal-testing/tiny-GraniteMoeForCausalLM": "76b45c5376916fcc17bdeb598df3337cd14a4f5e",
     "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM": "0ea8ef8b1cb6b15f9d47860269de792c96e69d23",
@@ -89,6 +90,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
     "trl-internal-testing/tiny-InklingForConditionalGeneration": "0e2558582d4c6c8538d178db0c2df065ac5a9ac5",
     "trl-internal-testing/tiny-InternVLForConditionalGeneration": "99c02d42d51fd4f83e12f19850a126627d473109",
+    "trl-internal-testing/tiny-LagunaForCausalLM": "5dfdec6ad858de57297e5b94aa0b4a4b225fb155",
     "trl-internal-testing/tiny-Lfm2ForCausalLM": "a8b729ddf80657a21272c71d36a7edc2be1bf6b4",
     "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5": "1e9ac722a12cea565443504973060b960a328c37",
     "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5": "af6b0e20385279de1530104e215a3a2f5155d182",
@@ -135,7 +137,7 @@ MODEL_REVISIONS = {
     "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6": "57faabc3b49ec3ae69b8d6158130ce19496bc2d3",
     "trl-internal-testing/tiny-RemoteForCausalLM": "e857b87273d2b5db9c3ee15a0229d715a2e307ce",
     "trl-internal-testing/tiny-SmolLM3ForCausalLM": "a93d8be3babaeb72402f6c9551689d1f9c2eb2ee",
-    "trl-internal-testing/tiny-SmolVLMForConditionalGeneration": "87d4ff483bc2b4f07d3cf629305a807243829be5",
+    "trl-internal-testing/tiny-SmolVLMForConditionalGeneration": "df69fd5879c0ebef28b4da09f215fb81a71825e6",
     "trl-internal-testing/tiny-T5ForConditionalGeneration": "1e80b8121ed01c2d3fc14fd85c7f70edcc4e925d",
 }
 
@@ -167,6 +169,15 @@ require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requ
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
 require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
+_cudnn_sdpa = (
+    torch.version.cuda is not None and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] in (9, 10)
+)
+require_cudnn_sdpa = pytest.mark.skipif(
+    not _cudnn_sdpa, reason="test requires an NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
+require_no_cudnn_sdpa = pytest.mark.skipif(
+    _cudnn_sdpa, reason="test requires no NVIDIA GPU of compute capability 9.x or 10.x, where SDPA uses cuDNN"
+)
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",

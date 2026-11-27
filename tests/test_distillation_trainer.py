@@ -36,6 +36,7 @@ from trl.trainer.distillation_trainer import _chunked_divergence_loss
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -662,6 +663,23 @@ class TestDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none"
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.args.pad_to_multiple_of == expected
+
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -853,6 +871,37 @@ class TestDistillationTrainer(TrlTestCase):
             trainer.train()
 
         # Completions are cut after `<|end|>` and count as terminated, not clipped
+        assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
+    def test_train_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            teacher_model="trl-internal-testing/tiny-GemmaForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
+        def fake_generate(input_ids, **kwargs):
+            # 'Blue<end_of_turn>and green': the turn ends on `<end_of_turn>`, and generation goes on after it
+            completion_ids = torch.tensor([[10716, 107, 639, 4433]] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Completions are cut after `<end_of_turn>` and count as terminated, not clipped
         assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
         assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
 

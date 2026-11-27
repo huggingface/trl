@@ -36,6 +36,7 @@ from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_torch_accelerator,
     require_vision,
@@ -84,6 +85,14 @@ class TestRLOOTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="GLM4 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                id="glm-moe-dsa",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gpt-oss"),
@@ -141,7 +150,27 @@ class TestRLOOTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            # GLM-5: the DSA indexer only picks which tokens attention reads, so the loss sends it no gradient.
+            # Assert it stays frozen.
+            if model_id == "trl-internal-testing/tiny-GlmMoeDsaForCausalLM" and ".indexer." in n:
+                assert torch.equal(param, new_param), f"Parameter {n} expected frozen, but changed."
+            else:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = RLOOConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
@@ -2095,6 +2124,38 @@ class TestRLOOTrainer(TrlTestCase):
             trainer.train()
 
         # Completions are cut after `<|end|>` and count as terminated, not clipped
+        assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
+    def test_train_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
+        def fake_generate(input_ids, **kwargs):
+            # 'Blue<end_of_turn>and green': the turn ends on `<end_of_turn>`, and generation goes on after it
+            completion_ids = torch.tensor([[10716, 107, 639, 4433]] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Completions are cut after `<end_of_turn>` and count as terminated, not clipped
         assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
         assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
 
