@@ -171,10 +171,11 @@ Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks
 ## Padding Sequences to a Multiple
 
 > [!TIP]
-> This technique is supported for **SFT** and **Reward** trainers currently.
+> This technique is supported for **SFT**, **DPO**, **KTO**, **Reward**, **GRPO**, **RLOO** and **Distillation** trainers.
 
 When enabled, this option ensures that all sequences are **padded to a multiple** of the specified value.  
 This can improve computational efficiency on some hardware by aligning sequence lengths to memory-friendly boundaries.
+The default, `"auto"`, pads to a multiple of 128 on Neuron (AWS Trainium) and with SDPA attention on H100 and B200 GPUs, and does not pad elsewhere.
 
 <hfoptions id="pad_to_multiple_of">
 <hfoption id="SFT">
