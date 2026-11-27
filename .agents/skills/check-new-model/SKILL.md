@@ -44,7 +44,7 @@ TRL trains with its stored training template when it has one, which already fixe
 
 ```python
 template = get_training_chat_template(tok, require_prefix_preservation=False) or shipped
-if not is_chat_template_prefix_preserving(tok):
+if supports_tool_calling(tok) and not is_chat_template_prefix_preserving(tok):  # TRL rejects tools otherwise
     get_training_chat_template(tok)
 ```
 
@@ -67,8 +67,13 @@ assert render(follow_up, chat_template=template).startswith(render(turn, chat_te
 The assistant mask starts right after the generation prompt (a prefilled `<think>` is not trained) and ends on the end-of-turn token:
 
 ```python
-out = tok.apply_chat_template(turn, chat_template=template, return_dict=True, return_assistant_tokens_mask=True)
-print(tok.decode([t for t, m in zip(out["input_ids"], out["assistant_masks"]) if m]))
+out = tok.apply_chat_template(
+    turn, chat_template=template, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+)
+ids, mask = out["input_ids"], out["assistant_masks"]
+if isinstance(tok, ProcessorMixin):  # processors return a batch of one
+    ids, mask = ids[0], mask[0]
+print(tok.decode([t for t, m in zip(ids, mask) if m]))
 assert is_chat_template_stop_token_trained(tok, template)
 ```
 
