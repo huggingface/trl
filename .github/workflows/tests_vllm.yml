@@ -120,6 +120,25 @@ jobs:
         if: ${{ !cancelled() }}
         run: test -f .pytest-completed-trainers  # The runner can report a cut-off test step as passed: #8004
 
+      - name: Test the OpenEnv harness with vLLM
+        # The async trainers need transformers>=5.2.0, which the vLLM floor does not allow
+        if: ${{ !cancelled() && matrix.vllm != 'floor' }}
+        env:
+          CUDA_VISIBLE_DEVICES: "0"  # the trainers refuse `nn.DataParallel`, which several visible GPUs would trigger
+        run: |
+          source .venv/bin/activate
+          # Last step: openenv's gradio dependency caps pillow; older openenv conflicts with vLLM (#8391)
+          uv pip install "openenv>=0.15.0"
+          # harbor_env.harness is not in the openenv wheel: check out the tag of the installed version
+          OPENENV_VERSION=$(python -c "import importlib.metadata; print(importlib.metadata.version('openenv'))")
+          git clone --depth 1 --branch "v$OPENENV_VERSION" https://github.com/openenv/OpenEnv.git "$RUNNER_TEMP/OpenEnv"
+          PYTHONPATH="$RUNNER_TEMP/OpenEnv/envs" timeout 30m pytest -v -rsx -k "vllm" tests/experimental/test_openenv_tito.py
+          touch .pytest-completed-openenv
+
+      - name: Check that pytest completed for the OpenEnv harness
+        if: ${{ !cancelled() && matrix.vllm != 'floor' }}
+        run: test -f .pytest-completed-openenv  # The runner can report a cut-off test step as passed: #8004
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()
         uses: ./.github/actions/post-slack
