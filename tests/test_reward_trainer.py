@@ -29,6 +29,7 @@ from trl.trainer.reward_trainer import DataCollatorForPreference
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_peft,
     require_torch_accelerator,
 )
@@ -164,6 +165,18 @@ class TestRewardTrainer(TrlTestCase):
             if f"layers.{trainer.model.config.num_hidden_layers - 1}.mlp.experts" in n:
                 continue
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_implicit_prompt_preference", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = RewardConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 import transformers
+from huggingface_hub import snapshot_download
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
@@ -63,6 +64,7 @@ from trl.chat_template_utils import (
     laguna_v2_chat_template,
     laguna_v3_chat_template,
     laguna_v4_chat_template,
+    lfm2_2_5_chat_template,
     lfm2_2_5_v2_chat_template,
     lfm2_2_5_v4_chat_template,
     lfm2_2_5_vl_v2_chat_template,
@@ -90,19 +92,17 @@ from trl.chat_template_utils import (
     qwen3_6_v2_chat_template,
     qwen3_8_chat_template,
     qwen3_8_v2_chat_template,
-    qwen3_coder_chat_template,
-    qwen3_coder_next_chat_template,
     qwen3_coder_v2_chat_template,
     qwen3_instruct_2507_v2_chat_template,
     qwen3_thinking_2507_chat_template,
     qwen3_v2_chat_template,
     smollm2_chat_template,
-    smolvlm_v2_chat_template,
+    smolvlm_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
 
-from .testing_utils import TrlTestCase, require_response_parsing, require_vision
+from .testing_utils import MODEL_REVISIONS, TrlTestCase, require_response_parsing, require_vision
 
 
 def multiply(a: int, b: int) -> int:
@@ -341,6 +341,15 @@ class TestAddResponseSchema:
                 marks=pytest.mark.skipif(
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_chat_template,
+                id="lfm2-2.5-v1",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
             ),
             pytest.param(
@@ -1234,8 +1243,8 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", id="mistral0.2"),
             pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm"),
             pytest.param(
-                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-                id="smolvlm-v2",
+                ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+                id="smolvlm-v1",
             ),
             # Silently drops both tool_calls and tool messages
             pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
@@ -1993,10 +2002,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
             id="qwen3-thinking-2507",
         ),
-        pytest.param(("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_chat_template), id="qwen3-coder"),
-        pytest.param(
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_coder_next_chat_template), id="qwen3-coder-next"
-        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder", id="qwen3-coder"),
+        pytest.param("trl-internal-testing/tiny-Qwen3NextForCausalLM-Coder-Next", id="qwen3-coder-next"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             id="qwen3-vl",
@@ -2090,8 +2097,8 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
         pytest.param(("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", smollm2_chat_template), id="smollm2"),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
         pytest.param(
-            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_v2_chat_template),
-            id="smolvlm-v2",
+            ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", smolvlm_chat_template),
+            id="smolvlm-v1",
             marks=require_vision,
         ),
         pytest.param(
@@ -3390,3 +3397,23 @@ class TestChatTemplatesDocumentation:
             path.name for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja") if path.name not in documented
         )
         assert missing == []
+
+
+class TestChatTemplatesCoverage:
+    def test_every_stored_template_is_tested(self):
+        # Regenerating a tiny model silently drops the coverage of its earlier template (#7492)
+        source = Path(__file__).read_text(encoding="utf-8")
+        tested = set(re.findall(r"\b(\w+)_chat_template\b", source))
+        shipped = set()
+        for model_id in set(re.findall(r'"(trl-internal-testing/[\w.-]+)"', source)):
+            path = Path(snapshot_download(model_id, revision=MODEL_REVISIONS[model_id], allow_patterns="*.jinja"))
+            if (path / "chat_template.jinja").exists():
+                shipped.add((path / "chat_template.jinja").read_text(encoding="utf-8").removesuffix("\n"))
+        untested = sorted(
+            path.name
+            for path in _CHAT_TEMPLATES_DIR.glob("*.jinja")
+            if not path.name.endswith("_training.jinja")
+            and path.stem not in tested
+            and path.read_text(encoding="utf-8").removesuffix("\n") not in shipped
+        )
+        assert untested == []

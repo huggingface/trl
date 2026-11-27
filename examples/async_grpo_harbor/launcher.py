@@ -15,9 +15,8 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl[peft,vllm] @ git+https://github.com/huggingface/trl.git",
 #     "openenv[harbor]==0.7.0",
-#     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
 #     "kernels",
@@ -173,9 +172,34 @@ def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: floa
     raise RuntimeError(f"the capture proxy never became publicly reachable in {deadline_s:.0f}s\n{tail}")
 
 
+def _run_hf_sandbox_openenv() -> None:
+    from harbor.environments import hf_sandbox
+    from openenv.cli.__main__ import main as openenv_main
+
+    # Remove once OpenEnv resolves Harbor with harbor-framework/harbor#4411.
+    unpack = hf_sandbox.remote_unpack_command
+
+    def unpack_without_owner(*args, **kwargs):
+        command = unpack(*args, **kwargs)
+        if " --no-same-owner" in command:
+            return command
+        if "tar -xzf " not in command:
+            raise RuntimeError("Unexpected Harbor tar command. Check the HF Sandbox upload workaround.")
+        return command.replace("tar -xzf ", "tar --no-same-owner -xzf ", 1)
+
+    hf_sandbox.remote_unpack_command = unpack_without_owner
+    openenv_main()
+
+
+def _openenv_cmd(args: argparse.Namespace) -> list[str]:
+    if args.sandbox == "hf-sandbox":
+        return [sys.executable, str(pathlib.Path(__file__).resolve()), "--hf-sandbox-openenv"]
+    return ["openenv"]
+
+
 def _serve_cmd(args: argparse.Namespace) -> list[str]:
     return [
-        "openenv", "harbor", "serve",
+        *_openenv_cmd(args), "harbor", "serve",
         "--dataset", args.split,
         "--port", str(args.server_port),
         "--capture-port", str(args.capture_port),
@@ -206,7 +230,7 @@ def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: fl
             continue
         print("[launcher] the published proxy is not reachable; restarting the Harbor server", flush=True)
         for proc in list(_children):
-            if proc.args[:3] == ["openenv", "harbor", "serve"]:
+            if proc.args == _serve_cmd(args):
                 _stop_process(proc)
                 _children.remove(proc)
         if _stopping.is_set():
@@ -246,7 +270,7 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
 def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib.Path) -> None:
     """Warm task 0's sandbox image before concurrent rollouts can race its first build."""
     cmd = [
-        "openenv", "harbor", "rollout",
+        *_openenv_cmd(args), "harbor", "rollout",
         "--llm-url", vllm_url,
         "--model", args.model,
         "--dataset", args.split,
@@ -279,6 +303,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--capture-port", type=int, default=8300)
     p.add_argument("--vllm-port", type=int, default=8000)
     p.add_argument("--vllm-device", default="0")
+    p.add_argument("--vllm-lora", action="store_true", help="Serve and sync LoRA adapters in vLLM")
+    p.add_argument("--lora-r", type=int)
+    p.add_argument("--max-staleness", type=int)
     p.add_argument("--train-device", default="1")  # the trainer; NCCL weight sync needs the same host
     p.add_argument("--max-model-len", type=int, default=131072)
     p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3.5; use `hermes` for most others
@@ -287,7 +314,25 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--data-root", default=str(DATA_ROOT))
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--tunnel-check-s", type=float, default=60.0)  # 0 disables the supervisor
-    return p.parse_known_args()
+    args, forwarded = p.parse_known_args()
+    if args.vllm_lora:
+        if args.lora_r is None or args.lora_r <= 0:
+            p.error("--vllm-lora requires a positive --lora-r")
+        if args.max_staleness is None:
+            args.max_staleness = 4
+        if args.max_staleness < 0:
+            p.error("--max-staleness must be nonnegative")
+        from trl.trainer.async_grpo_trainer import round_lora_rank
+
+        try:
+            args.vllm_max_lora_rank = round_lora_rank(args.lora_r)
+        except ValueError as e:
+            p.error(str(e))
+    if args.lora_r is not None:
+        forwarded += ["--lora-r", str(args.lora_r)]
+    if args.max_staleness is not None:
+        forwarded += ["--max-staleness", str(args.max_staleness)]
+    return args, forwarded
 
 
 def main() -> None:
@@ -357,7 +402,7 @@ def main() -> None:
     vllm_log = logs / "vllm.log"
     vllm_cmd = [
         "vllm", "serve", args.model,
-        "--host", "0.0.0.0",
+        "--host", "127.0.0.1",
         "--port", str(args.vllm_port),
         "--trust-remote-code",
         "--max-model-len", str(args.max_model_len),
@@ -370,10 +415,18 @@ def main() -> None:
         "--gpu-memory-utilization", "0.9",
         "--weight-transfer-config", '{"backend":"nccl"}',
     ]  # fmt: skip
-    proc = _spawn(vllm_cmd, vllm_log, env={"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"})
+    vllm_env = {"CUDA_VISIBLE_DEVICES": args.vllm_device, "VLLM_SERVER_DEV_MODE": "1"}
+    if args.vllm_lora:
+        vllm_cmd += [
+            "--enable-lora",
+            "--max-lora-rank", str(args.vllm_max_lora_rank),
+            "--max-loras", str(args.max_staleness + 2),
+        ]  # fmt: skip
+        vllm_env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "1"
+    proc = _spawn(vllm_cmd, vllm_log, env=vllm_env)
     wait_for_vllm(vllm_url, proc, vllm_log)
 
-    if not args.skip_warm:
+    if args.sandbox != "hf-sandbox" and not args.skip_warm:
         warm_sandbox_template(args, vllm_url, logs)
 
     script = pathlib.Path("async_grpo_harbor.py")
@@ -406,6 +459,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--hf-sandbox-openenv"]:
+        del sys.argv[1]
+        _run_hf_sandbox_openenv()
+        sys.exit(0)
+
     try:
         main()
     finally:

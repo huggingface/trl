@@ -31,6 +31,7 @@ from .testing_utils import (
     is_ampere_or_newer,
     is_bf16_supported,
     require_bitsandbytes,
+    require_cudnn_sdpa,
     require_kernels,
     require_peft,
     require_torch_accelerator,
@@ -255,6 +256,18 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_cudnn_sdpa
+    @pytest.mark.parametrize(("attn_implementation", "expected"), [("sdpa", 128), ("eager", None)])
+    def test_pad_to_multiple_of_auto_with_cudnn_sdpa(self, attn_implementation, expected):
+        """`"auto"` pads to a multiple of 128 with SDPA, which uses cuDNN on these GPUs (#8439)."""
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+        model_init_kwargs = {"attn_implementation": attn_implementation}
+        training_args = DPOConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert trainer.args.pad_to_multiple_of == expected
 
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102

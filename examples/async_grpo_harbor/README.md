@@ -10,7 +10,7 @@ Use Python 3.12 and this TRL checkout. The typed capture API was merged in
 
 ```sh
 git clone --depth 1 --branch v0.7.0 https://github.com/openenv/OpenEnv.git OpenEnv
-pip install -e . trackio datasets "openenv[harbor]==0.7.0" kernels
+pip install -e ".[peft,vllm]" trackio datasets "openenv[harbor]==0.7.0" kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
@@ -36,13 +36,20 @@ Use `--train-script-url` with the raw URL of the TRL revision being tested befor
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
 subsequent sessions receive the new proxy URL.
 
-You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script. 
+For HF Sandbox, pass `--sandbox hf-sandbox --split harness-hub/scale800-harbor --harness pi`
+to the launcher and supply a Jobs-capable `HF_TOKEN` as a secret. Custom datasets need a prebuilt
+`[environment].docker_image` in each selected task's `task.toml`. Before training, the first
+selected task must produce a finite verifier reward (zero is valid) and a trainable trace.
 
 HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every verifier upload fails and all rewards are `None` (loss 0). The launcher patches Harbor for this; when running `openenv harbor serve` yourself, apply the same patch to the server's environment first:
 
 ```sh
 python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Path(t.__file__); p.write_text(p.read_text().replace('tar -xzf ', 'tar --no-same-owner -xzf '))"
 ```
+
+For models and LoRA targets vLLM can serve, pass `--vllm-lora --lora-r 32` to sync only
+the adapter. The launcher sizes the serving cache from `--lora-r` and `--max-staleness`.
+By default, the trainer syncs merged weights.
 
 ## Capture contract
 

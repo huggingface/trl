@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
+import torch
+
 from .base_config import _BaseConfig
 
 
@@ -73,7 +75,9 @@ class RLOOConfig(_BaseConfig):
             Whether to shuffle the training dataset.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
-            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and with SDPA attention on
+            NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a graph per input shape in
+            host memory. It does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -332,9 +336,10 @@ class RLOOConfig(_BaseConfig):
     pad_to_multiple_of: int | str | None = field(
         default="auto",
         metadata={
-            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
-            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
-            "pad elsewhere."
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. "
+            "`'auto'` pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and "
+            "with SDPA attention on NVIDIA GPUs of compute capability 9.x or 10.x (H100, B200), where cuDNN keeps a "
+            "graph per input shape in host memory. It does not pad elsewhere."
         },
     )
 
@@ -623,8 +628,14 @@ class RLOOConfig(_BaseConfig):
             self.pad_to_multiple_of = (
                 None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
             )
-        if self.pad_to_multiple_of == "auto":
-            # Neuron compiles once per input shape, so padding bounds the number of compilations
+        # Neuron compiles once per input shape, so padding bounds the number of compilations. On GPUs where SDPA uses
+        # cuDNN, the trainer resolves "auto" once it knows the model's attention implementation (#8439)
+        cudnn_sdpa_gpu = (
+            torch.version.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.get_device_capability(self.device)[0] in (9, 10)
+        )
+        if self.pad_to_multiple_of == "auto" and not cudnn_sdpa_gpu:
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:

@@ -17,6 +17,7 @@
 import asyncio
 import dataclasses
 import itertools
+import json
 import multiprocessing as mp
 import queue
 import random
@@ -24,6 +25,7 @@ import threading
 import time
 from collections import defaultdict
 from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -115,15 +117,30 @@ def test_agent_owned_loop_gets_the_training_sampling(make_loop, adapter):
         assert factory_calls == [{"sampling": openenv_harness.training_sampling({"temperature": 0.8})}]
 
 
+class ServerInfoHandler(BaseHTTPRequestHandler):
+    """The `/server_info` of a vLLM server started with `--logprobs-mode processed_logprobs`."""
+
+    def do_GET(self):
+        body = json.dumps({"vllm_config": {"model_config": {"logprobs_mode": "processed_logprobs"}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+
 @pytest.fixture
 def make_loop():
     PartialState()
     loops = []
+    # The loop checks the server's logprobs mode before its first rollout (#8624)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ServerInfoHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
     def make(factory=None, *, factory_builder=None, **kwargs):
         config_fields = {f.name for f in dataclasses.fields(AsyncGRPOConfig)}
         config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
         config_kwargs.setdefault("temperature", 0.8)
+        config_kwargs.setdefault("vllm_server_base_url", f"http://127.0.0.1:{server.server_port}")
         config = AsyncGRPOConfig(
             max_completion_length=32,
             max_concurrent_rollouts=8,
@@ -156,6 +173,8 @@ def make_loop():
     for loop in loops:
         loop._session_pool.shutdown(wait=True)
         loop._loop.close()
+    server.shutdown()
+    server.server_close()
 
 
 def captured_entry():

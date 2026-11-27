@@ -60,7 +60,7 @@ distillation needs later on.
 ```sh
 hf jobs uv run --flavor cpu-upgrade --timeout 4h --secrets HF_TOKEN \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/sft_agent_traces/rollouts.py \
-    --model qwen/qwen3.5-397b-a17b --llm-url https://router.huggingface.co/novita/v3/openai \
+    --model Qwen/Qwen3.5-397B-A17B \
     --dataset FineEnvs/SmolDataEnvs-harbor-train --exclude-datasets-of FineEnvs/SmolDataEnvs-harbor-eval \
     --num-tasks 640 --workers 12 --push-to <you>/smoldataenvs-rollouts --private --run-name teacher-397b
 ```
@@ -70,7 +70,9 @@ share no question, but they were drawn task by task, not dataset by dataset: 122
 250 test tasks use a Kaggle dataset that some training task uses too, and a student trained on those has already seen
 their files and columns. The filter keeps 2,879 of the 5,000 training tasks.
 
-The URL names one provider, since the router's default provider for this model rejects a parameter OpenEnv sends.
+The script calls the Inference Providers router (`--llm-url` defaults to `https://router.huggingface.co/v1`), which
+picks a provider that serves the model. The results below were produced through Novita, which no longer serves it,
+so a run today goes through another provider.
 The teacher solves 78% of the clean training tasks, in a median of 6 turns and about 2 minutes per task. Every result
 JSON is uploaded as soon as its task ends, and `--start` and `--num-tasks` pick the next slice, so several Jobs can
 split a larger run.

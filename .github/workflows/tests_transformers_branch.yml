@@ -41,6 +41,7 @@ jobs:
 
       - name: Install Make and Git
         run: |
+          rm /etc/apt/sources.list.d/cuda-ubuntu2204-x86_64.list  # Only Ubuntu packages are installed: skip NVIDIA's flaky mirror (#8621)
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
@@ -103,6 +104,7 @@ jobs:
 
       - name: Install Make and Git
         run: |
+          rm /etc/apt/sources.list.d/cuda-ubuntu2204-x86_64.list  # Only Ubuntu packages are installed: skip NVIDIA's flaky mirror (#8621)
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
