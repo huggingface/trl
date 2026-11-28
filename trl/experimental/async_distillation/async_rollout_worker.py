@@ -36,7 +36,7 @@ from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
 from ...import_utils import is_aiohttp_available
-from ...trainer.utils import print_prompt_completions_sample
+from ...trainer.utils import print_prompt_completions_sample, redact_secrets
 
 
 if is_aiohttp_available():
@@ -431,8 +431,8 @@ class _AsyncRolloutLoop:
                     # subsample here without this gate — printing on every sample would flood logs over a long run.
                     if self.log_completions and self._total_samples_scored % self.log_completions_steps == 0:
                         print_prompt_completions_sample(
-                            prompts=[sample.prompt],
-                            completions=[sample.completion],
+                            prompts=redact_secrets([sample.prompt]),
+                            completions=redact_secrets([sample.completion]),
                             rewards={},
                             advantages=None,  # no group-relative advantage in distillation
                             step=self._total_samples_scored,

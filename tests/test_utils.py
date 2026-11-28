@@ -48,6 +48,7 @@ from trl.trainer.utils import (
     nanstd,
     pad,
     print_prompt_completions_sample,
+    redact_secrets,
     repeat_iterable_dataset,
     selective_log_softmax,
     selective_log_softmax_and_entropy,
@@ -457,6 +458,49 @@ class TestIsAsyncCallable(TrlTestCase):
                 return [0.0] * len(completions)
 
         assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
+
+
+class TestRedactSecrets(TrlTestCase):
+    def test_redacts_values_of_credential_env_vars(self, monkeypatch):
+        monkeypatch.setenv("MY_SERVICE_API_KEY", "fake-secret-value")
+        monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false-but-long")  # not a credential name
+        completion = [
+            {"role": "assistant", "content": "Let me check."},
+            {"role": "tool", "content": [{"type": "text", "text": "key=fake-secret-value mode=false-but-long"}]},
+        ]
+        assert redact_secrets(completion) == [
+            {"role": "assistant", "content": "Let me check."},
+            {"role": "tool", "content": [{"type": "text", "text": "key=<REDACTED> mode=false-but-long"}]},
+        ]
+
+    def test_redacts_token_formats(self):
+        # Built at runtime so the fake tokens don't look like real ones to secret scanners
+        tokens = [
+            "hf_" + "x" * 34,
+            "api_org_" + "x" * 34,
+            "sk-proj-" + "x" * 40,
+            "sk-ant-api03-" + "x" * 40,
+            "ghp_" + "x" * 36,
+            "github_pat_" + "x" * 40,
+            "AKIA" + "X" * 16,
+            "AIza" + "x" * 35,
+            "xoxb-" + "1" * 20,
+        ]
+        assert redact_secrets([f"token {token}." for token in tokens]) == ["token <REDACTED>."] * len(tokens)
+
+    def test_redacts_private_keys(self):
+        key = "-----BEGIN PRIVATE KEY-----\n" + "x" * 64 + "\n-----END PRIVATE KEY-----"
+        assert redact_secrets(f"key:\n{key}\ndone") == "key:\n<REDACTED>\ndone"
+        assert redact_secrets(f"key:\n{key[:60]}") == "key:\n<REDACTED>"  # cut before the END line
+
+    def test_keeps_words_containing_token_prefixes(self):
+        text = "Run the task-" + "x" * 30 + " and the tokenizer."
+        assert redact_secrets(text) == text
+
+    def test_keeps_other_values(self):
+        assert redact_secrets(1.5) == 1.5
+        assert redact_secrets(None) is None
+        assert redact_secrets("The sky is blue.") == "The sky is blue."
 
 
 class TestNanStd(TrlTestCase):

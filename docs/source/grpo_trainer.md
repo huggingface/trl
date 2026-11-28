@@ -770,6 +770,9 @@ trainer = GRPOTrainer(
 )
 ```
 
+> [!WARNING]
+> Tools and environments run with the trainer's environment variables, and what they return becomes part of the completions. Don't give them credentials they don't need, and run code the model writes in a sandbox that doesn't hold your tokens. When completions are logged (`log_completions=True`), TRL replaces the values of environment variables named like credentials (`HF_TOKEN`, `*_API_KEY`, ...) and strings shaped like common tokens with `<REDACTED>` before they reach the console, Trackio, W&B, the completion files or the Hub. This is a safety net, not a guarantee: a secret that is split or encoded in the output is not caught.
+
 ### Environments
 
 You can also provide tools through `environment_factory`. In this mode, [`GRPOTrainer`] creates one environment instance per rollout and exposes the environment's public methods as tools.

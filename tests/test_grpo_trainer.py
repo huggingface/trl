@@ -108,6 +108,19 @@ def lookup_tool(query: str) -> list:
     return [{"type": "text", "text": "crate"}]
 
 
+def read_env_tool(name: str) -> str:
+    """
+    Reads an environment variable.
+
+    Args:
+        name: Name of the variable.
+
+    Returns:
+        The value of the variable.
+    """
+    return os.environ.get(name, "")
+
+
 def screenshot_tool() -> str:
     """Simple text-returning tool."""
     return "The image shows a red square."
@@ -3808,6 +3821,46 @@ class TestGRPOTrainer(TrlTestCase):
         assert completions.num_rows == 3
         tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
         assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_log_completions_redacts_secrets(self, monkeypatch):
+        # A tool returns a credential from the environment: the logged completions must not contain it
+        monkeypatch.setenv("MY_SERVICE_API_KEY", "fake-secret-value")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[read_env_tool],
+        )
+
+        tool_call = '<tool_call>\n{"name": "read_env_tool", "arguments": {"name": "MY_SERVICE_API_KEY"}}\n</tool_call>'
+        script = ScriptedTurns(trainer.processing_class, first_turns=[tool_call + "<|im_end|>"])
+        with patch.object(trainer.model, "generate", script.generate):
+            trainer.train()
+
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
+        assert tool_messages
+        assert all(message["content"] == "<REDACTED>" for message in tool_messages)
+        assert "fake-secret-value" not in str(completions.to_list())
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),

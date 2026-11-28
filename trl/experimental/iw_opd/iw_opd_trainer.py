@@ -44,7 +44,14 @@ from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
+from ...trainer.utils import (
+    RepeatSampler,
+    create_model_from_path,
+    disable_dropout_in_model,
+    pad,
+    redact_secrets,
+    split_tensor_dict,
+)
 from .iw_opd_config import IWOPDConfig
 
 
@@ -840,8 +847,8 @@ class IWOPDTrainer(_BaseTrainer):
                     prompts, completions = self._buffered_text_logs[i]
                     on_policy_prompts.extend(prompts)
                     on_policy_completions.extend(completions)
-            self._textual_logs["prompt"].extend(gather_object(on_policy_prompts))
-            self._textual_logs["completion"].extend(gather_object(on_policy_completions))
+            self._textual_logs["prompt"].extend(gather_object(redact_secrets(on_policy_prompts)))
+            self._textual_logs["completion"].extend(gather_object(redact_secrets(on_policy_completions)))
 
     @profiling_decorator
     def _generate_student_completions(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
