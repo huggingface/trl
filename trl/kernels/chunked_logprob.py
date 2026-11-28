@@ -34,8 +34,12 @@ TOKEN_CHUNK_SIZE = 4096
 # Per-token outputs besides the log-probabilities, each computed only when requested
 OPTIONAL_OUTPUTS = ("entropy", "log_sum_sq_probs", "mean_logits", "is_top1")
 _BLOCK_SIZE = 1024
-# `torch.addmm(..., out_dtype=torch.float32)` from bf16/fp16 inputs, CUDA only
-_MM_OUT_DTYPE = Version(torch.__version__) >= Version("2.8.0")
+# Devices supporting `torch.mm`/`torch.addmm(..., out_dtype=torch.float32)` from bf16/fp16 inputs
+_MM_OUT_DTYPE_DEVICES = tuple(
+    device_type
+    for device_type, min_version in (("cuda", "2.8.0"), ("xpu", "2.11.0"))
+    if Version(torch.__version__) >= Version(min_version)
+)
 
 
 def _jit(fn):
@@ -58,7 +62,7 @@ def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
     Rounding every vocabulary chunk's product to bf16 before summing them biases training (entropy drifts lower over a
     few dozen steps), even though each step's gradient error looks the same size as with full logits.
     """
-    if _MM_OUT_DTYPE and acc.device.type == "cuda" and a.dtype in (torch.float16, torch.bfloat16):
+    if acc.device.type in _MM_OUT_DTYPE_DEVICES and a.dtype in (torch.float16, torch.bfloat16):
         torch.addmm(acc, a, b, out_dtype=torch.float32, out=acc)
     else:
         acc.addmm_(a.float(), b.float())
