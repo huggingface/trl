@@ -3183,6 +3183,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
                 "support."
             )
+        # `get_head_shapes` (added in transformers 5.18) also reads per-layer head dims, like Gemma 4's
+        if Version(transformers.__version__) >= Version("5.18.0"):
+            from transformers.configuration_utils import get_head_shapes
+
+            head_dim = get_head_shapes(text_config)[1]
+            head_dim = max(head_dim) if isinstance(head_dim, list) else head_dim
+            if head_dim > 256:
+                raise ValueError(
+                    f"{type(model).__name__} has attention layers with a head dim of {head_dim}, but the "
+                    "FlashAttention kernels used by tree packing support head dims up to 256."
+                )
 
         # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
         # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
