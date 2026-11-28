@@ -24,7 +24,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, Qwen2Config
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, Qwen2Config
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -2087,7 +2087,8 @@ class TestAddFusedLMHeadLoss:
         add_fused_lm_head(chunked_model)
 
         B, S = 2, 16
-        vocab_size = ref_model.config.text_config.vocab_size
+        # Not text_config.vocab_size: Inkling 2 returns only unpadded_vocab_size logits (#8590)
+        vocab_size = len(AutoTokenizer.from_pretrained(model_id))
         input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
         labels[:, :4] = -100
