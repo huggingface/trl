@@ -153,7 +153,7 @@ Patched GLM-4.7, GLM-5, GLM-5.1, GLM-5.2, GLM-5.3 and GLM-5.3-Flash templates. S
 
 ### `glm5_3_v2_training.jinja` / `glm5_3_flash_v2_training.jinja` / `glm5_3_flash_v3_training.jinja`
 
-Patched earlier GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm5_3_training.jinja` and `glm5_3_flash_training.jinja`, applied to `glm5_3_v2.jinja`, `glm5_3_flash_v2.jinja` and `glm5_3_flash_v3.jinja`.
+Patched earlier GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm5_3_training.jinja` and `glm5_3_flash_training.jinja`, applied to `glm5_3_v2.jinja`, `glm5_3_flash_v2.jinja` and `glm5_3_flash_v3.jinja`. `glm5_3_flash_v2_training.jinja` also renders `None` content as empty text, like the current GLM-5.3 templates.
 
 ### `qwen3_training.jinja`
 

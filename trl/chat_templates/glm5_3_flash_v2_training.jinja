@@ -8,6 +8,7 @@
       emits it at the end of the assistant turn instead, and appends '<|user|>' to a final assistant turn.
     - Emitted the start of the thinking block that the generation prompt pre-fills before {% generation %}, so that
       assistant-only loss doesn't train it.
+    - Rendered `None` content as empty text instead of the text 'None' (transformers<5.23 keeps None-valued keys).
 -#}
 [gMASK]<sop>
 {%- set effective_reasoning_effort = reasoning_effort if reasoning_effort is defined and reasoning_effort in ['low', 'high'] else 'max' -%}
@@ -79,8 +80,8 @@ For each function call, output the function name and arguments within the follow
                 {{- emit_audio() -}}
             {%- endif -%}
         {%- endfor -%}
-    {%- else -%}
-        {{- content }}
+    {%- elif content is not none -%}
+        {{- content -}}
     {%- endif -%}
 {%- endmacro -%}
 {%- macro tool_response(text) -%}

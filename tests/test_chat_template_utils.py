@@ -2868,6 +2868,30 @@ class TestGlm4MoeTrainingChatTemplate:
                     reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v2_chat_template,
+                id="glm5.3-flash-v2",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v3_chat_template,
+                id="glm5.3-flash-v3",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                    ),
+                ],
+            ),
         ],
     )
     def test_later_templates_assistant_masks_tool_call_without_content(self, tokenizer_name, chat_template):
