@@ -343,7 +343,7 @@ class TestAddResponseSchema:
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_chat_template,
-                id="lfm2-2.5-v1",
+                id="lfm2.5-v1",
                 marks=pytest.mark.skipif(
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
