@@ -95,6 +95,26 @@ class TestSDFTTrainer(TrlTestCase):
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
+    def test_init_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "Solve 2+2."}],
+                    [{"role": "user", "content": "Name the capital of France."}],
+                ],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        assert trainer.eos_token_ids == [1, 107]
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
     def test_train(self):
         dataset = Dataset.from_dict(
             {

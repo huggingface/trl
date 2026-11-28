@@ -1458,6 +1458,14 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     pytest.param("trl-internal-testing/tiny-Gemma2ForCausalLM", id="gemma2"),
     pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
     pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4-moe"),
+    pytest.param(
+        "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+        id="glm-moe-dsa",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.11.0"),
+            reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+        ),
+    ),
     pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
     pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
@@ -1910,6 +1918,14 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", id="gemma"),
     pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4-moe"),
     pytest.param(
+        "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+        id="glm-moe-dsa",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.11.0"),
+            reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+        ),
+    ),
+    pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
         id="gpt-oss",
         marks=pytest.mark.skipif(
@@ -1977,10 +1993,9 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
                 Version(transformers.__version__) < Version("5.23.0"),
                 reason="Inkling 2 models were introduced in transformers-5.23.0",
             ),
-            pytest.mark.xfail(
-                raises=AssertionError,
-                reason="Inkling 2's head keeps the padded vocabulary rows its forward slices off (#8497)",
-                strict=False,  # the backward check stays within tolerance on some GPUs (L40S)
+            pytest.mark.skip(
+                reason="The FP8 kernel accesses memory out of bounds on the tiny expert dims "
+                "(huggingface/kernels-community#1372)"
             ),
         ],
     ),

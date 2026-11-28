@@ -49,6 +49,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available
 
+from ...chat_template_utils import get_chat_template_end_of_turn_token_id
 from ...data_utils import (
     apply_chat_template,
     is_conversational,
@@ -428,6 +429,17 @@ class OnlineDPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
+        # The chat template's end-of-turn token also ends a completion (#8566)
+        if is_conversational(next(iter(train_dataset))):
+            end_of_turn_id = get_chat_template_end_of_turn_token_id(processing_class)
+            eos_token_ids = model.generation_config.eos_token_id
+            if eos_token_ids is None:
+                eos_token_ids = []
+            elif isinstance(eos_token_ids, int):
+                eos_token_ids = [eos_token_ids]
+            if end_of_turn_id is not None and end_of_turn_id not in eos_token_ids:
+                model.generation_config.eos_token_id = [*eos_token_ids, end_of_turn_id]
+
         # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
         eos_token_ids = model.generation_config.eos_token_id
         if eos_token_ids is None:
@@ -574,6 +586,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "min_p": 0.0 if self.min_p is None else self.min_p,
                 "max_tokens": args.max_new_tokens,
                 "detokenize": False,  # to avoid vllm to decode (we don't need it)
+                "stop_token_ids": self.eos_token_ids,
             }
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
@@ -760,7 +773,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "structured_outputs_regex": self.structured_outputs_regex
                 if hasattr(self, "structured_outputs_regex")
                 else None,
-                "generation_kwargs": self.args.generation_kwargs,
+                "generation_kwargs": {"stop_token_ids": self.eos_token_ids, **(self.args.generation_kwargs or {})},
             }
             if has_images:
                 completion_ids = self.vllm_client.chat(messages=all_messages, **sampling_kwargs)["completion_ids"]

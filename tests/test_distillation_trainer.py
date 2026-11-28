@@ -874,6 +874,37 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
         assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
 
+    def test_train_stops_on_chat_template_end_of_turn_token(self):
+        # Gemma's generation config and tokenizer stop only on <eos> (1), not on the template's <end_of_turn> (#8566)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-GemmaForCausalLM",
+            teacher_model="trl-internal-testing/tiny-GemmaForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert trainer.generation_config.eos_token_id == [1, 107]
+        assert trainer.model.generation_config.eos_token_id == [1, 107]
+
+        def fake_generate(input_ids, **kwargs):
+            # 'Blue<end_of_turn>and green': the turn ends on `<end_of_turn>`, and generation goes on after it
+            completion_ids = torch.tensor([[10716, 107, 639, 4433]] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Completions are cut after `<end_of_turn>` and count as terminated, not clipped
+        assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
@@ -1836,7 +1867,7 @@ class TestDistillationTrainer(TrlTestCase):
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
             teacher_model={
-                "a": "trl-internal-testing/small-Qwen3ForCausalLM",
+                "a": "trl-internal-testing/tiny-Qwen3MoeForCausalLM-Coder",
                 "b": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             },
             args=training_args,
@@ -1872,7 +1903,7 @@ class TestDistillationTrainer(TrlTestCase):
         )
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-            teacher_model={"a": "trl-internal-testing/small-Qwen3ForCausalLM"},
+            teacher_model={"a": "trl-internal-testing/tiny-Qwen3MoeForCausalLM"},
             args=training_args,
             train_dataset=dataset,
         )
@@ -1885,7 +1916,7 @@ class TestDistillationTrainer(TrlTestCase):
         # every completion token weighs the same in the loss, whatever its teacher.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         dataset = dataset.map(lambda example, idx: {"teacher_id": ["a", "b"][idx % 2]}, with_indices=True)
-        teacher = "trl-internal-testing/small-Qwen3ForCausalLM"
+        teacher = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
 
         trainers, eval_losses = [], []
         for teacher_model in [teacher, {"a": teacher, "b": teacher}]:
@@ -1931,8 +1962,8 @@ class TestDistillationTrainer(TrlTestCase):
     def test_per_teacher_init_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         teacher_model = {
-            "a": "trl-internal-testing/small-Qwen3ForCausalLM",
-            "b": "trl-internal-testing/small-Qwen3ForCausalLM",
+            "a": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "b": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
         }
         trainer = DistillationTrainer(
             model="trl-internal-testing/tiny-Qwen3ForCausalLM",
@@ -1963,7 +1994,7 @@ class TestDistillationTrainer(TrlTestCase):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM",
                 teacher_model={
-                    "a": "trl-internal-testing/small-Qwen3ForCausalLM",
+                    "a": "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
                     "b": "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 },
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
@@ -1975,7 +2006,7 @@ class TestDistillationTrainer(TrlTestCase):
         # Each rank holds different teacher IDs, so a teacher may have no rows on a rank. With the same teacher under
         # both IDs, this must match a single ID.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        teacher = "trl-internal-testing/small-Qwen3ForCausalLM"
+        teacher = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
 
         trainers = []
         for teacher_model, teacher_ids in [

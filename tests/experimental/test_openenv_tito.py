@@ -129,18 +129,25 @@ class ServerInfoHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def make_loop():
-    PartialState()
-    loops = []
+def vllm_server_url():
     # The loop checks the server's logprobs mode before its first rollout (#8624)
     server = ThreadingHTTPServer(("127.0.0.1", 0), ServerInfoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def make_loop(vllm_server_url):
+    PartialState()
+    loops = []
 
     def make(factory=None, *, factory_builder=None, **kwargs):
         config_fields = {f.name for f in dataclasses.fields(AsyncGRPOConfig)}
         config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
         config_kwargs.setdefault("temperature", 0.8)
-        config_kwargs.setdefault("vllm_server_base_url", f"http://127.0.0.1:{server.server_port}")
+        config_kwargs.setdefault("vllm_server_base_url", vllm_server_url)
         config = AsyncGRPOConfig(
             max_completion_length=32,
             max_concurrent_rollouts=8,
@@ -173,8 +180,6 @@ def make_loop():
     for loop in loops:
         loop._session_pool.shutdown(wait=True)
         loop._loop.close()
-    server.shutdown()
-    server.server_close()
 
 
 def captured_entry():
@@ -225,7 +230,7 @@ def random_reward(outcome):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
-def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(tmp_path):
+def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(tmp_path, vllm_server_url):
     trainer = openenv_harness.HarnessAsyncGRPOTrainer(
         model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
         harness_session_factory=SessionFactory,
@@ -234,7 +239,7 @@ def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(t
             num_generations=2,
             max_steps=1,
             temperature=0.8,
-            vllm_server_base_url="http://127.0.0.1:9",
+            vllm_server_base_url=vllm_server_url,
             report_to="none",
         ),
         train_dataset=Dataset.from_dict({"prompt": [[{"role": "user", "content": "task"}]] * 4}),
