@@ -147,7 +147,10 @@ _GLM_TOKENIZER_NAMES = (
     ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_1_chat_template),
     ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_2_chat_template),
     ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_3_chat_template),
+    ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_3_v2_chat_template),
     "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+    ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v2_chat_template),
+    ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v3_chat_template),
 )
 
 
@@ -1785,8 +1788,38 @@ _GEMMA4_EMPTY_THOUGHT = tuple(
             ),
         ),
         pytest.param(
+            ("trl-internal-testing/tiny-GlmMoeDsaForCausalLM", glm5_3_v2_chat_template),
+            id="glm5.3-v2",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.11.0"),
+                reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+            ),
+        ),
+        pytest.param(
             "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
             id="glm5.3-flash",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v2_chat_template),
+            id="glm5.3-flash-v2",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.17.0"),
+                    reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                ),
+            ],
+        ),
+        pytest.param(
+            ("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", glm5_3_flash_v3_chat_template),
+            id="glm5.3-flash-v3",
             marks=[
                 require_vision,
                 pytest.mark.skipif(
@@ -2825,6 +2858,39 @@ class TestGlm4MoeTrainingChatTemplate:
                     Version(transformers.__version__) < Version("5.11.0"),
                     reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
                 ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GlmMoeDsaForCausalLM",
+                glm5_3_v2_chat_template,
+                id="glm5.3-v2",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.11.0"),
+                    reason="GLM-5.2's shared indexer was introduced in transformers-5.11.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v2_chat_template,
+                id="glm5.3-flash-v2",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                    ),
+                ],
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm5NextForConditionalGeneration",
+                glm5_3_flash_v3_chat_template,
+                id="glm5.3-flash-v3",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.17.0"),
+                        reason="GLM-5.3-Flash was introduced in transformers-5.17.0",
+                    ),
+                ],
             ),
         ],
     )

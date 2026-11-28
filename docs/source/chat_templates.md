@@ -151,6 +151,10 @@ Render `None` content (e.g. an assistant tool-call turn with `content: None`) as
 
 Patched GLM-4.7, GLM-5, GLM-5.1, GLM-5.2, GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm4moe_training.jinja`, applied to `glm4_7.jinja`, `glm5.jinja`, `glm5_1.jinja`, `glm5_2.jinja`, `glm5_3.jinja` and `glm5_3_flash.jinja`: each assistant turn is closed inside the generation block with the role marker that opens the next turn, and the assistant output is wrapped with `{% generation %}` / `{% endgeneration %}`. The generation prompt of these templates always pre-fills the start of the thinking block (`<think>`, or with thinking disabled `</think>` up to GLM-5.1 and `<think></think>` from GLM-5.2), so that part of a rendered thinking block stays outside the markers. With thinking disabled (GLM-4.7 to GLM-5.2), the whole thinking block stays outside them, like in `glm4moe_training.jinja`, since the generation prompt already ends after `</think>`. The GLM-4.7 to GLM-5.2 training templates also render `None` content as empty text, like `glm4moe_training.jinja` (the GLM-5.3 templates already do).
 
+### `glm5_3_v2_training.jinja` / `glm5_3_flash_v2_training.jinja` / `glm5_3_flash_v3_training.jinja`
+
+Patched earlier GLM-5.3 and GLM-5.3-Flash templates. Same diff as `glm5_3_training.jinja` and `glm5_3_flash_training.jinja`, applied to `glm5_3_v2.jinja`, `glm5_3_flash_v2.jinja` and `glm5_3_flash_v3.jinja`. `glm5_3_flash_v2_training.jinja` also renders `None` content as empty text, like the current GLM-5.3 templates.
+
 ### `qwen3_training.jinja`
 
 Patched Qwen3 template. Diff vs `qwen3.jinja`:

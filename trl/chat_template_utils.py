@@ -982,10 +982,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         glm5_3_chat_template,
         glm5_3_v2_chat_template,
         glm5_3_training_chat_template,
+        glm5_3_v2_training_chat_template,
         glm5_3_flash_chat_template,
         glm5_3_flash_v2_chat_template,
         glm5_3_flash_v3_chat_template,
         glm5_3_flash_training_chat_template,
+        glm5_3_flash_v2_training_chat_template,
+        glm5_3_flash_v3_training_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
@@ -1424,7 +1427,17 @@ glm5_2_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2_training.jinja").
 
 glm5_3_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_training.jinja").read_text(encoding="utf-8")
 
+glm5_3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_v2_training.jinja").read_text(encoding="utf-8")
+
 glm5_3_flash_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_training.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+glm5_3_flash_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 gptoss_training_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss_training.jinja").read_text(encoding="utf-8")
 
@@ -1737,8 +1750,17 @@ def get_training_chat_template(
     if chat_template == glm5_3_chat_template:
         return glm5_3_training_chat_template
 
+    if chat_template == glm5_3_v2_chat_template:
+        return glm5_3_v2_training_chat_template
+
     if chat_template == glm5_3_flash_chat_template:
         return glm5_3_flash_training_chat_template
+
+    if chat_template == glm5_3_flash_v2_chat_template:
+        return glm5_3_flash_v2_training_chat_template
+
+    if chat_template == glm5_3_flash_v3_chat_template:
+        return glm5_3_flash_v3_training_chat_template
 
     if chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
